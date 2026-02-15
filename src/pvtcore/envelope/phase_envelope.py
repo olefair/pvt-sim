@@ -67,6 +67,8 @@ class EnvelopeResult:
     converged: bool
     n_bubble_points: int
     n_dew_points: int
+    bubble_certificates: Optional[List["SolverCertificate"]] = None
+    dew_certificates: Optional[List["SolverCertificate"]] = None
 
 
 def calculate_phase_envelope(
@@ -118,7 +120,7 @@ def calculate_phase_envelope(
             value=saturation_post_check_rel_step,
         )
 
-    bubble_T, bubble_P = _trace_bubble_curve(
+    bubble_T, bubble_P, bubble_certificates = _trace_bubble_curve(
         composition, components, eos, binary_interaction,
         T_start, T_step_initial, max_points,
         envelope_failure_mode=envelope_failure_mode,
@@ -127,7 +129,7 @@ def calculate_phase_envelope(
         post_check_rel_step=saturation_post_check_rel_step,
     )
 
-    dew_T, dew_P = _trace_dew_curve(
+    dew_T, dew_P, dew_certificates = _trace_dew_curve(
         composition, components, eos, binary_interaction,
         T_start, T_step_initial, max_points,
         envelope_failure_mode=envelope_failure_mode,
@@ -156,7 +158,9 @@ def calculate_phase_envelope(
         composition=composition.copy(),
         converged=converged,
         n_bubble_points=len(bubble_T),
-        n_dew_points=len(dew_T)
+        n_dew_points=len(dew_T),
+        bubble_certificates=bubble_certificates,
+        dew_certificates=dew_certificates,
     )
 
 
@@ -172,10 +176,11 @@ def _trace_bubble_curve(
     post_check_stability_flip: bool,
     post_check_action: str,
     post_check_rel_step: float,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], List["SolverCertificate"]]:
     """Trace bubble point curve using continuation method."""
     T_list: List[float] = []
     P_list: List[float] = []
+    certificates: List["SolverCertificate"] = []
 
     T = float(T_start)
     T_step = float(T_step_initial)
@@ -206,6 +211,7 @@ def _trace_bubble_curve(
 
             T_list.append(float(T))
             P_list.append(float(result.pressure))
+            certificates.append(result.certificate)
 
             # Check for pressure decreasing (approaching critical from bubble side)
             if len(P_list) >= 2:
@@ -269,7 +275,11 @@ def _trace_bubble_curve(
             T_step = max(T_step * 0.5, MIN_T_STEP)
             T = (T_list[-1] + T_step) if T_list else (T + T_step)
 
-    return np.array(T_list, dtype=np.float64), np.array(P_list, dtype=np.float64)
+    return (
+        np.array(T_list, dtype=np.float64),
+        np.array(P_list, dtype=np.float64),
+        certificates,
+    )
 
 
 def _find_first_dew_point(
@@ -282,7 +292,7 @@ def _find_first_dew_point(
     post_check_stability_flip: bool,
     post_check_action: str,
     post_check_rel_step: float,
-) -> Tuple[Optional[float], Optional[float]]:
+) -> Tuple[Optional[float], Optional[float], Optional["DewPointResult"]]:
     """Scan upward in temperature until a dew point exists; return (T, P)."""
     # Heuristic scan ceiling: high enough for light/heavy binaries in unit tests,
     # but still bounded to avoid infinite searching.
@@ -305,7 +315,7 @@ def _find_first_dew_point(
                 post_check_action=post_check_action,
                 post_check_rel_step=post_check_rel_step,
             )
-            return float(T), float(res.pressure)
+            return float(T), float(res.pressure), res
         except PhaseError as e:
             if e.details.get("reason") != "no_saturation":
                 # Unexpected: dew calculation indicates we are already inside the envelope or other issue
@@ -315,7 +325,7 @@ def _find_first_dew_point(
         except (ConvergenceError, ValidationError):
             T += dT
 
-    return None, None
+    return None, None, None
 
 
 def _trace_dew_curve(
@@ -330,24 +340,25 @@ def _trace_dew_curve(
     post_check_stability_flip: bool,
     post_check_action: str,
     post_check_rel_step: float,
-) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+) -> Tuple[NDArray[np.float64], NDArray[np.float64], List["SolverCertificate"]]:
     """Trace dew point curve using continuation method."""
     T_list: List[float] = []
     P_list: List[float] = []
+    certificates: List["SolverCertificate"] = []
 
     # Temperature upper bound based on component critical temperatures
     T_max = _get_temperature_bound(composition, components)
 
     # NEW: find a temperature where dew actually exists, instead of assuming T_start works.
-    T0, P0 = _find_first_dew_point(
+    T0, P0, res0 = _find_first_dew_point(
         composition, components, eos, binary_interaction,
         T_start=T_start, T_step_initial=T_step_initial,
         post_check_stability_flip=post_check_stability_flip,
         post_check_action=post_check_action,
         post_check_rel_step=post_check_rel_step,
     )
-    if T0 is None or P0 is None:
-        return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
+    if T0 is None or P0 is None or res0 is None:
+        return np.array([], dtype=np.float64), np.array([], dtype=np.float64), []
 
     T = float(T0)
     T_step = float(T_step_initial)
@@ -360,6 +371,7 @@ def _trace_dew_curve(
     # Seed with the first successful point
     T_list.append(float(T))
     P_list.append(float(P0))
+    certificates.append(res0.certificate)
     T += T_step
 
     for _ in range(max_points - 1):
@@ -380,6 +392,7 @@ def _trace_dew_curve(
 
             T_list.append(float(T))
             P_list.append(float(result.pressure))
+            certificates.append(result.certificate)
 
             # Check for pressure decreasing (approaching critical from dew side)
             if len(P_list) >= 2:
@@ -435,7 +448,11 @@ def _trace_dew_curve(
             T_step = max(T_step * 0.5, MIN_T_STEP)
             T = (T_list[-1] + T_step) if T_list else (T + T_step)
 
-    return np.array(T_list, dtype=np.float64), np.array(P_list, dtype=np.float64)
+    return (
+        np.array(T_list, dtype=np.float64),
+        np.array(P_list, dtype=np.float64),
+        certificates,
+    )
 
 
 def _locate_critical_point(

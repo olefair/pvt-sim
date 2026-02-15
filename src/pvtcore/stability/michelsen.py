@@ -14,7 +14,7 @@ from typing import List, Optional
 from numpy.typing import NDArray
 
 from ..eos.base import CubicEOS
-from ..core.errors import ConvergenceError, ValidationError
+from ..core.errors import ConvergenceError, ValidationError, ConvergenceStatus, IterationHistory
 from .wilson import wilson_k_values
 from .tpd import calculate_tpd, calculate_d_terms
 
@@ -30,21 +30,28 @@ class StabilityResult:
     """Results from Michelsen stability analysis.
 
     Attributes:
+        status: Convergence status enum (CONVERGED, MAX_ITERS, etc.)
         stable: True if mixture is stable (single phase)
         tpd_min: Minimum TPD value found
         trial_compositions: List of trial compositions tested
         tpd_values: TPD values for each trial composition
         iterations: Number of iterations for each trial
         feed_phase: Phase of the feed composition
-        converged: Whether all trials converged
+        history: Optional iteration history for diagnostics
     """
+    status: ConvergenceStatus
     stable: bool
     tpd_min: float
     trial_compositions: List[NDArray[np.float64]]
     tpd_values: List[float]
     iterations: List[int]
     feed_phase: str
-    converged: bool
+    history: Optional[IterationHistory] = None
+
+    @property
+    def converged(self) -> bool:
+        """Backward-compatible property: True if calculation converged."""
+        return self.status == ConvergenceStatus.CONVERGED
 
 
 def michelsen_stability_test(
@@ -194,17 +201,30 @@ def michelsen_stability_test(
     # Convert to Python bool to avoid numpy bool issues
     stable = bool(tpd_min >= -TPD_TOLERANCE)
 
-    # Check convergence
+    # Check convergence and determine status
     all_converged = all(r['converged'] for r in results_list)
 
+    # Build iteration history from all trials
+    history = IterationHistory()
+    total_func_evals = sum(r['iterations'] for r in results_list)
+    history.n_func_evals = total_func_evals
+
+    # Determine convergence status
+    if all_converged:
+        status = ConvergenceStatus.CONVERGED
+    else:
+        # Check if any trial hit max iterations
+        status = ConvergenceStatus.MAX_ITERS
+
     return StabilityResult(
+        status=status,
         stable=stable,
         tpd_min=tpd_min,
         trial_compositions=[r['composition'] for r in results_list],
         tpd_values=tpd_values,
         iterations=[r['iterations'] for r in results_list],
         feed_phase=feed_phase,
-        converged=all_converged
+        history=history,
     )
 
 

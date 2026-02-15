@@ -1,0 +1,17 @@
+{
+  "fluid_id": "dry_gas",
+  "description": "Dry gas (C1/C2/C3)",
+  "components": [
+    {"component_id": "C1", "mole_fraction": 0.9},
+    {"component_id": "C2", "mole_fraction": 0.05},
+    {"component_id": "C3", "mole_fraction": 0.05}
+  ],
+  "pt_points": [
+    {"pressure_pa": 100000.0, "temperature_k": 200.0, "label": "vapor_low_p"},
+    {"pressure_pa": 500000.0, "temperature_k": 200.0, "label": "two_phase_low_t"},
+    {"pressure_pa": 2000000.0, "temperature_k": 200.0, "label": "two_phase_mid_t"},
+    {"pressure_pa": 10000000.0, "temperature_k": 200.0, "label": "liquid_high_p"},
+    {"pressure_pa": 5000000.0, "temperature_k": 250.0, "label": "vapor_mid_t"},
+    {"pressure_pa": 10000000.0, "temperature_k": 250.0, "label": "liquid_high_t"}
+  ]
+}

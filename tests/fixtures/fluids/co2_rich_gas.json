@@ -1,0 +1,19 @@
+{
+  "fluid_id": "co2_rich_gas",
+  "description": "CO2-rich gas (CO2/C1/C2/C3/C4)",
+  "components": [
+    {"component_id": "CO2", "mole_fraction": 0.6498},
+    {"component_id": "C1", "mole_fraction": 0.1057},
+    {"component_id": "C2", "mole_fraction": 0.1058},
+    {"component_id": "C3", "mole_fraction": 0.1235},
+    {"component_id": "C4", "mole_fraction": 0.0152}
+  ],
+  "pt_points": [
+    {"pressure_pa": 100000.0, "temperature_k": 300.0, "label": "vapor_low_p"},
+    {"pressure_pa": 5000000.0, "temperature_k": 300.0, "label": "two_phase_mid_p"},
+    {"pressure_pa": 10000000.0, "temperature_k": 300.0, "label": "vapor_mid_p"},
+    {"pressure_pa": 20000000.0, "temperature_k": 300.0, "label": "liquid_high_p"},
+    {"pressure_pa": 5000000.0, "temperature_k": 280.0, "label": "vapor_cool"},
+    {"pressure_pa": 20000000.0, "temperature_k": 280.0, "label": "liquid_cool"}
+  ]
+}

@@ -6,6 +6,7 @@ classification and property provenance tracking.
 """
 
 import json
+import sys
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -165,6 +166,36 @@ class Component:
         )
 
 
+def _default_components_path() -> Path:
+    """Resolve the default components.json location across source and packaged builds."""
+    candidates: List[Path] = []
+
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", ""))
+        if base:
+            candidates.append(base / "data" / "pure_components" / "components.json")
+
+    try:
+        from importlib import resources
+
+        resources_root = resources.files("pvtcore")
+        resource_path = resources_root / "data" / "pure_components" / "components.json"
+        with resources.as_file(resource_path) as resolved_path:
+            candidates.append(resolved_path)
+    except Exception:
+        pass
+
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent.parent.parent
+    candidates.append(project_root / "data" / "pure_components" / "components.json")
+
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return candidate
+
+    return candidates[-1]
+
+
 def load_components(json_path: Optional[Path] = None) -> Dict[str, Component]:
     """Load pure component data from JSON file.
 
@@ -189,11 +220,7 @@ def load_components(json_path: Optional[Path] = None) -> Dict[str, Component]:
         16.0425
     """
     if json_path is None:
-        # Default to data/pure_components/components.json relative to project root
-        # Assumes this module is in src/pvtcore/models/
-        current_file = Path(__file__)
-        project_root = current_file.parent.parent.parent.parent
-        json_path = project_root / "data" / "pure_components" / "components.json"
+        json_path = _default_components_path()
 
     json_path = Path(json_path)
 

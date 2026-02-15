@@ -1,0 +1,23 @@
+{
+  "run_name": "Example PT Flash",
+  "composition": {
+    "components": [
+      {"component_id": "C1", "mole_fraction": 0.50},
+      {"component_id": "C2", "mole_fraction": 0.10},
+      {"component_id": "C3", "mole_fraction": 0.15},
+      {"component_id": "nC4", "mole_fraction": 0.10},
+      {"component_id": "nC5", "mole_fraction": 0.10},
+      {"component_id": "C6", "mole_fraction": 0.05}
+    ]
+  },
+  "calculation_type": "pt_flash",
+  "eos_type": "peng_robinson",
+  "pt_flash_config": {
+    "pressure_pa": 5000000,
+    "temperature_k": 350
+  },
+  "solver_settings": {
+    "tolerance": 1e-10,
+    "max_iterations": 100
+  }
+}

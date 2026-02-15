@@ -27,6 +27,7 @@ from ..eos.base import CubicEOS
 from ..models.component import Component
 from ..stability.michelsen import michelsen_stability_test
 from ..flash.rachford_rice import brent_method
+from ..validation.invariants import build_saturation_certificate
 
 
 # Numerical tolerances
@@ -64,6 +65,7 @@ class BubblePointResult:
     residual: float
     stable_liquid: bool
     history: Optional[IterationHistory] = None
+    certificate: Optional["SolverCertificate"] = None
 
     @property
     def converged(self) -> bool:
@@ -167,6 +169,16 @@ def calculate_bubble_point(
                 "Binary interaction matrix contains NaN or Inf values",
                 parameter="binary_interaction"
             )
+
+    def _finalize(result: BubblePointResult) -> BubblePointResult:
+        """Attach invariant certificate without altering solver behavior."""
+        result.certificate = build_saturation_certificate(
+            "bubble",
+            result,
+            eos,
+            binary_interaction=binary_interaction,
+        )
+        return result
 
     # Validate initial pressure if provided
     if pressure_initial is not None:
@@ -279,7 +291,7 @@ def calculate_bubble_point(
                         reason="post_check_failed",
                     )
 
-        return BubblePointResult(
+        return _finalize(BubblePointResult(
             status=ConvergenceStatus.CONVERGED,
             pressure=float(P_star),
             temperature=float(temperature),
@@ -290,7 +302,7 @@ def calculate_bubble_point(
             residual=float(abs(tpd_star)),
             stable_liquid=bool(f0 >= -tolerance),
             history=IterationHistory(),  # Early convergence - minimal history
-        )
+        ))
 
     P_hi, f_hi = P0, f0
     P_lo, f_lo = P0, f0
@@ -320,7 +332,7 @@ def calculate_bubble_point(
 
     # If bracketing exhausted max_iterations, return MAX_ITERS status
     if bracketing_exhausted and P_lo == P_hi:
-        return BubblePointResult(
+        return _finalize(BubblePointResult(
             status=ConvergenceStatus.MAX_ITERS,
             pressure=float(P0),
             temperature=float(temperature),
@@ -331,7 +343,7 @@ def calculate_bubble_point(
             residual=float(abs(f0)),
             stable_liquid=bool(f0 >= -tolerance),
             history=history,
-        )
+        ))
 
     # Require a bracket: low endpoint not definitely positive, high endpoint not definitely negative.
     if P_lo == P_hi:
@@ -434,7 +446,7 @@ def calculate_bubble_point(
     # Record final residual in history
     history.record_iteration(residual=abs(tpd_star))
 
-    return BubblePointResult(
+    return _finalize(BubblePointResult(
         status=ConvergenceStatus.CONVERGED,
         pressure=float(P_star),
         temperature=float(temperature),
@@ -445,7 +457,7 @@ def calculate_bubble_point(
         residual=float(abs(tpd_star)),
         stable_liquid=bool(f0 >= -tolerance),
         history=history,
-    )
+    ))
 
 
 def _tpd_vapor_trial(

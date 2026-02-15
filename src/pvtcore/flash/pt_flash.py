@@ -22,6 +22,7 @@ from ..core.errors import (
     ConvergenceError, PhaseError, ValidationError,
     ConvergenceStatus, IterationHistory
 )
+from ..validation.invariants import build_flash_certificate
 
 
 @dataclass
@@ -58,6 +59,7 @@ class FlashResult:
     feed_composition: np.ndarray
     residual: float
     history: Optional[IterationHistory] = None
+    certificate: Optional["SolverCertificate"] = None
 
     def __post_init__(self):
         """Ensure arrays are numpy arrays."""
@@ -255,6 +257,17 @@ def pt_flash(
         binary_interaction=binary_interaction
     )
 
+    def _finalize(result: FlashResult) -> FlashResult:
+        """Attach invariant certificate without altering solver behavior."""
+        result.certificate = build_flash_certificate(
+            result,
+            eos,
+            binary_interaction=binary_interaction,
+            stable_as_liquid=stable_as_liquid,
+            stable_as_vapor=stable_as_vapor,
+        )
+        return result
+
     # If either phase is stable (single-phase), determine which one
     if stable_as_liquid or stable_as_vapor:
         # Calculate fugacity coefficients for both phases to determine which is more stable
@@ -288,7 +301,7 @@ def pt_flash(
 
         if is_liquid_like:
             # Liquid phase
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=0,
                 vapor_fraction=0.0,
@@ -302,10 +315,10 @@ def pt_flash(
                 temperature=temperature,
                 feed_composition=composition,
                 residual=0.0
-            )
+            ))
         else:
             # Vapor phase
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=0,
                 vapor_fraction=1.0,
@@ -319,7 +332,7 @@ def pt_flash(
                 temperature=temperature,
                 feed_composition=composition,
                 residual=0.0
-            )
+            ))
 
     # Two-phase system (unstable as both liquid and vapor) - proceed with flash calculation
     # Initialize K-values
@@ -335,7 +348,7 @@ def pt_flash(
     is_trivial, phase_type = is_trivial_solution(K, composition)
     if is_trivial:
         if phase_type == 'vapor':
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=0,
                 vapor_fraction=1.0,
@@ -351,9 +364,9 @@ def pt_flash(
                 temperature=temperature,
                 feed_composition=composition,
                 residual=0.0
-            )
+            ))
         else:  # liquid
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=0,
                 vapor_fraction=0.0,
@@ -369,7 +382,7 @@ def pt_flash(
                 temperature=temperature,
                 feed_composition=composition,
                 residual=0.0
-            )
+            ))
 
     # Successive substitution loop with iteration tracking
     history = IterationHistory()
@@ -406,7 +419,7 @@ def pt_flash(
                 'vapor', binary_interaction
             ) if phase == 'vapor' or nv == 1.0 else np.zeros(n_components)
 
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=iteration + 1,
                 vapor_fraction=nv,
@@ -421,7 +434,7 @@ def pt_flash(
                 feed_composition=composition,
                 residual=0.0,
                 history=history
-            )
+            ))
 
         # Check for edge cases
         if nv <= 1e-10:
@@ -429,7 +442,7 @@ def pt_flash(
             phi_L = eos.fugacity_coefficient(
                 pressure, temperature, composition, 'liquid', binary_interaction
             )
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=iteration + 1,
                 vapor_fraction=0.0,
@@ -444,14 +457,14 @@ def pt_flash(
                 feed_composition=composition,
                 residual=0.0,
                 history=history
-            )
+            ))
 
         if nv >= 1.0 - 1e-10:
             # All vapor
             phi_V = eos.fugacity_coefficient(
                 pressure, temperature, composition, 'vapor', binary_interaction
             )
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.CONVERGED,
                 iterations=iteration + 1,
                 vapor_fraction=1.0,
@@ -466,7 +479,7 @@ def pt_flash(
                 feed_composition=composition,
                 residual=0.0,
                 history=history
-            )
+            ))
 
         # Step 2: Calculate fugacity coefficients for both phases
         phi_L = eos.fugacity_coefficient(
@@ -486,7 +499,7 @@ def pt_flash(
         # Check for NaN/Inf in K-values (numeric error)
         if not np.all(np.isfinite(K_new)):
             history.record_iteration(residual=float('inf'), accepted=False)
-            return FlashResult(
+            return _finalize(FlashResult(
                 status=ConvergenceStatus.NUMERIC_ERROR,
                 iterations=iteration + 1,
                 vapor_fraction=nv,
@@ -501,7 +514,7 @@ def pt_flash(
                 feed_composition=composition,
                 residual=float('inf'),
                 history=history
-            )
+            ))
 
         # Step 4: Check convergence
         # Criterion: Σ(ln Ki_new - ln Ki_old)² < tolerance
@@ -547,7 +560,7 @@ def pt_flash(
     if final_status != ConvergenceStatus.CONVERGED:
         # Return result with failure status instead of raising exception
         # This allows caller to inspect history and diagnostics
-        return FlashResult(
+        return _finalize(FlashResult(
             status=final_status,
             iterations=iteration + 1,
             vapor_fraction=nv,
@@ -562,9 +575,9 @@ def pt_flash(
             feed_composition=composition,
             residual=residual,
             history=history
-        )
+        ))
 
-    return FlashResult(
+    return _finalize(FlashResult(
         status=ConvergenceStatus.CONVERGED,
         iterations=iteration + 1,
         vapor_fraction=nv,
@@ -579,7 +592,7 @@ def pt_flash(
         feed_composition=composition,
         residual=residual,
         history=history
-    )
+    ))
 
 
 def stability_test(

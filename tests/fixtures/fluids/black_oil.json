@@ -1,0 +1,19 @@
+{
+  "fluid_id": "black_oil",
+  "description": "Black oil (C1/C4/C7/C10/C16)",
+  "components": [
+    {"component_id": "C1", "mole_fraction": 0.2},
+    {"component_id": "C4", "mole_fraction": 0.1},
+    {"component_id": "C7", "mole_fraction": 0.2},
+    {"component_id": "C10", "mole_fraction": 0.2},
+    {"component_id": "C16", "mole_fraction": 0.3}
+  ],
+  "pt_points": [
+    {"pressure_pa": 100000.0, "temperature_k": 300.0, "label": "two_phase_low_p"},
+    {"pressure_pa": 1000000.0, "temperature_k": 300.0, "label": "two_phase_mid_p"},
+    {"pressure_pa": 5000000.0, "temperature_k": 300.0, "label": "vapor_mid_p"},
+    {"pressure_pa": 10000000.0, "temperature_k": 300.0, "label": "liquid_high_p"},
+    {"pressure_pa": 500000.0, "temperature_k": 350.0, "label": "two_phase_warm"},
+    {"pressure_pa": 5000000.0, "temperature_k": 350.0, "label": "near_sat_warm"}
+  ]
+}

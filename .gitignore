@@ -18,6 +18,14 @@ venv/
 
 # Packaging artifacts
 *.egg-info/
+build/
+dist/
+build_onefile/
+dist_onefile/
+dist_installer/
+build_logs/
+.venv-build/
+.tmp/
 
 # Virtual environments
 .venv/

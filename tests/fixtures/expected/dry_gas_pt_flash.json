@@ -1,0 +1,148 @@
+{
+  "fluid_id": "dry_gas",
+  "component_ids": [
+    "C1",
+    "C2",
+    "C3"
+  ],
+  "points": [
+    {
+      "pressure_pa": 100000.0,
+      "temperature_k": 200.0,
+      "phase": "vapor",
+      "vapor_fraction": 1.0,
+      "liquid_composition": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vapor_composition": [
+        0.9,
+        0.05,
+        0.05
+      ],
+      "K_values": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "status": "CONVERGED",
+      "residual": 0.0
+    },
+    {
+      "pressure_pa": 500000.0,
+      "temperature_k": 200.0,
+      "phase": "two-phase",
+      "vapor_fraction": 0.9862352293632294,
+      "liquid_composition": [
+        0.08868567966020302,
+        0.10522966831220423,
+        0.8060846520275928
+      ],
+      "vapor_composition": [
+        0.9113234198103177,
+        0.049229165929153385,
+        0.03944741426052894
+      ],
+      "K_values": [
+        10.275817828271203,
+        0.46782651361303873,
+        0.04893720234960081
+      ],
+      "status": "CONVERGED",
+      "residual": 4.675148697423104e-11
+    },
+    {
+      "pressure_pa": 2000000.0,
+      "temperature_k": 200.0,
+      "phase": "two-phase",
+      "vapor_fraction": 0.905604455398487,
+      "liquid_composition": [
+        0.3654936165664929,
+        0.200538766664018,
+        0.4339676167694891
+      ],
+      "vapor_composition": [
+        0.9557141927211362,
+        0.03430861423198586,
+        0.009977193046877973
+      ],
+      "K_values": [
+        2.6148429210265323,
+        0.1710825859342699,
+        0.022990771964818472
+      ],
+      "status": "CONVERGED",
+      "residual": 7.494657876811628e-11
+    },
+    {
+      "pressure_pa": 10000000.0,
+      "temperature_k": 200.0,
+      "phase": "liquid",
+      "vapor_fraction": 0.0,
+      "liquid_composition": [
+        0.9,
+        0.05,
+        0.05
+      ],
+      "vapor_composition": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "K_values": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "status": "CONVERGED",
+      "residual": 0.0
+    },
+    {
+      "pressure_pa": 5000000.0,
+      "temperature_k": 250.0,
+      "phase": "vapor",
+      "vapor_fraction": 1.0,
+      "liquid_composition": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "vapor_composition": [
+        0.9,
+        0.05,
+        0.05
+      ],
+      "K_values": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "status": "CONVERGED",
+      "residual": 0.0
+    },
+    {
+      "pressure_pa": 10000000.0,
+      "temperature_k": 250.0,
+      "phase": "liquid",
+      "vapor_fraction": 0.0,
+      "liquid_composition": [
+        0.9,
+        0.05,
+        0.05
+      ],
+      "vapor_composition": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "K_values": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "status": "CONVERGED",
+      "residual": 0.0
+    }
+  ]
+}

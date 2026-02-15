@@ -39,7 +39,6 @@ import warnings
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy import optimize
 
 from ..core.errors import ConvergenceError, ValidationError
 from ..eos.base import CubicEOS
@@ -57,6 +56,16 @@ from .objectives import (
     DataType,
 )
 from .parameters import ParameterSet, ParameterType
+
+
+def _require_scipy_optimize():
+    try:
+        from scipy import optimize
+    except Exception as exc:
+        raise RuntimeError(
+            "SciPy is required for regression. Install with: pip install -e '.[full]'"
+        ) from exc
+    return optimize
 
 
 @dataclass
@@ -305,6 +314,8 @@ class EOSRegressor:
             print(f"Initial objective: {initial_objective:.6e}")
 
         start_time = time.time()
+
+        optimize = _require_scipy_optimize()
 
         # Run optimization
         if method.lower() == 'differential_evolution':

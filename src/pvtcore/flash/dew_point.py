@@ -25,6 +25,7 @@ from ..eos.base import CubicEOS
 from ..models.component import Component
 from ..stability.michelsen import michelsen_stability_test
 from ..flash.rachford_rice import brent_method
+from ..validation.invariants import build_saturation_certificate
 
 
 # Numerical tolerances
@@ -62,6 +63,7 @@ class DewPointResult:
     residual: float
     stable_vapor: bool
     history: Optional[IterationHistory] = None
+    certificate: Optional["SolverCertificate"] = None
 
     @property
     def converged(self) -> bool:
@@ -165,6 +167,16 @@ def calculate_dew_point(
                 "Binary interaction matrix contains NaN or Inf values",
                 parameter="binary_interaction"
             )
+
+    def _finalize(result: DewPointResult) -> DewPointResult:
+        """Attach invariant certificate without altering solver behavior."""
+        result.certificate = build_saturation_certificate(
+            "dew",
+            result,
+            eos,
+            binary_interaction=binary_interaction,
+        )
+        return result
 
     # Validate initial pressure if provided
     if pressure_initial is not None:
@@ -277,7 +289,7 @@ def calculate_dew_point(
                         reason="post_check_failed",
                     )
 
-        return DewPointResult(
+        return _finalize(DewPointResult(
             status=ConvergenceStatus.CONVERGED,
             pressure=float(P_star),
             temperature=float(temperature),
@@ -288,7 +300,7 @@ def calculate_dew_point(
             residual=float(abs(tpd_star)),
             stable_vapor=bool(f0 >= -tolerance),
             history=IterationHistory(),  # Early convergence - minimal history
-        )
+        ))
 
     P_lo, f_lo = P0, f0
     P_hi, f_hi = P0, f0
@@ -318,7 +330,7 @@ def calculate_dew_point(
 
     # If bracketing exhausted max_iterations, return MAX_ITERS status
     if bracketing_exhausted and P_lo == P_hi:
-        return DewPointResult(
+        return _finalize(DewPointResult(
             status=ConvergenceStatus.MAX_ITERS,
             pressure=float(P0),
             temperature=float(temperature),
@@ -329,7 +341,7 @@ def calculate_dew_point(
             residual=float(abs(f0)),
             stable_vapor=bool(f0 >= -tolerance),
             history=history,
-        )
+        ))
 
     if P_lo == P_hi:
         raise PhaseError(
@@ -430,7 +442,7 @@ def calculate_dew_point(
     # Record final residual in history
     history.record_iteration(residual=abs(tpd_star))
 
-    return DewPointResult(
+    return _finalize(DewPointResult(
         status=ConvergenceStatus.CONVERGED,
         pressure=float(P_star),
         temperature=float(temperature),
@@ -441,7 +453,7 @@ def calculate_dew_point(
         residual=float(abs(tpd_star)),
         stable_vapor=bool(f0 >= -tolerance),
         history=history,
-    )
+    ))
 
 
 def _tpd_liquid_trial(
