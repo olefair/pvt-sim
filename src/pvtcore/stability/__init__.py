@@ -9,6 +9,13 @@ from .michelsen import (
     STABILITY_TOLERANCE,
     TPD_TOLERANCE
 )
+from .analysis import (
+    StabilityOptions,
+    StabilityTrialResult,
+    StabilityAnalysisResult,
+    stability_analyze,
+    tpd_single_trial
+)
 
 __all__ = [
     'wilson_k_values',
@@ -18,5 +25,10 @@ __all__ = [
     'is_stable',
     'StabilityResult',
     'STABILITY_TOLERANCE',
-    'TPD_TOLERANCE'
+    'TPD_TOLERANCE',
+    'StabilityOptions',
+    'StabilityTrialResult',
+    'StabilityAnalysisResult',
+    'stability_analyze',
+    'tpd_single_trial'
 ]

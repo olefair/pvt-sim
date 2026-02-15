@@ -1,0 +1,101 @@
+"""Tests for the new stability analysis API.
+
+These tests validate that the additive API in `pvtcore.stability.analysis`
+returns structured results and matches expected stability/instability outcomes
+for simple systems.
+
+The legacy Michelsen stability implementation has its own unit tests in
+`tests/unit/test_stability.py`; this module focuses only on the new API surface.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from pvtcore.eos.peng_robinson import PengRobinsonEOS
+from pvtcore.models.component import load_components
+from pvtcore.core.errors import ValidationError
+from pvtcore.stability.analysis import (
+    StabilityOptions,
+    stability_analyze,
+    tpd_single_trial,
+)
+
+
+def test_stability_analyze_returns_structured_result_stable_case() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"]])
+
+    z = np.array([1.0], dtype=float)
+    P = 1.0e5
+    T = 400.0
+
+    res = stability_analyze(z, P, T, eos, feed_phase="auto")
+
+    assert isinstance(res.stable, bool)
+    assert isinstance(res.tpd_min, float)
+    assert res.vapor_like is not None
+    assert res.liquid_like is not None
+    assert len(res.trials) == 2
+    assert res.stable is True
+    assert res.tpd_min >= -StabilityOptions().tpd_negative_tol
+
+
+def test_stability_analyze_detects_unstable_binary_vle_case() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"], comps["C10"]])
+
+    z = np.array([0.5, 0.5], dtype=float)
+    P = 3.0e6
+    T = 300.0
+
+    res = stability_analyze(z, P, T, eos, feed_phase="liquid")
+
+    assert res.stable is False
+    assert res.tpd_min < -StabilityOptions().tpd_negative_tol
+    assert res.best_unstable_trial is not None
+
+
+def test_tpd_single_trial_matches_analyze_trial() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"], comps["C10"]])
+
+    z = np.array([0.5, 0.5], dtype=float)
+    P = 3.0e6
+    T = 300.0
+
+    opts = StabilityOptions(use_gdem=True)
+    full = stability_analyze(z, P, T, eos, feed_phase="liquid", options=opts)
+
+    single = tpd_single_trial(
+        z, P, T, eos,
+        feed_phase="liquid",
+        trial_kind="vapor_like",
+        options=opts,
+    )
+
+    assert full.vapor_like is not None
+    assert single.kind == "vapor_like"
+    assert single.trial_phase == "vapor"
+    assert np.isfinite(single.tpd)
+    assert single.tpd == pytest.approx(full.vapor_like.tpd, abs=1e-12)
+    np.testing.assert_allclose(single.w, full.vapor_like.w, rtol=0.0, atol=1e-12)
+
+
+def test_input_validation_rejects_bad_composition_sum() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"], comps["C10"]])
+
+    z_bad = np.array([0.6, 0.6], dtype=float)  # sums to 1.2
+    with pytest.raises(ValidationError):
+        stability_analyze(z_bad, 3.0e6, 300.0, eos, feed_phase="liquid")
+
+
+def test_input_validation_rejects_negative_pressure() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"]])
+
+    z = np.array([1.0], dtype=float)
+    with pytest.raises(ValidationError):
+        stability_analyze(z, -1.0e5, 300.0, eos, feed_phase="vapor")
