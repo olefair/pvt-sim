@@ -1,0 +1,26 @@
+{
+  "run_name": "Phase Envelope - Example",
+  "composition": {
+    "components": [
+      {
+        "component_id": "C1",
+        "mole_fraction": 0.8
+      },
+      {
+        "component_id": "C4",
+        "mole_fraction": 0.1
+      },
+      {
+        "component_id": "C10",
+        "mole_fraction": 0.1
+      }
+    ]
+  },
+  "calculation_type": "phase_envelope",
+  "eos_type": "peng_robinson",
+  "phase_envelope_config": {
+    "temperature_min_k": 150.0,
+    "temperature_max_k": 600.0,
+    "n_points": 80
+  }
+}
