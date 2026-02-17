@@ -45,6 +45,12 @@ from .reports import (
     generate_separator_report,
 )
 
+# Schema-driven fluid definition parsing (optional)
+from .fluid_definition import (
+    load_fluid_definition,
+    characterize_from_schema,
+)
+
 __all__ = [
     # Data classes
     "CompositionData",
@@ -70,4 +76,8 @@ __all__ = [
     "generate_flash_report",
     "generate_cce_report",
     "generate_separator_report",
+
+    # Schema parsing
+    "load_fluid_definition",
+    "characterize_from_schema",
 ]

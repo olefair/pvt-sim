@@ -24,7 +24,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -358,3 +358,127 @@ def _validate_ift_inputs(
             "Compositions cannot have negative values",
             parameter="composition",
         )
+
+# ==============================================================================
+# Compatibility wrappers (codex API)
+# ==============================================================================
+
+@dataclass
+class ParachorIFT:
+    """IFT result (codex API)."""
+    sigma_N_per_m: float
+    sigma_dyn_per_cm: float
+
+
+def interfacial_tension_parachor(
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
+    *,
+    rho_liquid_kg_per_m3: float,
+    rho_vapor_kg_per_m3: float,
+    mw_components_g_per_mol: NDArray[np.float64],
+    parachor: NDArray[np.float64],
+) -> ParachorIFT:
+    """Compute IFT using the Weinaug–Katz parachor method (codex API).
+
+    Returns both:
+      - sigma_N_per_m (SI)
+      - sigma_dyn_per_cm (cgs; numerically equal to mN/m)
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    if x.ndim != 1 or y.ndim != 1 or x.shape != y.shape:
+        raise ValidationError("x and y must be 1D arrays of equal length.", parameter="composition")
+    if x.sum() <= 0.0 or y.sum() <= 0.0:
+        raise ValidationError("x and y must have positive sums.", parameter="composition_sum")
+    x = x / x.sum()
+    y = y / y.sum()
+
+    mw = np.asarray(mw_components_g_per_mol, dtype=np.float64)
+    P = np.asarray(parachor, dtype=np.float64)
+    if mw.shape != x.shape or P.shape != x.shape:
+        raise ValidationError(
+            "mw_components_g_per_mol and parachor must match x/y length.",
+            parameter="inputs",
+            value={"n": int(x.shape[0]), "mw": int(mw.shape[0]), "parachor": int(P.shape[0])},
+        )
+
+    # Mixture molecular weights (g/mol)
+    mw_L = float(np.dot(x, mw))
+    mw_V = float(np.dot(y, mw))
+
+    # Convert mass densities (kg/m³) to molar densities (mol/m³)
+    rho_L_mol_m3 = float(rho_liquid_kg_per_m3) * 1000.0 / mw_L
+    rho_V_mol_m3 = float(rho_vapor_kg_per_m3) * 1000.0 / mw_V
+
+    # Convert mol/m³ → mol/cm³ for parachor units
+    rho_L = rho_L_mol_m3 * 1e-6
+    rho_V = rho_V_mol_m3 * 1e-6
+
+    s = float(np.dot(P, (x * rho_L) - (y * rho_V)))
+    if s <= 0.0:
+        sigma_mN_per_m = 0.0
+    else:
+        sigma_mN_per_m = s ** 4
+
+    sigma_dyn_per_cm = sigma_mN_per_m  # 1 mN/m == 1 dyn/cm numerically
+    sigma_N_per_m = sigma_mN_per_m / 1000.0
+
+    return ParachorIFT(sigma_N_per_m=float(sigma_N_per_m), sigma_dyn_per_cm=float(sigma_dyn_per_cm))
+
+
+def interfacial_tension_parachor_after_flash(
+    flash: Any,
+    eos: Any,
+    components: List[Component],
+    *,
+    parachor: Optional[NDArray[np.float64]] = None,
+    binary_interaction: Optional[NDArray[np.float64]] = None,
+) -> ParachorIFT:
+    """Compute IFT end-to-end from a `pt_flash` result (codex API)."""
+    phase = str(getattr(flash, "phase"))
+    if phase != "two-phase":
+        raise ValidationError("IFT requires a two-phase flash result.", parameter="flash.phase", value=phase)
+
+    x = np.asarray(getattr(flash, "liquid_composition"), dtype=np.float64)
+    y = np.asarray(getattr(flash, "vapor_composition"), dtype=np.float64)
+
+    # Densities via existing EOS-based density helper
+    from .density import calculate_density  # local import to avoid module cycles
+
+    rhoL = calculate_density(
+        pressure=float(getattr(flash, "pressure")),
+        temperature=float(getattr(flash, "temperature")),
+        composition=x,
+        components=components,
+        eos=eos,
+        phase="liquid",
+        binary_interaction=binary_interaction,
+    ).mass_density
+
+    rhoV = calculate_density(
+        pressure=float(getattr(flash, "pressure")),
+        temperature=float(getattr(flash, "temperature")),
+        composition=y,
+        components=components,
+        eos=eos,
+        phase="vapor",
+        binary_interaction=binary_interaction,
+    ).mass_density
+
+    mw = np.array([c.MW for c in components], dtype=np.float64)
+
+    if parachor is None:
+        component_ids = [c.formula for c in components]
+        P = estimate_parachor_array(mw, component_ids)
+    else:
+        P = np.asarray(parachor, dtype=np.float64)
+
+    return interfacial_tension_parachor(
+        x,
+        y,
+        rho_liquid_kg_per_m3=float(rhoL),
+        rho_vapor_kg_per_m3=float(rhoV),
+        mw_components_g_per_mol=mw,
+        parachor=P,
+    )

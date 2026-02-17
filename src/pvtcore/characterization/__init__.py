@@ -84,6 +84,17 @@ from .fluid import (
     PlusFractionMethod,
 )
 
+
+# Unified pipeline (schema-driven characterization)
+from .pipeline import (
+    PlusFractionSpec,
+    BinaryInteractionOverride,
+    CharacterizationConfig,
+    SCNLumpingResult,
+    CharacterizationResult,
+    characterize_fluid,
+)
+
 __all__ = [
     # Plus-fraction splitting
     "PedersenSplitResult",
@@ -124,4 +135,10 @@ __all__ = [
     "CharacterizedFluid",
     "FluidComponent",
     "PlusFractionMethod",
+    "CharacterizationConfig",
+    "PlusFractionSpec",
+    "characterize_fluid",
+    "CharacterizationResult",
+    "SCNLumpingResult",
+    "BinaryInteractionOverride",
 ]

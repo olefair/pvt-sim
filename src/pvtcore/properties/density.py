@@ -19,7 +19,7 @@ References
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -352,3 +352,113 @@ def _validate_inputs(
             f"Composition must sum to 1.0, got {z.sum():.6f}",
             parameter="composition",
         )
+
+# ==============================================================================
+# Compatibility wrappers (codex API)
+# ==============================================================================
+
+@dataclass
+class PhaseDensity:
+    """Per-phase density convenience view (codex API)."""
+    molar_density_mol_per_m3: float
+    mass_density_kg_per_m3: float
+    molecular_weight_g_per_mol: float
+
+
+@dataclass
+class FlashDensities:
+    """Densities after a flash calculation (codex API)."""
+    liquid: Optional[PhaseDensity]
+    vapor: Optional[PhaseDensity]
+
+
+def phase_molecular_weight_g_per_mol(
+    composition: NDArray[np.float64],
+    components: List[Component],
+) -> float:
+    """Mixture molecular weight (g/mol) for a phase composition."""
+    x = np.asarray(composition, dtype=np.float64)
+    if x.ndim != 1:
+        raise ValidationError("Composition must be 1D.", parameter="composition", value=f"shape={x.shape}")
+    if len(x) != len(components):
+        raise ValidationError(
+            "Composition length must match number of components",
+            parameter="composition",
+            value={"got": len(x), "expected": len(components)},
+        )
+    if x.sum() <= 0.0:
+        raise ValidationError("Composition sum must be positive.", parameter="composition_sum", value=float(x.sum()))
+    x = x / x.sum()
+    return float(sum(x[i] * components[i].MW for i in range(len(components))))
+
+
+def mass_density_kg_per_m3(
+    pressure: float,
+    temperature: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    components: List[Component],
+    *,
+    phase: Literal["liquid", "vapor"] = "liquid",
+    binary_interaction: Optional[NDArray[np.float64]] = None,
+    volume_shift: Optional[NDArray[np.float64]] = None,
+) -> float:
+    """Mass density (kg/m³) wrapper around `calculate_density(...)`."""
+    res = calculate_density(
+        pressure=pressure,
+        temperature=temperature,
+        composition=composition,
+        components=components,
+        eos=eos,
+        phase=phase,
+        binary_interaction=binary_interaction,
+        volume_shift=volume_shift,
+    )
+    return float(res.mass_density)
+
+
+def densities_after_flash(
+    flash: Any,
+    eos: CubicEOS,
+    components: List[Component],
+    *,
+    binary_interaction: Optional[NDArray[np.float64]] = None,
+    volume_shift: Optional[NDArray[np.float64]] = None,
+) -> FlashDensities:
+    """Compute per-phase densities from a `pt_flash` result (codex API)."""
+    # Delay import typing to avoid hard coupling to flash module types.
+    pressure = float(getattr(flash, "pressure"))
+    temperature = float(getattr(flash, "temperature"))
+    phase = str(getattr(flash, "phase"))
+
+    def _one(comp: NDArray[np.float64], phase_label: Literal["liquid", "vapor"]) -> PhaseDensity:
+        res = calculate_density(
+            pressure=pressure,
+            temperature=temperature,
+            composition=comp,
+            components=components,
+            eos=eos,
+            phase=phase_label,
+            binary_interaction=binary_interaction,
+            volume_shift=volume_shift,
+        )
+        return PhaseDensity(
+            molar_density_mol_per_m3=float(res.molar_density),
+            mass_density_kg_per_m3=float(res.mass_density),
+            molecular_weight_g_per_mol=float(res.MW_mix),
+        )
+
+    if phase == "two-phase":
+        liquid = _one(np.asarray(getattr(flash, "liquid_composition")), "liquid")
+        vapor = _one(np.asarray(getattr(flash, "vapor_composition")), "vapor")
+        return FlashDensities(liquid=liquid, vapor=vapor)
+
+    if phase == "liquid":
+        liquid = _one(np.asarray(getattr(flash, "liquid_composition", getattr(flash, "feed_composition"))), "liquid")
+        return FlashDensities(liquid=liquid, vapor=None)
+
+    if phase == "vapor":
+        vapor = _one(np.asarray(getattr(flash, "vapor_composition", getattr(flash, "feed_composition"))), "vapor")
+        return FlashDensities(liquid=None, vapor=vapor)
+
+    raise ValidationError("Unknown flash phase label.", parameter="flash.phase", value=phase)

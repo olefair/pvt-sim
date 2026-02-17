@@ -6,7 +6,12 @@ from .phase_envelope import (
     calculate_phase_envelope,
     EnvelopeResult,
     estimate_cricondentherm,
-    estimate_cricondenbar
+    estimate_cricondenbar,
+)
+
+from .trace import (
+    trace_phase_envelope,
+    TracedEnvelopeResult,
 )
 
 from .critical_point import (
@@ -54,6 +59,8 @@ __all__ = [
     'EnvelopeResult',
     'estimate_cricondentherm',
     'estimate_cricondenbar',
+    'trace_phase_envelope',
+    'TracedEnvelopeResult',
     # Critical point
     'detect_critical_point',
     'estimate_critical_point_kays',

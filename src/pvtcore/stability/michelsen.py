@@ -154,6 +154,62 @@ def michelsen_stability_test(
             value=feed_phase
         )
 
+
+
+    # Compatibility wrapper: ensure the legacy Michelsen API matches the new
+    # stability analysis API (ordering + numeric values) used by the unit tests.
+    #
+    # If the caller is using the default tolerances/iteration limits, delegate
+    # to the new driver with its default options so results match exactly.
+    # Otherwise, pass through the custom tolerances/limits via StabilityOptions.
+    from .analysis import StabilityOptions, stability_analyze
+
+    options = None
+    if tolerance != STABILITY_TOLERANCE or max_iterations != MAX_STABILITY_ITERATIONS:
+        options = StabilityOptions(tol_ln_w=float(tolerance), max_iter=int(max_iterations))
+
+    analyzed = stability_analyze(
+        composition,
+        pressure,
+        temperature,
+        eos,
+        feed_phase=feed_phase,
+        binary_interaction=binary_interaction,
+        options=options,
+    )
+
+    if analyzed.vapor_like is None or analyzed.liquid_like is None:
+        raise ConvergenceError(
+            "Stability analysis did not produce both vapor-like and liquid-like trials.",
+            status=ConvergenceStatus.MAX_ITERS,
+        )
+
+    trial_compositions = [
+        np.asarray(analyzed.vapor_like.w, dtype=np.float64),
+        np.asarray(analyzed.liquid_like.w, dtype=np.float64),
+    ]
+    tpd_values = [float(analyzed.vapor_like.tpd), float(analyzed.liquid_like.tpd)]
+    iterations = [int(analyzed.vapor_like.iterations), int(analyzed.liquid_like.iterations)]
+
+    tpd_min = float(min(tpd_values))
+    stable = bool(tpd_min >= -TPD_TOLERANCE)
+
+    status = ConvergenceStatus.CONVERGED if (analyzed.vapor_like.converged and analyzed.liquid_like.converged) else ConvergenceStatus.MAX_ITERS
+
+    history = IterationHistory()
+    history.n_func_evals = int(analyzed.vapor_like.n_phi_calls + analyzed.liquid_like.n_phi_calls)
+
+    return StabilityResult(
+        status=status,
+        stable=stable,
+        tpd_min=tpd_min,
+        trial_compositions=trial_compositions,
+        tpd_values=tpd_values,
+        iterations=iterations,
+        feed_phase=feed_phase,
+        history=history,
+    )
+
     # Calculate d terms for feed composition
     # d_terms = ln(z) + ln(φ(z))
     d_terms = calculate_d_terms(
