@@ -93,7 +93,7 @@ def print_summary(steps: List[ValidationStep]) -> None:
 
 def main() -> None:
     """Run all validation steps."""
-    repo_root = Path.cwd()
+    repo_root = Path(__file__).resolve().parent.parent
 
     # Define validation pipeline
     steps = [

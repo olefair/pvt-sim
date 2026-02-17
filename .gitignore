@@ -44,3 +44,7 @@ __pycache__/
 desktop.ini
 Thumbs.db
 ehthumbs.db
+
+# Patches 
+*.patch
+*.changes
