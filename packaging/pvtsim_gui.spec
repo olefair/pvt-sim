@@ -16,7 +16,7 @@ block_cipher = None
 try:
     repo_root = Path(SPECPATH).resolve().parent
 except NameError:
-    repo_root = Path.cwd().resolve()
+    repo_root = Path(__file__).resolve().parent.parent
 onefile = os.environ.get("PVT_ONEFILE") == "1"
 build_cli = os.environ.get("PVT_BUILD_CLI", "1") != "0"
 

@@ -388,7 +388,7 @@ def main() -> None:
     parser.add_argument(
         "--repo-root",
         type=Path,
-        default=Path.cwd(),
+        default=Path(__file__).resolve().parent.parent,
         help="Repository root directory (default: current directory)",
     )
     parser.add_argument(
