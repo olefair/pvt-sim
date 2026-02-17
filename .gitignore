@@ -40,4 +40,7 @@ __pycache__/
 # Packaging artifacts
 *.egg-info/
 
+# Windows Explorer metadata
 desktop.ini
+Thumbs.db
+ehthumbs.db
