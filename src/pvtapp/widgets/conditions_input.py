@@ -27,10 +27,13 @@ from pvtapp.schemas import (
     EOSType,
     PressureUnit,
     TemperatureUnit,
+    RunConfig,
     PTFlashConfig,
     PhaseEnvelopeConfig,
     CCEConfig,
     SolverSettings,
+    pressure_from_pa,
+    temperature_from_k,
     pressure_to_pa,
     temperature_to_k,
     PRESSURE_MIN_PA,
@@ -315,6 +318,78 @@ class ConditionsInputWidget(QWidget):
     def get_eos_type(self) -> EOSType:
         """Get selected EOS."""
         return self.eos_combo.currentData()
+
+    def set_calculation_type(self, calc_type: CalculationType) -> None:
+        """Set selected calculation type."""
+        index = self.calc_type_combo.findData(calc_type)
+        if index < 0:
+            raise ValueError(f"Unsupported calculation type: {calc_type}")
+        self.calc_type_combo.setCurrentIndex(index)
+
+    def set_eos_type(self, eos_type: EOSType) -> None:
+        """Set selected EOS type."""
+        index = self.eos_combo.findData(eos_type)
+        if index < 0:
+            raise ValueError(f"Unsupported EOS type: {eos_type}")
+        self.eos_combo.setCurrentIndex(index)
+
+    def set_solver_settings(self, solver_settings: SolverSettings) -> None:
+        """Set solver settings controls from a model."""
+        self.tolerance_edit.setText(f"{solver_settings.tolerance:.6g}")
+        self.max_iters_spin.setValue(solver_settings.max_iterations)
+
+    def set_pt_flash_config(self, config: PTFlashConfig) -> None:
+        """Load PT flash config into widget controls."""
+        pressure_unit = PressureUnit.BAR
+        temperature_unit = TemperatureUnit.C
+
+        p_index = self.pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.pressure_unit.setCurrentIndex(p_index)
+        t_index = self.temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.temperature_unit.setCurrentIndex(t_index)
+
+        pressure_value = pressure_from_pa(config.pressure_pa, pressure_unit)
+        temperature_value = temperature_from_k(config.temperature_k, temperature_unit)
+        self.pressure_edit.setText(f"{pressure_value:.6g}")
+        self.temperature_edit.setText(f"{temperature_value:.6g}")
+
+    def set_phase_envelope_config(self, config: PhaseEnvelopeConfig) -> None:
+        """Load phase-envelope config into widget controls."""
+        self.env_t_min.setValue(config.temperature_min_k - 273.15)
+        self.env_t_max.setValue(config.temperature_max_k - 273.15)
+        self.env_n_points.setValue(config.n_points)
+
+    def set_cce_config(self, config: CCEConfig) -> None:
+        """Load CCE config into widget controls."""
+        self.cce_temperature.setValue(config.temperature_k - 273.15)
+        self.cce_p_start.setValue(config.pressure_start_pa / 1e5)
+        self.cce_p_end.setValue(config.pressure_end_pa / 1e5)
+        self.cce_n_steps.setValue(config.n_steps)
+
+    def load_from_run_config(self, config: RunConfig) -> None:
+        """Load a validated RunConfig into widget controls."""
+        self.set_calculation_type(config.calculation_type)
+        self.set_eos_type(config.eos_type)
+        self.set_solver_settings(config.solver_settings)
+
+        if config.calculation_type == CalculationType.PT_FLASH:
+            if config.pt_flash_config is None:
+                raise ValueError("RunConfig missing pt_flash_config")
+            self.set_pt_flash_config(config.pt_flash_config)
+        elif config.calculation_type == CalculationType.PHASE_ENVELOPE:
+            if config.phase_envelope_config is None:
+                raise ValueError("RunConfig missing phase_envelope_config")
+            self.set_phase_envelope_config(config.phase_envelope_config)
+        elif config.calculation_type == CalculationType.CCE:
+            if config.cce_config is None:
+                raise ValueError("RunConfig missing cce_config")
+            self.set_cce_config(config.cce_config)
+        else:
+            raise ValueError(
+                f"Loading calculation type '{config.calculation_type.value}' is not implemented"
+            )
 
     def get_solver_settings(self) -> SolverSettings:
         """Get solver settings."""

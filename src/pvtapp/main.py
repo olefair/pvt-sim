@@ -18,8 +18,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QDockWidget,
-    QTabWidget,
     QMenuBar,
     QMenu,
     QToolBar,
@@ -28,7 +26,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QFileDialog,
-    QSplitter,
     QPushButton,
 )
 
@@ -47,8 +44,17 @@ from pvtapp.widgets import (
     ResultsTableWidget,
     ResultsPlotWidget,
     DiagnosticsWidget,
+    InputsPanel,
+    CriticalPropsWidget,
+    InteractionParamsWidget,
+    TextOutputWidget,
+    RunLogWidget,
+    TwoPaneWorkspace,
+    ViewSpec,
 )
 from pvtapp.workers import CalculationThread
+
+from pvtcore.models import load_components
 
 
 class PVTSimulatorWindow(QMainWindow):
@@ -59,25 +65,21 @@ class PVTSimulatorWindow(QMainWindow):
         self._current_thread: Optional[CalculationThread] = None
         self._run_history: list[RunResult] = []
 
+        # Component DB (for critical props / BIPs views)
+        self._components_db = load_components()
+
         self._setup_window()
         self._setup_menus()
         self._setup_toolbar()
         self._setup_central_widget()
-        self._setup_dock_widgets()
         self._setup_statusbar()
         self._connect_signals()
 
     def _setup_window(self) -> None:
         """Configure main window properties."""
         self.setWindowTitle(f"{__app_name__} v{__version__}")
-        self.setMinimumSize(1200, 800)
-
-        # Enable docking features
-        self.setDockOptions(
-            QMainWindow.DockOption.AnimatedDocks |
-            QMainWindow.DockOption.AllowNestedDocks |
-            QMainWindow.DockOption.AllowTabbedDocks
-        )
+        # Upscaled default footprint (still resizable)
+        self.setMinimumSize(1400, 900)
 
     def _setup_menus(self) -> None:
         """Create menu bar and menus."""
@@ -171,24 +173,14 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Run button
         self.run_btn = QPushButton("Run")
-        self.run_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; "
-            "font-weight: bold; padding: 5px 20px; }"
-            "QPushButton:hover { background-color: #45a049; }"
-            "QPushButton:disabled { background-color: #cccccc; }"
-        )
+        self.run_btn.setObjectName("RunButton")
         self.run_btn.clicked.connect(self._run_calculation)
         toolbar.addWidget(self.run_btn)
 
         # Cancel button
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
-        self.cancel_btn.setStyleSheet(
-            "QPushButton { background-color: #f44336; color: white; "
-            "font-weight: bold; padding: 5px 15px; }"
-            "QPushButton:hover { background-color: #da190b; }"
-            "QPushButton:disabled { background-color: #cccccc; }"
-        )
+        self.cancel_btn.setObjectName("CancelButton")
         self.cancel_btn.clicked.connect(self._cancel_calculation)
         toolbar.addWidget(self.cancel_btn)
 
@@ -200,63 +192,67 @@ class PVTSimulatorWindow(QMainWindow):
         toolbar.addWidget(validate_btn)
 
     def _setup_central_widget(self) -> None:
-        """Create central widget with results display."""
-        central = QWidget()
-        self.setCentralWidget(central)
+        """Create central widget with two configurable panes."""
 
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(5, 5, 5, 5)
+        # Primary inputs (single shared instance, movable between panes)
+        self.composition_widget = CompositionInputWidget()
+        self.conditions_widget = ConditionsInputWidget()
+        self.inputs_panel = InputsPanel(self.composition_widget, self.conditions_widget)
 
-        # Create tabs for results display
-        self.results_tabs = QTabWidget()
-
-        # Table view
+        # Outputs / tools (single shared instances)
         self.results_table = ResultsTableWidget()
-        self.results_tabs.addTab(self.results_table, "Table")
-
-        # Plot view
         self.results_plot = ResultsPlotWidget()
-        self.results_tabs.addTab(self.results_plot, "Plot")
+        self.diagnostics_widget = DiagnosticsWidget()
+        self.text_output_widget = TextOutputWidget()
 
-        layout.addWidget(self.results_tabs)
+        # MI-PVT-like tabs as views
+        self.critical_props_widget = CriticalPropsWidget(self._components_db)
+        self.interaction_params_widget = InteractionParamsWidget(self._components_db)
+        self.run_log_widget = RunLogWidget()
+
+        vapor_placeholder = QLabel("Vapor saturation view is not implemented yet.")
+        vapor_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vapor_placeholder.setStyleSheet("color: #9ca3af;")
+        self.vapor_saturation_widget = vapor_placeholder
+
+        view_specs = [
+            ViewSpec("inputs", "Feeds / Inputs"),
+            ViewSpec("critical_props", "Critical prop."),
+            ViewSpec("interaction_params", "Interaction para."),
+            ViewSpec("log", "Log"),
+            ViewSpec("text_output", "Text output"),
+            ViewSpec("results_table", "Results table"),
+            ViewSpec("phase_envelope", "Phase Envelope"),
+            ViewSpec("diagnostics", "Diagnostics"),
+            ViewSpec("vapor_saturation", "Vapor saturation"),
+        ]
+
+        view_widgets = {
+            "inputs": self.inputs_panel,
+            "critical_props": self.critical_props_widget,
+            "interaction_params": self.interaction_params_widget,
+            "log": self.run_log_widget,
+            "text_output": self.text_output_widget,
+            "results_table": self.results_table,
+            "phase_envelope": self.results_plot,
+            "diagnostics": self.diagnostics_widget,
+            "vapor_saturation": self.vapor_saturation_widget,
+        }
+
+        self.workspace = TwoPaneWorkspace(
+            view_specs=view_specs,
+            view_widgets=view_widgets,
+            left_default="inputs",
+            right_default="phase_envelope",
+        )
+        self.setCentralWidget(self.workspace)
+
+        # Seed composition-dependent views
+        self._update_component_dependent_views()
 
     def _setup_dock_widgets(self) -> None:
-        """Create dockable panels."""
-        # Input dock (left side)
-        input_dock = QDockWidget("Input", self)
-        input_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-
-        input_widget = QWidget()
-        input_layout = QVBoxLayout(input_widget)
-        input_layout.setContentsMargins(5, 5, 5, 5)
-
-        # Composition input
-        self.composition_widget = CompositionInputWidget()
-        input_layout.addWidget(self.composition_widget)
-
-        # Conditions input
-        self.conditions_widget = ConditionsInputWidget()
-        input_layout.addWidget(self.conditions_widget)
-
-        input_dock.setWidget(input_widget)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, input_dock)
-        self._view_menu.addAction(input_dock.toggleViewAction())
-
-        # Diagnostics dock (right side)
-        diag_dock = QDockWidget("Diagnostics", self)
-        diag_dock.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea |
-            Qt.DockWidgetArea.RightDockWidgetArea |
-            Qt.DockWidgetArea.BottomDockWidgetArea
-        )
-
-        self.diagnostics_widget = DiagnosticsWidget()
-        diag_dock.setWidget(self.diagnostics_widget)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, diag_dock)
-        self._view_menu.addAction(diag_dock.toggleViewAction())
+        """Deprecated: previous dock-based layout removed."""
+        return
 
     def _setup_statusbar(self) -> None:
         """Create status bar with progress indicator."""
@@ -278,8 +274,24 @@ class PVTSimulatorWindow(QMainWindow):
         self.composition_widget.validation_error.connect(self._show_validation_error)
         self.conditions_widget.validation_error.connect(self._show_validation_error)
 
+        # Composition edits drive derived views
+        self.composition_widget.composition_edited.connect(self._update_component_dependent_views)
+
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
+
+    @Slot()
+    def _update_component_dependent_views(self) -> None:
+        """Update component-dependent panels (critical props / BIPs)."""
+        try:
+            component_ids = [cid for cid, _frac in self.composition_widget.get_components() if cid]
+        except Exception:
+            component_ids = []
+
+        if hasattr(self, "critical_props_widget"):
+            self.critical_props_widget.update_components(component_ids)
+        if hasattr(self, "interaction_params_widget"):
+            self.interaction_params_widget.update_components(component_ids)
 
     def _build_config(self) -> Optional[RunConfig]:
         """Build RunConfig from current input state.
@@ -353,9 +365,15 @@ class PVTSimulatorWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.composition_widget.table.setRowCount(0)
+            # Keep the sum/status in sync and refresh dependent panels
+            if hasattr(self.composition_widget, "_update_sum"):
+                self.composition_widget._update_sum()
+            if hasattr(self.composition_widget, "composition_edited"):
+                self.composition_widget.composition_edited.emit()
             self.results_table.clear()
             self.results_plot.clear()
             self.diagnostics_widget.clear()
+            self.text_output_widget.clear()
             self.status_label.setText("Ready")
 
     @Slot()
@@ -377,8 +395,8 @@ class PVTSimulatorWindow(QMainWindow):
 
                 # Load composition
                 self.composition_widget.set_composition(config.composition)
-
-                # TODO: Load other settings
+                self.conditions_widget.load_from_run_config(config)
+                self._update_component_dependent_views()
 
                 self.status_label.setText(f"Loaded: {Path(filename).name}")
 
@@ -544,6 +562,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.results_table.clear()
         self.results_plot.clear()
         self.diagnostics_widget.clear()
+        self.text_output_widget.clear()
 
         # Create and start worker thread
         self._current_thread = CalculationThread(config)
@@ -584,6 +603,13 @@ class PVTSimulatorWindow(QMainWindow):
         self.results_table.display_result(result)
         self.results_plot.display_result(result)
         self.diagnostics_widget.display_result(result)
+        self.text_output_widget.display_result(result)
+
+        # Refresh log (run folders are persisted by the worker)
+        try:
+            self.run_log_widget.refresh()
+        except Exception:
+            pass
 
         # Update status
         if result.status == RunStatus.COMPLETED:
@@ -646,6 +672,10 @@ def main():
 
     # Set application style
     app.setStyle("Fusion")
+
+    # Apply Cato-like dark theme + slight upscale
+    from pvtapp.style import build_cato_dark_stylesheet
+    app.setStyleSheet(build_cato_dark_stylesheet(scale=1.10))
 
     window = PVTSimulatorWindow()
     window.show()

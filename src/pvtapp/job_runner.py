@@ -27,6 +27,10 @@ from pvtapp.schemas import (
     CalculationType, EOSType,
     PTFlashResult, PhaseEnvelopeResult, PhaseEnvelopePoint,
     CCEResult, CCEStepResult,
+    BubblePointResult, DewPointResult,
+    DLResult, DLStepResult,
+    CVDResult, CVDStepResult,
+    SeparatorResult, SeparatorStageResult,
     SolverDiagnostics, IterationRecord, ConvergenceStatusEnum,
     InvariantCheck, SolverCertificate,
 )
@@ -443,6 +447,412 @@ def execute_phase_envelope(
     )
 
 
+def _finite_or_none(value: float) -> Optional[float]:
+    """Return float(value) when finite, otherwise None."""
+    as_float = float(value)
+    return as_float if np.isfinite(as_float) else None
+
+
+def _prepare_fluid_inputs(config: RunConfig):
+    """Build component IDs, objects, composition, EOS, and optional BIP matrix."""
+    from pvtcore.eos import PengRobinsonEOS
+    from pvtcore.models import load_components
+
+    all_components = load_components()
+    component_ids = [entry.component_id for entry in config.composition.components]
+    mole_fractions = [entry.mole_fraction for entry in config.composition.components]
+
+    missing = [cid for cid in component_ids if cid not in all_components]
+    if missing:
+        raise ValueError(
+            f"Unknown component(s): {missing}. "
+            f"Available: {sorted(all_components.keys())}"
+        )
+
+    components = [all_components[cid] for cid in component_ids]
+    z = np.array(mole_fractions, dtype=np.float64)
+    eos = PengRobinsonEOS(components)
+
+    binary_interaction = None
+    if config.binary_interaction:
+        n = len(components)
+        binary_interaction = np.zeros((n, n))
+        for pair_key, kij in config.binary_interaction.items():
+            parts = pair_key.split("-")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
+            try:
+                i = component_ids.index(parts[0])
+                j = component_ids.index(parts[1])
+                binary_interaction[i, j] = kij
+                binary_interaction[j, i] = kij
+            except ValueError:
+                raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+
+    return component_ids, components, z, eos, binary_interaction
+
+
+def execute_cce(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> CCEResult:
+    """Execute a CCE calculation."""
+    from pvtcore.eos import PengRobinsonEOS
+    from pvtcore.experiments.cce import simulate_cce
+    from pvtcore.models import load_components
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    all_components = load_components()
+    component_ids = [entry.component_id for entry in config.composition.components]
+    mole_fractions = [entry.mole_fraction for entry in config.composition.components]
+
+    missing = [cid for cid in component_ids if cid not in all_components]
+    if missing:
+        raise ValueError(
+            f"Unknown component(s): {missing}. "
+            f"Available: {sorted(all_components.keys())}"
+        )
+
+    components = [all_components[cid] for cid in component_ids]
+    z = np.array(mole_fractions, dtype=np.float64)
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.2, "Setting up EOS...")
+
+    eos = PengRobinsonEOS(components)
+
+    binary_interaction = None
+    if config.binary_interaction:
+        n = len(components)
+        binary_interaction = np.zeros((n, n))
+        for pair_key, kij in config.binary_interaction.items():
+            parts = pair_key.split("-")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
+            try:
+                i = component_ids.index(parts[0])
+                j = component_ids.index(parts[1])
+                binary_interaction[i, j] = kij
+                binary_interaction[j, i] = kij
+            except ValueError:
+                raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+
+    cce_config = config.cce_config
+    if cce_config is None:
+        raise ValueError("cce_config is required for CCE calculation")
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running CCE calculation...")
+
+    result = simulate_cce(
+        composition=z,
+        temperature=cce_config.temperature_k,
+        components=components,
+        eos=eos,
+        pressure_start=cce_config.pressure_start_pa,
+        pressure_end=cce_config.pressure_end_pa,
+        n_steps=cce_config.n_steps,
+        binary_interaction=binary_interaction,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    steps = [
+        CCEStepResult(
+            pressure_pa=float(step.pressure),
+            relative_volume=float(step.relative_volume),
+            liquid_fraction=_finite_or_none(step.liquid_volume_fraction),
+            vapor_fraction=_finite_or_none(step.vapor_fraction),
+            z_factor=_finite_or_none(step.compressibility_Z),
+        )
+        for step in result.steps
+    ]
+
+    return CCEResult(
+        temperature_k=float(result.temperature),
+        saturation_pressure_pa=_finite_or_none(result.saturation_pressure),
+        steps=steps,
+    )
+
+
+def execute_bubble_point(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> BubblePointResult:
+    """Execute a bubble-point pressure calculation."""
+    from pvtcore.flash import calculate_bubble_point
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
+
+    bubble_config = config.bubble_point_config
+    if bubble_config is None:
+        raise ValueError("bubble_point_config is required for BUBBLE_POINT calculation")
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running bubble-point calculation...")
+
+    result = calculate_bubble_point(
+        temperature=bubble_config.temperature_k,
+        composition=z,
+        components=components,
+        eos=eos,
+        pressure_initial=bubble_config.pressure_initial_pa,
+        binary_interaction=binary_interaction,
+        tolerance=config.solver_settings.tolerance,
+        max_iterations=config.solver_settings.max_iterations,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    return BubblePointResult(
+        converged=bool(result.converged),
+        pressure_pa=float(result.pressure),
+        temperature_k=float(result.temperature),
+        iterations=int(result.iterations),
+        residual=float(result.residual),
+        stable_liquid=bool(result.stable_liquid),
+        liquid_composition={cid: float(result.liquid_composition[i]) for i, cid in enumerate(component_ids)},
+        vapor_composition={cid: float(result.vapor_composition[i]) for i, cid in enumerate(component_ids)},
+        k_values={cid: float(result.K_values[i]) for i, cid in enumerate(component_ids)},
+    )
+
+
+def execute_dew_point(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> DewPointResult:
+    """Execute a dew-point pressure calculation."""
+    from pvtcore.flash import calculate_dew_point
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
+
+    dew_config = config.dew_point_config
+    if dew_config is None:
+        raise ValueError("dew_point_config is required for DEW_POINT calculation")
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running dew-point calculation...")
+
+    result = calculate_dew_point(
+        temperature=dew_config.temperature_k,
+        composition=z,
+        components=components,
+        eos=eos,
+        pressure_initial=dew_config.pressure_initial_pa,
+        binary_interaction=binary_interaction,
+        tolerance=config.solver_settings.tolerance,
+        max_iterations=config.solver_settings.max_iterations,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    return DewPointResult(
+        converged=bool(result.converged),
+        pressure_pa=float(result.pressure),
+        temperature_k=float(result.temperature),
+        iterations=int(result.iterations),
+        residual=float(result.residual),
+        stable_vapor=bool(result.stable_vapor),
+        liquid_composition={cid: float(result.liquid_composition[i]) for i, cid in enumerate(component_ids)},
+        vapor_composition={cid: float(result.vapor_composition[i]) for i, cid in enumerate(component_ids)},
+        k_values={cid: float(result.K_values[i]) for i, cid in enumerate(component_ids)},
+    )
+
+
+def execute_dl(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> DLResult:
+    """Execute a Differential Liberation calculation."""
+    from pvtcore.experiments import simulate_dl
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
+    _ = component_ids  # component IDs not needed in DL schema output
+
+    dl_config = config.dl_config
+    if dl_config is None:
+        raise ValueError("dl_config is required for DL calculation")
+
+    pressure_steps = np.linspace(
+        dl_config.bubble_pressure_pa,
+        dl_config.pressure_end_pa,
+        dl_config.n_steps,
+        dtype=np.float64,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running DL calculation...")
+
+    result = simulate_dl(
+        composition=z,
+        temperature=dl_config.temperature_k,
+        components=components,
+        eos=eos,
+        bubble_pressure=dl_config.bubble_pressure_pa,
+        pressure_steps=pressure_steps,
+        binary_interaction=binary_interaction,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    return DLResult(
+        temperature_k=float(result.temperature),
+        bubble_pressure_pa=float(result.bubble_pressure),
+        rsi=float(result.Rsi),
+        boi=float(result.Boi),
+        converged=bool(result.converged),
+        steps=[
+            DLStepResult(
+                pressure_pa=float(step.pressure),
+                rs=float(step.Rs),
+                bo=float(step.Bo),
+                bt=float(step.Bt),
+                vapor_fraction=float(step.vapor_fraction),
+            )
+            for step in result.steps
+        ],
+    )
+
+
+def execute_cvd(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> CVDResult:
+    """Execute a Constant Volume Depletion calculation."""
+    from pvtcore.experiments import simulate_cvd
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
+    _ = component_ids  # component IDs not needed in CVD schema output
+
+    cvd_config = config.cvd_config
+    if cvd_config is None:
+        raise ValueError("cvd_config is required for CVD calculation")
+
+    pressure_steps = np.linspace(
+        cvd_config.dew_pressure_pa,
+        cvd_config.pressure_end_pa,
+        cvd_config.n_steps,
+        dtype=np.float64,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running CVD calculation...")
+
+    result = simulate_cvd(
+        composition=z,
+        temperature=cvd_config.temperature_k,
+        components=components,
+        eos=eos,
+        dew_pressure=cvd_config.dew_pressure_pa,
+        pressure_steps=pressure_steps,
+        binary_interaction=binary_interaction,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    return CVDResult(
+        temperature_k=float(result.temperature),
+        dew_pressure_pa=float(result.dew_pressure),
+        initial_z=float(result.initial_Z),
+        converged=bool(result.converged),
+        steps=[
+            CVDStepResult(
+                pressure_pa=float(step.pressure),
+                liquid_dropout=float(step.liquid_dropout),
+                cumulative_gas_produced=float(step.cumulative_gas_produced),
+                z_two_phase=_finite_or_none(step.Z_two_phase),
+            )
+            for step in result.steps
+        ],
+    )
+
+
+def execute_separator(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+) -> SeparatorResult:
+    """Execute a multi-stage separator-train calculation."""
+    from pvtcore.experiments import SeparatorConditions, calculate_separator_train
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading components...")
+
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
+    _ = component_ids  # component IDs not needed in separator schema output
+
+    separator_config = config.separator_config
+    if separator_config is None:
+        raise ValueError("separator_config is required for SEPARATOR calculation")
+
+    separator_stages = [
+        SeparatorConditions(
+            pressure=stage.pressure_pa,
+            temperature=stage.temperature_k,
+            name=stage.name or f"Stage {idx + 1}",
+        )
+        for idx, stage in enumerate(separator_config.separator_stages)
+    ]
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Running separator calculation...")
+
+    result = calculate_separator_train(
+        composition=z,
+        components=components,
+        eos=eos,
+        separator_stages=separator_stages,
+        reservoir_pressure=separator_config.reservoir_pressure_pa,
+        reservoir_temperature=separator_config.reservoir_temperature_k,
+        binary_interaction=binary_interaction,
+        include_stock_tank=separator_config.include_stock_tank,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Processing results...")
+
+    return SeparatorResult(
+        bo=float(result.Bo),
+        rs=float(result.Rs),
+        rs_scf_stb=float(result.Rs_scf_stb),
+        bg=float(result.Bg),
+        api_gravity=float(result.API_gravity),
+        stock_tank_oil_density=float(result.stock_tank_oil_density),
+        converged=bool(result.converged),
+        stages=[
+            SeparatorStageResult(
+                stage_number=int(stage.stage_number),
+                stage_name=str(stage.conditions.name or f"Stage {stage.stage_number + 1}"),
+                pressure_pa=float(stage.conditions.pressure),
+                temperature_k=float(stage.conditions.temperature),
+                vapor_fraction=_finite_or_none(stage.vapor_fraction),
+                liquid_moles=_finite_or_none(stage.liquid_moles),
+                vapor_moles=_finite_or_none(stage.vapor_moles),
+                converged=bool(stage.converged),
+            )
+            for stage in result.stages
+        ],
+    )
+
+
 # ==============================================================================
 # Main Job Runner
 # ==============================================================================
@@ -492,18 +902,37 @@ def run_calculation(
     try:
         # Execute based on calculation type
         pt_flash_result = None
+        bubble_point_result = None
+        dew_point_result = None
         phase_envelope_result = None
         cce_result = None
+        dl_result = None
+        cvd_result = None
+        separator_result = None
 
         if config.calculation_type == CalculationType.PT_FLASH:
             pt_flash_result = execute_pt_flash(config, callback)
+
+        elif config.calculation_type == CalculationType.BUBBLE_POINT:
+            bubble_point_result = execute_bubble_point(config, callback)
+
+        elif config.calculation_type == CalculationType.DEW_POINT:
+            dew_point_result = execute_dew_point(config, callback)
 
         elif config.calculation_type == CalculationType.PHASE_ENVELOPE:
             phase_envelope_result = execute_phase_envelope(config, callback)
 
         elif config.calculation_type == CalculationType.CCE:
-            # TODO: Implement CCE execution
-            raise NotImplementedError("CCE calculation not yet implemented")
+            cce_result = execute_cce(config, callback)
+
+        elif config.calculation_type == CalculationType.DL:
+            dl_result = execute_dl(config, callback)
+
+        elif config.calculation_type == CalculationType.CVD:
+            cvd_result = execute_cvd(config, callback)
+
+        elif config.calculation_type == CalculationType.SEPARATOR:
+            separator_result = execute_separator(config, callback)
 
         else:
             raise ValueError(f"Unsupported calculation type: {config.calculation_type}")
@@ -521,8 +950,13 @@ def run_calculation(
             duration_seconds=duration,
             config=config,
             pt_flash_result=pt_flash_result,
+            bubble_point_result=bubble_point_result,
+            dew_point_result=dew_point_result,
             phase_envelope_result=phase_envelope_result,
             cce_result=cce_result,
+            dl_result=dl_result,
+            cvd_result=cvd_result,
+            separator_result=separator_result,
         )
 
         # Write artifacts

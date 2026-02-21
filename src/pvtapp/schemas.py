@@ -341,6 +341,157 @@ class CCEConfig(BaseModel):
         return self
 
 
+class SaturationPointConfig(BaseModel):
+    """Configuration for bubble-point or dew-point calculation."""
+
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Flash temperature (K)"
+    )
+    pressure_initial_pa: Optional[float] = Field(
+        default=None,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Optional initial pressure guess (Pa)"
+    )
+
+
+class DLConfig(BaseModel):
+    """Configuration for Differential Liberation."""
+
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Test temperature (K)"
+    )
+    bubble_pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Bubble-point pressure (Pa)"
+    )
+    pressure_end_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Final depletion pressure (Pa)"
+    )
+    n_steps: int = Field(
+        default=15,
+        ge=5,
+        le=200,
+        description="Number of pressure steps"
+    )
+
+    @model_validator(mode='after')
+    def validate_pressure_range(self) -> 'DLConfig':
+        """Ensure bubble pressure is greater than final pressure."""
+        if self.bubble_pressure_pa <= self.pressure_end_pa:
+            raise ValueError(
+                f"bubble_pressure_pa ({self.bubble_pressure_pa}) must be greater than "
+                f"pressure_end_pa ({self.pressure_end_pa}) for DL"
+            )
+        return self
+
+
+class CVDConfig(BaseModel):
+    """Configuration for Constant Volume Depletion."""
+
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Test temperature (K)"
+    )
+    dew_pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Dew-point pressure (Pa)"
+    )
+    pressure_end_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Final depletion pressure (Pa)"
+    )
+    n_steps: int = Field(
+        default=15,
+        ge=5,
+        le=200,
+        description="Number of pressure steps"
+    )
+
+    @model_validator(mode='after')
+    def validate_pressure_range(self) -> 'CVDConfig':
+        """Ensure dew pressure is greater than final pressure."""
+        if self.dew_pressure_pa <= self.pressure_end_pa:
+            raise ValueError(
+                f"dew_pressure_pa ({self.dew_pressure_pa}) must be greater than "
+                f"pressure_end_pa ({self.pressure_end_pa}) for CVD"
+            )
+        return self
+
+
+class SeparatorStageConfig(BaseModel):
+    """Configuration for a single separator stage."""
+
+    pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Separator pressure (Pa)"
+    )
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Separator temperature (K)"
+    )
+    name: str = Field(
+        default="",
+        max_length=100,
+        description="Optional stage name"
+    )
+
+
+class SeparatorConfig(BaseModel):
+    """Configuration for multi-stage separator train calculation."""
+
+    reservoir_pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Reservoir pressure (Pa)"
+    )
+    reservoir_temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Reservoir temperature (K)"
+    )
+    separator_stages: List[SeparatorStageConfig] = Field(
+        ...,
+        min_length=1,
+        description="Separator train stages, ordered by non-increasing pressure"
+    )
+    include_stock_tank: bool = Field(
+        default=True,
+        description="Include stock-tank flash stage"
+    )
+
+    @model_validator(mode='after')
+    def validate_stage_order(self) -> 'SeparatorConfig':
+        """Ensure separator stage pressures are non-increasing."""
+        pressures = [stage.pressure_pa for stage in self.separator_stages]
+        if any(pressures[i] < pressures[i + 1] for i in range(len(pressures) - 1)):
+            raise ValueError("separator_stages must be ordered by non-increasing pressure")
+        return self
+
+
 # ==============================================================================
 # Main Run Configuration
 # ==============================================================================
@@ -389,8 +540,13 @@ class RunConfig(BaseModel):
 
     # Calculation-specific configuration (polymorphic)
     pt_flash_config: Optional[PTFlashConfig] = None
+    bubble_point_config: Optional[SaturationPointConfig] = None
+    dew_point_config: Optional[SaturationPointConfig] = None
     phase_envelope_config: Optional[PhaseEnvelopeConfig] = None
     cce_config: Optional[CCEConfig] = None
+    dl_config: Optional[DLConfig] = None
+    cvd_config: Optional[CVDConfig] = None
+    separator_config: Optional[SeparatorConfig] = None
 
     # Solver settings
     solver_settings: SolverSettings = Field(
@@ -404,13 +560,27 @@ class RunConfig(BaseModel):
         if self.calculation_type == CalculationType.PT_FLASH:
             if self.pt_flash_config is None:
                 raise ValueError("pt_flash_config is required for PT_FLASH calculation")
+        elif self.calculation_type == CalculationType.BUBBLE_POINT:
+            if self.bubble_point_config is None:
+                raise ValueError("bubble_point_config is required for BUBBLE_POINT calculation")
+        elif self.calculation_type == CalculationType.DEW_POINT:
+            if self.dew_point_config is None:
+                raise ValueError("dew_point_config is required for DEW_POINT calculation")
         elif self.calculation_type == CalculationType.PHASE_ENVELOPE:
             if self.phase_envelope_config is None:
                 raise ValueError("phase_envelope_config is required for PHASE_ENVELOPE calculation")
         elif self.calculation_type == CalculationType.CCE:
             if self.cce_config is None:
                 raise ValueError("cce_config is required for CCE calculation")
-        # Additional validations for other calculation types...
+        elif self.calculation_type == CalculationType.DL:
+            if self.dl_config is None:
+                raise ValueError("dl_config is required for DL calculation")
+        elif self.calculation_type == CalculationType.CVD:
+            if self.cvd_config is None:
+                raise ValueError("cvd_config is required for CVD calculation")
+        elif self.calculation_type == CalculationType.SEPARATOR:
+            if self.separator_config is None:
+                raise ValueError("separator_config is required for SEPARATOR calculation")
         return self
 
 
@@ -520,6 +690,100 @@ class CCEResult(BaseModel):
     steps: List[CCEStepResult]
 
 
+class BubblePointResult(BaseModel):
+    """Results from bubble-point pressure calculation."""
+
+    converged: bool
+    pressure_pa: float
+    temperature_k: float
+    iterations: int
+    residual: float
+    stable_liquid: bool
+    liquid_composition: Dict[str, float]
+    vapor_composition: Dict[str, float]
+    k_values: Dict[str, float]
+
+
+class DewPointResult(BaseModel):
+    """Results from dew-point pressure calculation."""
+
+    converged: bool
+    pressure_pa: float
+    temperature_k: float
+    iterations: int
+    residual: float
+    stable_vapor: bool
+    liquid_composition: Dict[str, float]
+    vapor_composition: Dict[str, float]
+    k_values: Dict[str, float]
+
+
+class DLStepResult(BaseModel):
+    """Results for a single DL pressure step."""
+
+    pressure_pa: float
+    rs: float
+    bo: float
+    bt: float
+    vapor_fraction: float
+
+
+class DLResult(BaseModel):
+    """Results from Differential Liberation."""
+
+    temperature_k: float
+    bubble_pressure_pa: float
+    rsi: float
+    boi: float
+    converged: bool
+    steps: List[DLStepResult]
+
+
+class CVDStepResult(BaseModel):
+    """Results for a single CVD pressure step."""
+
+    pressure_pa: float
+    liquid_dropout: float
+    cumulative_gas_produced: float
+    z_two_phase: Optional[float] = None
+
+
+class CVDResult(BaseModel):
+    """Results from Constant Volume Depletion."""
+
+    temperature_k: float
+    dew_pressure_pa: float
+    initial_z: float
+    converged: bool
+    steps: List[CVDStepResult]
+
+
+class SeparatorStageResult(BaseModel):
+    """Results for a single separator stage."""
+
+    stage_number: int
+    stage_name: str
+    pressure_pa: float
+    temperature_k: float
+    vapor_fraction: Optional[float] = None
+    liquid_moles: Optional[float] = None
+    vapor_moles: Optional[float] = None
+    converged: bool
+
+
+class SeparatorResult(BaseModel):
+    """Results from multi-stage separator train."""
+
+    bo: float
+    rs: float
+    rs_scf_stb: float
+    bg: float
+    api_gravity: float
+    stock_tank_oil_density: float
+    converged: bool
+    stages: List[SeparatorStageResult]
+
+
 # ==============================================================================
 # Run Result Container
 # ==============================================================================
@@ -545,8 +809,13 @@ class RunResult(BaseModel):
 
     # Results (polymorphic based on calculation type)
     pt_flash_result: Optional[PTFlashResult] = None
+    bubble_point_result: Optional[BubblePointResult] = None
+    dew_point_result: Optional[DewPointResult] = None
     phase_envelope_result: Optional[PhaseEnvelopeResult] = None
     cce_result: Optional[CCEResult] = None
+    dl_result: Optional[DLResult] = None
+    cvd_result: Optional[CVDResult] = None
+    separator_result: Optional[SeparatorResult] = None
 
 
 # ==============================================================================
