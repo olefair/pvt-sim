@@ -13,7 +13,7 @@ from typing import Optional
 
 from pvtapp import __version__, __app_name__
 from pvtapp.schemas import RunConfig, RunResult, RunStatus
-from pvtapp.job_runner import run_calculation, create_run_directory
+from pvtapp.job_runner import run_calculation, validate_runtime_config
 
 
 def load_config(config_path: Path) -> RunConfig:
@@ -126,7 +126,7 @@ def main() -> int:
         Exit code (0 for success, non-zero for errors)
     """
     parser = argparse.ArgumentParser(
-        prog="pvtsim-cli",
+        prog=Path(sys.argv[0]).stem or "pvtsim",
         description=f"{__app_name__} v{__version__} - Command Line Interface",
     )
 
@@ -196,6 +196,7 @@ def _cmd_validate(args) -> int:
     """Handle validate command."""
     try:
         config = load_config(args.config)
+        validate_runtime_config(config)
         print(f"Configuration valid: {args.config}")
         print(f"  Calculation type: {config.calculation_type.value}")
         print(f"  Components: {len(config.composition.components)}")

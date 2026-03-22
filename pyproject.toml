@@ -54,11 +54,11 @@ where = ["src"]
 include = ["pvtcore*", "pvtapp*"]
 
 [project.scripts]
-pvtsim = "pvtapp.main:main"
+pvtsim = "pvtapp.cli:main"
 pvtsim-cli = "pvtapp.cli:main"
 
 [project.gui-scripts]
-pvtsim-gui = "pvtapp.main:main"
+pvtsim-gui = "pvtapp.gui_entry:main"
 
 [tool.pytest.ini_options]
 addopts = "-q"

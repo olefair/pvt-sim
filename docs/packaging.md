@@ -24,9 +24,12 @@ python -m pip install -e ".[gui,full]"
 
 ## Run From Source
 ```powershell
-pvtsim
-pvtsim-cli validate
+pvtsim validate .\examples\phase_envelope_config.json
+pvtsim-cli validate .\examples\phase_envelope_config.json
+pvtsim-gui
 ```
+
+`pvtsim` is the headless-safe default CLI entrypoint. `pvtsim-gui` launches the desktop app when GUI dependencies are installed.
 
 ## Build (PyInstaller)
 ```powershell

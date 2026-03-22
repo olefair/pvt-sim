@@ -492,6 +492,11 @@ def _prepare_fluid_inputs(config: RunConfig):
     return component_ids, components, z, eos, binary_interaction
 
 
+def validate_runtime_config(config: RunConfig) -> None:
+    """Validate runtime prerequisites without executing a calculation."""
+    _prepare_fluid_inputs(config)
+
+
 def execute_cce(
     config: RunConfig,
     callback: Optional[ProgressCallback] = None,
