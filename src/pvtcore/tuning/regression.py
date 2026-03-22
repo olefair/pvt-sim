@@ -58,6 +58,23 @@ from .objectives import (
 from .parameters import ParameterSet, ParameterType
 
 
+SUPPORTED_DATA_TYPES = (
+    DataType.SATURATION_PRESSURE,
+    DataType.LIQUID_DENSITY,
+    DataType.VAPOR_DENSITY,
+    DataType.VAPOR_FRACTION,
+    DataType.Z_FACTOR,
+)
+
+
+def _unsupported_data_type_error(data_type: DataType) -> NotImplementedError:
+    supported = ", ".join(dt.name for dt in SUPPORTED_DATA_TYPES)
+    guidance = "Filter the dataset to supported types or extend EOSRegressor._model_function."
+    return NotImplementedError(
+        f"Unsupported DataType={data_type.name}. Supported: {supported}. {guidance}"
+    )
+
+
 def _require_scipy_optimize():
     try:
         from scipy import optimize
@@ -222,7 +239,7 @@ class EOSRegressor:
             return Z
 
         else:
-            raise NotImplementedError(f"Data type {point.data_type} not implemented")
+            raise _unsupported_data_type_error(point.data_type)
 
     def _objective(self, x: NDArray[np.float64]) -> float:
         """Objective function for optimizer.
