@@ -1,0 +1,7 @@
+interface:
+  display_name: "Migration Planner"
+  short_description: "Codebase-wide transformation planning engine for dependency upgrades and library swaps."
+  default_prompt: "Plan a safe migration path for this codebase change."
+
+policy:
+  allow_implicit_invocation: false

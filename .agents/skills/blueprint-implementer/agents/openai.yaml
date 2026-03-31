@@ -1,0 +1,7 @@
+interface:
+  display_name: "Blueprint Implementer"
+  short_description: "Three-phase autonomous implementation engine with edit-test-fix loops and a mandatory audit gate."
+  default_prompt: "Implement this blueprint in the codebase."
+
+policy:
+  allow_implicit_invocation: false

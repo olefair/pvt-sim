@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Plan"
+  short_description: "Write canonical plan notes that coordinate broad work through bounded child blueprints and explicit gates."
+  default_prompt: "Use $create-plan to draft a canonical plan note and decompose the work into bounded child blueprints."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Test Strategist"
+  short_description: "Test infrastructure planning and generation engine prioritized by risk."
+  default_prompt: "Analyze test gaps and generate a prioritized test strategy."
+
+policy:
+  allow_implicit_invocation: false

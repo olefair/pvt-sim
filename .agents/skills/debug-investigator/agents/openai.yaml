@@ -1,0 +1,7 @@
+interface:
+  display_name: "Debug Investigator"
+  short_description: "Symptom-driven bug investigation engine using systematic hypothesis elimination."
+  default_prompt: "Investigate this bug by tracing code paths and forming ranked hypotheses."
+
+policy:
+  allow_implicit_invocation: false
