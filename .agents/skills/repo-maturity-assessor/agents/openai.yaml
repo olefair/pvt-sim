@@ -1,0 +1,7 @@
+interface:
+  display_name: "Repo Maturity Assessor"
+  short_description: "Deep code maturity and robustness analysis, especially for scientific/engineering codebases."
+  default_prompt: "Assess the maturity and robustness of this codebase."
+
+policy:
+  allow_implicit_invocation: false

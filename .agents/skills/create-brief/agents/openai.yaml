@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Brief"
+  short_description: "Produces concise, well-researched markdown documents (500-1000 words)."
+  default_prompt: "Create a focused brief on the specified topic."
+
+policy:
+  allow_implicit_invocation: false

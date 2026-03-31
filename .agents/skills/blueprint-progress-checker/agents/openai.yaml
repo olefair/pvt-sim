@@ -1,0 +1,7 @@
+interface:
+  display_name: "Blueprint Progress Checker"
+  short_description: "Blueprint fidelity audit engine — checks if implementation matches spec requirements."
+  default_prompt: "Audit implementation progress against this blueprint."
+
+policy:
+  allow_implicit_invocation: false

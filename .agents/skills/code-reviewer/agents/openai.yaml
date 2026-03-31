@@ -1,0 +1,7 @@
+interface:
+  display_name: "Code Reviewer"
+  short_description: "Automated code review engine covering conventions, risk, test coverage, and regressions."
+  default_prompt: "Review the recent code changes for quality and risk."
+
+policy:
+  allow_implicit_invocation: false

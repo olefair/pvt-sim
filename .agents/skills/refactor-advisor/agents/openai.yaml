@@ -1,0 +1,7 @@
+interface:
+  display_name: "Refactor Advisor"
+  short_description: "Code smell diagnosis and risk-aware refactoring strategy engine."
+  default_prompt: "Diagnose code smells and produce a prioritized refactoring plan."
+
+policy:
+  allow_implicit_invocation: false

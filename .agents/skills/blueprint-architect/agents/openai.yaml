@@ -1,0 +1,7 @@
+interface:
+  display_name: "Blueprint Architect"
+  short_description: "Deep repository analysis and blueprint generation using direct repo inspection and local tooling."
+  default_prompt: "Analyze this repository and generate an implementation blueprint."
+
+policy:
+  allow_implicit_invocation: false

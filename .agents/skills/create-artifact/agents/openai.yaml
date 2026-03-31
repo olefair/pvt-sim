@@ -1,0 +1,7 @@
+interface:
+  display_name: "Create Artifact"
+  short_description: "Produces comprehensive, well-sourced standalone markdown documents (2000+ words)."
+  default_prompt: "Create a comprehensive research document on the specified topic."
+
+policy:
+  allow_implicit_invocation: false
