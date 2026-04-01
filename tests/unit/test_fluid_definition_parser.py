@@ -91,3 +91,14 @@ def test_schema_rejects_unsupported_correlation() -> None:
     doc["fluid"]["correlations"]["critical_props"] = "kesler_lee_1976"
     with pytest.raises(ConfigurationError):
         characterize_from_schema(doc)
+
+
+def test_repo_tbp_example_characterizes() -> None:
+    repo_root = Path(__file__).resolve().parents[2]
+    example_path = repo_root / "examples" / "tbp_fluid_definition.json"
+
+    loaded = load_fluid_definition(example_path)
+    res = characterize_from_schema(loaded)
+
+    assert res.plus_fraction is not None
+    assert np.isclose(float(res.composition.sum()), 1.0)
