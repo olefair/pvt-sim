@@ -1,0 +1,37 @@
+{
+  "fluid": {
+    "name": "TBP Example Fluid",
+    "basis": "mole",
+    "components": [
+      {"id": "CO2", "z": 0.02},
+      {"id": "C1", "z": 0.70},
+      {"id": "C2", "z": 0.08},
+      {"id": "C3", "z": 0.05},
+      {"id": "C4", "z": 0.05},
+      {"id": "C5", "z": 0.03},
+      {"id": "C6", "z": 0.02}
+    ],
+    "plus_fraction": {
+      "label": "C7+",
+      "cut_start": 7,
+      "tbp_data": {
+        "cuts": [
+          {"name": "C7", "z": 0.020, "mw": 96.0},
+          {"name": "C8", "z": 0.015, "mw": 110.0},
+          {"name": "C9", "z": 0.015, "mw": 124.0}
+        ]
+      },
+      "splitting": {
+        "method": "pedersen",
+        "max_carbon_number": 12,
+        "pedersen": {
+          "mw_model": "MWn = 14n - 4",
+          "solve_AB_from": "balances"
+        }
+      }
+    },
+    "correlations": {
+      "critical_props": "riazi_daubert_1987"
+    }
+  }
+}
