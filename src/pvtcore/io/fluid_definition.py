@@ -71,6 +71,48 @@ def _as_float(value: Any, path: str) -> float:
         raise ValidationError(f"Expected number at '{path}'.", parameter=path, value=value)
 
 
+def _derive_aggregate_plus_from_tbp_cuts(cuts: Sequence[Any]) -> tuple[float, float]:
+    """Derive aggregate plus-fraction z+ and MW+ from TBP cuts."""
+    cuts_seq = _as_sequence(cuts, "fluid.plus_fraction.tbp_data.cuts")
+    if not cuts_seq:
+        raise ValidationError(
+            "Expected at least one TBP cut.",
+            parameter="fluid.plus_fraction.tbp_data.cuts",
+            value=0,
+        )
+
+    total_z = 0.0
+    total_zw = 0.0
+    for i, item in enumerate(cuts_seq):
+        item_path = f"fluid.plus_fraction.tbp_data.cuts[{i}]"
+        item = _as_mapping(item, item_path)
+        z = _as_float(_get_required(item, "z", item_path), f"{item_path}.z")
+        mw = _as_float(_get_required(item, "mw", item_path), f"{item_path}.mw")
+        if z < 0.0:
+            raise ValidationError(
+                "TBP cut mole fractions must be non-negative.",
+                parameter=f"{item_path}.z",
+                value=z,
+            )
+        if mw <= 0.0:
+            raise ValidationError(
+                "TBP cut molecular weights must be positive.",
+                parameter=f"{item_path}.mw",
+                value=mw,
+            )
+        total_z += z
+        total_zw += z * mw
+
+    if total_z <= 0.0:
+        raise ValidationError(
+            "Aggregate TBP cut mole fraction must be positive.",
+            parameter="fluid.plus_fraction.tbp_data.cuts",
+            value=total_z,
+        )
+
+    return total_z, total_zw / total_z
+
+
 def _parse_target_end(target_end: str) -> int:
     target_end = target_end.strip()
     if not (target_end.startswith("C") and target_end.endswith("+")):
@@ -176,12 +218,43 @@ def characterize_from_schema(doc: Mapping[str, Any]) -> CharacterizationResult:
     if plus_block is not None:
         plus_block = _as_mapping(plus_block, "fluid.plus_fraction")
         label = _as_str(_get_optional(plus_block, "label", "C7+"), "fluid.plus_fraction.label")
-        z_plus = _as_float(_get_required(plus_block, "z_plus", "fluid.plus_fraction"), "fluid.plus_fraction.z_plus")
         cut_start = _as_int(_get_required(plus_block, "cut_start", "fluid.plus_fraction"), "fluid.plus_fraction.cut_start")
-        mw_plus = _as_float(
-            _get_required(plus_block, "mw_plus_g_per_mol", "fluid.plus_fraction"),
-            "fluid.plus_fraction.mw_plus_g_per_mol",
-        )
+
+        tbp_data = _get_optional(plus_block, "tbp_data", None)
+        if tbp_data is None:
+            z_plus = _as_float(
+                _get_required(plus_block, "z_plus", "fluid.plus_fraction"),
+                "fluid.plus_fraction.z_plus",
+            )
+            mw_plus = _as_float(
+                _get_required(plus_block, "mw_plus_g_per_mol", "fluid.plus_fraction"),
+                "fluid.plus_fraction.mw_plus_g_per_mol",
+            )
+        else:
+            tbp_data = _as_mapping(tbp_data, "fluid.plus_fraction.tbp_data")
+            tbp_cuts = _get_required(tbp_data, "cuts", "fluid.plus_fraction.tbp_data")
+            z_plus, mw_plus = _derive_aggregate_plus_from_tbp_cuts(tbp_cuts)
+
+            if "z_plus" in plus_block:
+                explicit_z_plus = _as_float(plus_block["z_plus"], "fluid.plus_fraction.z_plus")
+                if abs(explicit_z_plus - z_plus) > 1e-8:
+                    raise ConfigurationError(
+                        "Explicit z_plus conflicts with TBP-cut aggregate mole fraction.",
+                        config_key="fluid.plus_fraction.z_plus",
+                        value=explicit_z_plus,
+                    )
+            if "mw_plus_g_per_mol" in plus_block:
+                explicit_mw_plus = _as_float(
+                    plus_block["mw_plus_g_per_mol"],
+                    "fluid.plus_fraction.mw_plus_g_per_mol",
+                )
+                if abs(explicit_mw_plus - mw_plus) > 1e-8:
+                    raise ConfigurationError(
+                        "Explicit mw_plus_g_per_mol conflicts with TBP-cut aggregate molecular weight.",
+                        config_key="fluid.plus_fraction.mw_plus_g_per_mol",
+                        value=explicit_mw_plus,
+                    )
+
         sg_plus = None
         if "sg_plus_60F" in plus_block:
             sg_plus = _as_float(plus_block["sg_plus_60F"], "fluid.plus_fraction.sg_plus_60F")
@@ -222,6 +295,18 @@ def characterize_from_schema(doc: Mapping[str, Any]) -> CharacterizationResult:
             "fluid.plus_fraction.splitting.pedersen.mw_model",
         )
         cfg = replace(cfg, split_mw_model=_map_split_mw_model(mw_model))
+
+        solve_ab_from = _as_str(
+            _get_optional(ped, "solve_AB_from", "balances"),
+            "fluid.plus_fraction.splitting.pedersen.solve_AB_from",
+        )
+        if solve_ab_from.strip().lower() != "balances":
+            raise ConfigurationError(
+                "Unsupported Pedersen A/B solver option.",
+                config_key="fluid.plus_fraction.splitting.pedersen.solve_AB_from",
+                value=solve_ab_from,
+                supported=["balances"],
+            )
 
         lumping = _get_optional(plus_block, "lumping", {})
         lumping = _as_mapping(lumping, "fluid.plus_fraction.lumping")
