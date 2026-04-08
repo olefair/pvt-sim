@@ -1,9 +1,9 @@
 {
   "terminal.integrated.env.linux": {
-    "PYTHONPYCACHEPREFIX": "${workspaceFolder}/.pycache"
+    "PYTHONPYCACHEPREFIX": "${workspaceFolder}/.pycache/bytecode"
   },
   "terminal.integrated.env.windows": {
-    "PYTHONPYCACHEPREFIX": "${workspaceFolder}\\.pycache"
+    "PYTHONPYCACHEPREFIX": "${workspaceFolder}\\.pycache\\bytecode"
   },
   "python.envFile": "${workspaceFolder}/.env"
 }

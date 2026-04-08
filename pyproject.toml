@@ -62,6 +62,7 @@ pvtsim-gui = "pvtapp.main:main"
 
 [tool.pytest.ini_options]
 addopts = "-q"
+cache_dir = ".pycache/pytest"
 testpaths = ["tests"]
 markers = [
   "slow: longer-running tests",
