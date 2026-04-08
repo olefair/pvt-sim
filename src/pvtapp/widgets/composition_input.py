@@ -41,6 +41,9 @@ class CompositionInputWidget(QWidget):
     """
 
     composition_changed = Signal(object)  # FluidComposition
+    # Emitted whenever the table contents change (even if invalid).
+    # Useful for updating derived views like critical props / BIPs.
+    composition_edited = Signal()
     validation_error = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -169,6 +172,7 @@ class CompositionInputWidget(QWidget):
             self.table.removeRow(row)
 
         self._update_sum()
+        self.composition_edited.emit()
 
     def _clear_all(self) -> None:
         """Clear all rows after confirmation."""
@@ -182,6 +186,7 @@ class CompositionInputWidget(QWidget):
             if reply == QMessageBox.StandardButton.Yes:
                 self.table.setRowCount(0)
                 self._update_sum()
+                self.composition_edited.emit()
 
     def _normalize(self) -> None:
         """Normalize all mole fractions to sum to 1.0."""
@@ -207,10 +212,12 @@ class CompositionInputWidget(QWidget):
         self.table.blockSignals(False)
 
         self._update_sum()
+        self.composition_edited.emit()
 
     def _on_cell_changed(self, *args) -> None:
         """Handle cell value changes."""
         self._update_sum()
+        self.composition_edited.emit()
 
     def _get_sum(self) -> float:
         """Calculate sum of mole fractions."""
@@ -336,3 +343,4 @@ class CompositionInputWidget(QWidget):
 
         self.table.blockSignals(False)
         self._update_sum()
+        self.composition_edited.emit()
