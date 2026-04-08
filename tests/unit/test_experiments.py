@@ -25,7 +25,9 @@ from pvtcore.experiments import (
 )
 from pvtcore.models.component import load_components
 from pvtcore.eos.peng_robinson import PengRobinsonEOS
+from pvtcore.core.constants import R
 from pvtcore.core.errors import ValidationError
+from pvtcore.experiments.cvd import _cvd_step
 
 
 @pytest.fixture
@@ -38,6 +40,12 @@ def components():
 def methane_propane(components):
     """Binary C1-C3 mixture components."""
     return [components['C1'], components['C3']]
+
+
+@pytest.fixture
+def pure_methane(components):
+    """Single-component methane system."""
+    return [components['C1']]
 
 
 @pytest.fixture
@@ -65,6 +73,12 @@ def methane_propane_eos(methane_propane):
 
 
 @pytest.fixture
+def pure_methane_eos(pure_methane):
+    """EOS for pure methane."""
+    return PengRobinsonEOS(pure_methane)
+
+
+@pytest.fixture
 def methane_butane_eos(methane_butane):
     """EOS for C1-nC4 binary."""
     return PengRobinsonEOS(methane_butane)
@@ -80,6 +94,22 @@ def methane_heptane_eos(methane_heptane):
 def oil_mixture_eos(oil_mixture):
     """EOS for simple oil mixture."""
     return PengRobinsonEOS(oil_mixture)
+
+
+def _assert_single_phase_step_matches_cell_volume(
+    step: CVDStepResult,
+    temperature: float,
+    target_volume: float,
+) -> None:
+    """Check the reconstructed single-phase cell volume against the target."""
+    reconstructed_volume = (
+        step.moles_remaining
+        * step.Z_two_phase
+        * R.Pa_m3_per_mol_K
+        * temperature
+        / step.pressure
+    )
+    assert reconstructed_volume == pytest.approx(target_volume, rel=1e-10, abs=1e-15)
 
 
 # =============================================================================
@@ -273,6 +303,67 @@ class TestCVD:
             # Check that at least some dropout > 0 (retrograde condensation)
             max_dropout = np.max(valid_dropouts)
             assert max_dropout >= 0  # Could be 0 if flash doesn't enter two-phase
+
+    def test_cvd_single_phase_step_preserves_target_volume(
+        self,
+        pure_methane,
+        pure_methane_eos,
+    ):
+        """Single-phase CVD steps must still honor the target cell volume."""
+        z = np.array([1.0])
+        T = 250.0
+        P_dew = 16_758_331.369557615
+        P_step = 14_080_000.0
+
+        Z_initial = pure_methane_eos.compressibility(P_dew, T, z, phase="vapor")
+        if isinstance(Z_initial, list):
+            Z_initial = Z_initial[-1]
+        V_cell = Z_initial * R.Pa_m3_per_mol_K * T / P_dew
+
+        step, z_new, n_new, cumulative_gas = _cvd_step(
+            P_step,
+            T,
+            z,
+            1.0,
+            0.0,
+            V_cell,
+            pure_methane,
+            pure_methane_eos,
+            None,
+        )
+
+        assert step.gas_produced > 0.0
+        assert cumulative_gas == pytest.approx(step.gas_produced)
+        assert np.allclose(z_new, z)
+        assert n_new == pytest.approx(step.moles_remaining)
+        _assert_single_phase_step_matches_cell_volume(step, T, V_cell)
+
+    def test_cvd_single_phase_case_is_repeatable(self, pure_methane, pure_methane_eos):
+        """Repeat runs should produce identical single-phase CVD results."""
+        z = np.array([1.0])
+        T = 250.0
+        P_dew = 16_758_331.369557615
+        P_steps = np.linspace(P_dew, max(1e5, P_dew * 0.2), 6)
+
+        result_1 = simulate_cvd(z, T, pure_methane, pure_methane_eos, P_dew, P_steps)
+        result_2 = simulate_cvd(z, T, pure_methane, pure_methane_eos, P_dew, P_steps)
+
+        assert result_1.converged is True
+        assert result_2.converged is True
+        assert np.array_equal(result_1.pressures, result_2.pressures)
+        assert np.array_equal(result_1.liquid_dropouts, result_2.liquid_dropouts)
+        assert np.array_equal(result_1.cumulative_gas, result_2.cumulative_gas)
+
+        Z_initial = pure_methane_eos.compressibility(P_dew, T, z, phase="vapor")
+        if isinstance(Z_initial, list):
+            Z_initial = Z_initial[-1]
+        V_cell = Z_initial * R.Pa_m3_per_mol_K * T / P_dew
+
+        for step in result_1.steps:
+            if np.isnan(step.Z_two_phase):
+                continue
+            if np.isclose(step.liquid_dropout, 0.0) or np.isclose(step.liquid_dropout, 1.0):
+                _assert_single_phase_step_matches_cell_volume(step, T, V_cell)
 
     def test_cvd_cumulative_gas_increases(self, methane_heptane, methane_heptane_eos):
         """Test that cumulative gas produced increases monotonically."""

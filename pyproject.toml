@@ -54,7 +54,7 @@ where = ["src"]
 include = ["pvtcore*", "pvtapp*"]
 
 [project.scripts]
-pvtsim = "pvtapp.main:main"
+pvtsim = "pvtapp.cli:main"
 pvtsim-cli = "pvtapp.cli:main"
 
 [project.gui-scripts]

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pvtcore.core.errors import ConfigurationError
+from pvtcore.core.errors import ConfigurationError, ValidationError
 from pvtcore.io import characterize_from_schema, load_fluid_definition
 
 
@@ -41,6 +41,46 @@ def _example_doc() -> dict:
                 "mixing_rule": "vdW1",
                 "kij": {"overrides": [{"pair": ["CO2", "C7+"], "kij": 0.12}]},
             },
+        }
+    }
+
+
+def _tbp_example_doc() -> dict:
+    return {
+        "fluid": {
+            "name": "TBP-backed Example Fluid",
+            "basis": "mole",
+            "components": [
+                {"id": "CO2", "z": 0.02},
+                {"id": "C1", "z": 0.70},
+                {"id": "C2", "z": 0.08},
+                {"id": "C3", "z": 0.05},
+                {"id": "C4", "z": 0.05},
+                {"id": "C5", "z": 0.03},
+                {"id": "C6", "z": 0.02},
+            ],
+            "plus_fraction": {
+                "label": "C7+",
+                "cut_start": 7,
+                "sg_plus_60F": 0.85,
+                "tbp_data": {
+                    "cuts": [
+                        {"name": "C7", "z": 0.020, "mw": 96.0},
+                        {"name": "C8", "z": 0.015, "mw": 110.0},
+                        {"name": "C9", "z": 0.015, "mw": 124.0},
+                    ]
+                },
+                "splitting": {
+                    "method": "pedersen",
+                    "max_carbon_number": 12,
+                    "pedersen": {
+                        "mw_model": "MWn = 14n - 4",
+                        "solve_AB_from": "balances",
+                    },
+                },
+                "lumping": {"enabled": False},
+            },
+            "correlations": {"critical_props": "riazi_daubert_1987"},
         }
     }
 
@@ -90,6 +130,85 @@ def test_schema_rejects_unsupported_correlation() -> None:
     doc = _example_doc()
     doc["fluid"]["correlations"]["critical_props"] = "kesler_lee_1976"
     with pytest.raises(ConfigurationError):
+        characterize_from_schema(doc)
+
+
+def test_schema_derives_plus_fraction_inputs_from_tbp_cuts() -> None:
+    doc = _tbp_example_doc()
+
+    res = characterize_from_schema(doc)
+
+    assert res.plus_fraction is not None
+    assert res.plus_fraction.z_plus == pytest.approx(0.05)
+    assert res.plus_fraction.mw_plus == pytest.approx(108.6)
+    assert res.plus_fraction.sg_plus == pytest.approx(0.85)
+    assert res.plus_fraction.n_start == 7
+    assert np.isclose(float(res.composition.sum()), 1.0)
+
+
+def test_schema_accepts_matching_explicit_aggregate_plus_values_with_tbp_cuts() -> None:
+    doc = _tbp_example_doc()
+    plus_fraction = doc["fluid"]["plus_fraction"]
+    plus_fraction["z_plus"] = 0.05
+    plus_fraction["mw_plus_g_per_mol"] = 108.6
+
+    res = characterize_from_schema(doc)
+
+    assert res.plus_fraction is not None
+    assert res.plus_fraction.z_plus == pytest.approx(0.05)
+    assert res.plus_fraction.mw_plus == pytest.approx(108.6)
+
+
+def test_schema_rejects_tbp_z_plus_mismatch() -> None:
+    doc = _tbp_example_doc()
+    doc["fluid"]["plus_fraction"]["z_plus"] = 0.051
+
+    with pytest.raises(ValidationError, match="fluid.plus_fraction.z_plus"):
+        characterize_from_schema(doc)
+
+
+def test_schema_rejects_tbp_mw_plus_mismatch() -> None:
+    doc = _tbp_example_doc()
+    doc["fluid"]["plus_fraction"]["mw_plus_g_per_mol"] = 120.0
+
+    with pytest.raises(ValidationError, match="fluid.plus_fraction.mw_plus_g_per_mol"):
+        characterize_from_schema(doc)
+
+
+def test_schema_rejects_gapped_tbp_cuts() -> None:
+    doc = _tbp_example_doc()
+    doc["fluid"]["plus_fraction"]["tbp_data"]["cuts"] = [
+        {"name": "C7", "z": 0.02, "mw": 96.0},
+        {"name": "C9", "z": 0.03, "mw": 124.0},
+    ]
+
+    with pytest.raises(ValidationError, match="contiguous"):
+        characterize_from_schema(doc)
+
+
+@pytest.mark.parametrize(
+    ("cut_name", "match_text"),
+    [
+        ("heavy", "must look like 'C7'"),
+        ("C6", "must not start below"),
+    ],
+)
+def test_schema_rejects_invalid_tbp_cut_names(
+    cut_name: str,
+    match_text: str,
+) -> None:
+    doc = _tbp_example_doc()
+    doc["fluid"]["plus_fraction"]["tbp_data"]["cuts"][0]["name"] = cut_name
+
+    with pytest.raises(ValidationError, match=match_text):
+        characterize_from_schema(doc)
+
+
+def test_schema_rejects_fit_to_tbp_for_phase_1() -> None:
+    doc = _tbp_example_doc()
+    doc["fluid"]["plus_fraction"]["splitting"]["pedersen"]["solve_AB_from"] = "fit_to_tbp"
+
+    with pytest.raises(ConfigurationError, match="does not support Pedersen coefficient fitting"):
         characterize_from_schema(doc)
 
 
