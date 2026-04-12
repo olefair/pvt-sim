@@ -1,0 +1,59 @@
+{
+  "anchor_type": "pure_component_saturation",
+  "case_id": "nist_c6_saturation_batch",
+  "component_id": "C6",
+  "source": {
+    "kind": "nist_webbook",
+    "citation": "NIST Chemistry WebBook fluid interface n-hexane saturation properties",
+    "url": "https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C110543&Type=SatP&Digits=12&TLow=304.56&THigh=456.84&TInc=50.76&TUnit=K&PUnit=bar&DUnit=mol%2Fl&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa%2As&STUnit=N%2Fm&RefState=DEF",
+    "notes": [
+      "Direct saturation-curve pressures downloaded from the public NIST fluid interface."
+    ]
+  },
+  "points": [
+    {
+      "temperature": {
+        "value": 304.56,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 0.264487173049,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 355.32,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 1.51782655047,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 406.08,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 5.31885565672,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 456.84,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 13.8516309332,
+        "unit": "bar"
+      }
+    }
+  ],
+  "notes": [
+    "Promoted from the external acquisition manifest on 2026-04-12.",
+    "These values are the external physical-accuracy anchors for pure-component saturation in the repo validation lane."
+  ]
+}

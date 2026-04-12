@@ -1,0 +1,59 @@
+{
+  "anchor_type": "pure_component_saturation",
+  "case_id": "nist_c3_saturation_batch",
+  "component_id": "C3",
+  "source": {
+    "kind": "nist_webbook",
+    "citation": "NIST Chemistry WebBook fluid interface propane saturation properties",
+    "url": "https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C74986&Type=SatP&Digits=12&TLow=221.94&THigh=332.91&TInc=36.99&TUnit=K&PUnit=bar&DUnit=mol%2Fl&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa%2As&STUnit=N%2Fm&RefState=DEF",
+    "notes": [
+      "Direct saturation-curve pressures downloaded from the public NIST fluid interface."
+    ]
+  },
+  "points": [
+    {
+      "temperature": {
+        "value": 221.94,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 0.665866007395,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 258.93,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 2.99548486539,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 295.92,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 8.99151260702,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 332.91,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 21.0631781761,
+        "unit": "bar"
+      }
+    }
+  ],
+  "notes": [
+    "Promoted from the external acquisition manifest on 2026-04-12.",
+    "These values are the external physical-accuracy anchors for pure-component saturation in the repo validation lane."
+  ]
+}
