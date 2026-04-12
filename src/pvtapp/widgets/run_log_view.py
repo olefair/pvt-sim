@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from pvtapp.job_runner import list_runs, load_run_result
 from pvtapp.schemas import RunResult
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.widgets.results_view import ResultsPlotWidget
 from pvtapp.widgets.text_output_view import TextOutputWidget
 
@@ -48,28 +49,28 @@ class RunLogWidget(QWidget):
         self._selected_run_dir: Optional[Path] = None
         self._selected_result: Optional[RunResult] = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
 
         # Header row
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(8)
+        self._header = QHBoxLayout()
+        self._header.setContentsMargins(0, 0, 0, 0)
+        self._header.setSpacing(8)
 
         title = QLabel("Run log (local runs)")
         title.setStyleSheet("color: #9ca3af;")
-        header.addWidget(title, 1)
+        self._header.addWidget(title, 1)
 
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh)
-        header.addWidget(self.refresh_btn)
+        self._header.addWidget(self.refresh_btn)
 
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.clicked.connect(self._delete_selected)
-        header.addWidget(self.delete_btn)
+        self._header.addWidget(self.delete_btn)
 
-        layout.addLayout(header)
+        self._layout.addLayout(self._header)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
@@ -83,28 +84,36 @@ class RunLogWidget(QWidget):
 
         # Preview area (plot + text)
         preview = QWidget()
-        preview_layout = QVBoxLayout(preview)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
-        preview_layout.setSpacing(10)
+        self._preview_layout = QVBoxLayout(preview)
+        self._preview_layout.setContentsMargins(0, 0, 0, 0)
+        self._preview_layout.setSpacing(10)
 
         self.preview_title = QLabel("Select a run to preview")
         self.preview_title.setWordWrap(True)
         self.preview_title.setStyleSheet("color: #9ca3af;")
-        preview_layout.addWidget(self.preview_title)
+        self._preview_layout.addWidget(self.preview_title)
 
         self.preview_plot = ResultsPlotWidget()
-        preview_layout.addWidget(self.preview_plot, 2)
+        self._preview_layout.addWidget(self.preview_plot, 2)
 
         self.preview_text = TextOutputWidget()
-        preview_layout.addWidget(self.preview_text, 1)
+        self._preview_layout.addWidget(self.preview_text, 1)
 
         splitter.addWidget(preview)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
 
-        layout.addWidget(splitter, 1)
+        self._layout.addWidget(splitter, 1)
 
         self.refresh()
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Forward app zoom to preview widgets that expose sizing hooks."""
+        self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._header.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._preview_layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        if hasattr(self.preview_text, "apply_ui_scale"):
+            self.preview_text.apply_ui_scale(ui_scale)
 
     def refresh(self) -> None:
         """Reload the run tree from the runs directory."""

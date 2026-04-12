@@ -57,9 +57,12 @@ from pvtapp.widgets import (
 )
 from pvtapp.workers import CalculationThread
 from pvtapp.style import (
+    DEFAULT_THEME,
     DEFAULT_UI_SCALE,
+    THEME_DARK,
+    THEME_SLATE,
     UI_SCALE_STEP,
-    build_cato_dark_stylesheet,
+    build_cato_stylesheet,
     clamp_ui_scale,
     scale_metric,
 )
@@ -68,6 +71,7 @@ from pvtcore.models import load_components
 
 SETTINGS_ORGANIZATION = "PVT-SIM"
 UI_SCALE_SETTINGS_KEY = "ui/scale"
+UI_THEME_SETTINGS_KEY = "ui/theme"
 
 
 class PVTSimulatorWindow(QMainWindow):
@@ -78,6 +82,7 @@ class PVTSimulatorWindow(QMainWindow):
         self._current_thread: Optional[CalculationThread] = None
         self._run_history: list[RunResult] = []
         self._ui_scale = DEFAULT_UI_SCALE
+        self._theme_mode = DEFAULT_THEME
         self._ui_scale_initialized = False
         self._base_min_window_size = (1400, 900)
         self._base_progress_width = 200
@@ -93,6 +98,8 @@ class PVTSimulatorWindow(QMainWindow):
         self._setup_statusbar()
         self._connect_signals()
         self._ui_scale = self._load_persisted_ui_scale()
+        self._theme_mode = self._load_persisted_theme_mode()
+        self.workspace.set_theme_mode(self._theme_mode, emit_signal=False)
         self._apply_ui_scale(self._ui_scale, announce=False)
 
     def _setup_window(self) -> None:
@@ -223,7 +230,7 @@ class PVTSimulatorWindow(QMainWindow):
         toolbar.addWidget(validate_btn)
 
     def _setup_central_widget(self) -> None:
-        """Create central widget with two configurable panes."""
+        """Create central widget with fixed sidebars and configurable center panes."""
 
         # Primary inputs (single shared instance, movable between panes)
         self.composition_widget = CompositionInputWidget()
@@ -251,7 +258,6 @@ class PVTSimulatorWindow(QMainWindow):
             ViewSpec("interaction_params", "Interaction para."),
             ViewSpec("log", "Log"),
             ViewSpec("text_output", "Text output"),
-            ViewSpec("results_table", "Results table"),
             ViewSpec("phase_envelope", "Phase Envelope"),
             ViewSpec("diagnostics", "Diagnostics"),
             ViewSpec("vapor_saturation", "Vapor saturation"),
@@ -262,7 +268,6 @@ class PVTSimulatorWindow(QMainWindow):
             "interaction_params": self.interaction_params_widget,
             "log": self.run_log_widget,
             "text_output": self.text_output_widget,
-            "results_table": self.results_table,
             "phase_envelope": self.results_plot,
             "diagnostics": self.diagnostics_widget,
             "vapor_saturation": self.vapor_saturation_widget,
@@ -271,11 +276,15 @@ class PVTSimulatorWindow(QMainWindow):
         self.workspace = TwoPaneWorkspace(
             view_specs=view_specs,
             view_widgets=view_widgets,
-            left_default="phase_envelope",
-            right_default="results_table",
+            left_default="text_output",
+            right_default="phase_envelope",
             fixed_widget=self.inputs_panel,
             fixed_title="Run Inputs",
             fixed_width=360,
+            fixed_right_widget=self.results_table,
+            fixed_right_title="Results table",
+            fixed_right_width=340,
+            default_pane_mode="single",
         )
         self.setCentralWidget(self.workspace)
 
@@ -313,6 +322,7 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
+        self.workspace.theme_mode_changed.connect(self._set_theme_mode)
 
     @Slot()
     def _sync_characterization_context(self) -> None:
@@ -336,9 +346,19 @@ class PVTSimulatorWindow(QMainWindow):
         except (TypeError, ValueError):
             return DEFAULT_UI_SCALE
 
+    def _load_persisted_theme_mode(self) -> str:
+        """Load the saved theme mode, defaulting to the canonical dark palette."""
+        raw_value = self._settings.value(UI_THEME_SETTINGS_KEY, DEFAULT_THEME)
+        return str(raw_value) if raw_value in {THEME_DARK, THEME_SLATE} else DEFAULT_THEME
+
     def _persist_ui_scale(self) -> None:
         """Persist the current UI scale for the next app launch."""
         self._settings.setValue(UI_SCALE_SETTINGS_KEY, self._ui_scale)
+        self._settings.sync()
+
+    def _persist_theme_mode(self) -> None:
+        """Persist the current palette selection."""
+        self._settings.setValue(UI_THEME_SETTINGS_KEY, self._theme_mode)
         self._settings.sync()
 
     def _scaled_metric(self, value: int) -> int:
@@ -367,20 +387,39 @@ class PVTSimulatorWindow(QMainWindow):
         previous_scale = self._ui_scale
         self._ui_scale = clamped_scale
 
-        QApplication.instance().setStyleSheet(build_cato_dark_stylesheet(scale=clamped_scale))
+        QApplication.instance().setStyleSheet(
+            build_cato_stylesheet(scale=clamped_scale, theme=self._theme_mode)
+        )
 
         min_width, min_height = self._base_min_window_size
         self.setMinimumSize(self._scaled_metric(min_width), self._scaled_metric(min_height))
         self.progress_bar.setMaximumWidth(self._scaled_metric(self._base_progress_width))
         self.workspace.apply_ui_scale(clamped_scale, previous_scale=previous_scale)
         self.composition_widget.apply_ui_scale(clamped_scale)
+        self.results_table.apply_ui_scale(clamped_scale)
         self.diagnostics_widget.apply_ui_scale(clamped_scale)
+        if hasattr(self.text_output_widget, "apply_ui_scale"):
+            self.text_output_widget.apply_ui_scale(clamped_scale)
+        if hasattr(self.run_log_widget, "apply_ui_scale"):
+            self.run_log_widget.apply_ui_scale(clamped_scale)
         self.updateGeometry()
         self._persist_ui_scale()
         self._ui_scale_initialized = True
 
         if announce:
             self.status_label.setText(f"Zoom: {int(round(clamped_scale * 100))}%")
+
+    @Slot(str)
+    def _set_theme_mode(self, theme: str) -> None:
+        """Apply a named palette variant without changing the zoom level."""
+        if theme not in {THEME_DARK, THEME_SLATE}:
+            return
+        self._theme_mode = theme
+        QApplication.instance().setStyleSheet(
+            build_cato_stylesheet(scale=self._ui_scale, theme=self._theme_mode)
+        )
+        self._persist_theme_mode()
+        self.status_label.setText(f"Palette: {'Slate' if theme == THEME_SLATE else 'Dark'}")
 
     @Slot()
     def _zoom_in(self) -> None:

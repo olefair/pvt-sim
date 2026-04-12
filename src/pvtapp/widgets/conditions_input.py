@@ -15,17 +15,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QFormLayout,
     QLineEdit,
-    QComboBox,
     QLabel,
     QGroupBox,
     QStackedWidget,
-    QSpinBox,
-    QDoubleSpinBox,
     QCheckBox,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
     QPushButton,
+    QSizePolicy,
 )
 
 from pvtapp.schemas import (
@@ -59,6 +57,12 @@ from pvtapp.capabilities import (
     GUI_SUPPORTED_EOS_TYPES,
     is_gui_supported_calculation_type,
     is_gui_supported_eos_type,
+)
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
+from pvtapp.widgets.combo_box import (
+    NoWheelComboBox,
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
 )
 
 
@@ -108,13 +112,14 @@ class ConditionsInputWidget(QWidget):
         # Calculation type selection
         calc_group = QGroupBox("Calculation Type")
         calc_layout = QFormLayout(calc_group)
+        self._configure_form_layout(calc_layout)
 
-        self.calc_type_combo = QComboBox()
+        self.calc_type_combo = NoWheelComboBox()
         for calc_type in GUI_SUPPORTED_CALCULATION_TYPES:
             self.calc_type_combo.addItem(GUI_CALCULATION_TYPE_LABELS[calc_type], calc_type)
         calc_layout.addRow("Type:", self.calc_type_combo)
 
-        self.eos_combo = QComboBox()
+        self.eos_combo = NoWheelComboBox()
         for eos in GUI_SUPPORTED_EOS_TYPES:
             self.eos_combo.addItem(GUI_EOS_TYPE_LABELS[eos], eos)
         calc_layout.addRow("EOS:", self.eos_combo)
@@ -166,12 +171,13 @@ class ConditionsInputWidget(QWidget):
         # Solver settings (always visible in the fixed inputs sidebar)
         self.solver_group = QGroupBox("Tolerance / Solver Settings")
         solver_layout = QFormLayout(self.solver_group)
+        self._configure_form_layout(solver_layout)
 
         self.tolerance_edit = QLineEdit("1e-10")
         self.tolerance_edit.setValidator(QDoubleValidator(1e-15, 1e-1, 15))
         solver_layout.addRow("Tolerance:", self.tolerance_edit)
 
-        self.max_iters_spin = QSpinBox()
+        self.max_iters_spin = NoWheelSpinBox()
         self.max_iters_spin.setRange(1, 10000)
         self.max_iters_spin.setValue(100)
         solver_layout.addRow("Max Iterations:", self.max_iters_spin)
@@ -180,22 +186,66 @@ class ConditionsInputWidget(QWidget):
 
         layout.addStretch()
 
+    @staticmethod
+    def _configure_form_layout(layout: QFormLayout) -> None:
+        """Tune form rows so they fit the fixed-width sidebar cleanly."""
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        layout.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(8)
+
+    @staticmethod
+    def _configure_unit_row(layout: QHBoxLayout, field: QWidget, unit_widget: QWidget) -> None:
+        """Give input/unit rows predictable proportions inside narrow forms."""
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        unit_widget.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        unit_widget.setProperty("sidebar_unit_widget", True)
+        if hasattr(unit_widget, "setMaximumWidth"):
+            unit_widget.setMaximumWidth(96)
+        layout.addWidget(field, 1)
+        layout.addWidget(unit_widget, 0)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale sidebar-only geometry that is not controlled by QSS."""
+        scaled_gap = scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        scaled_row_gap = scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        scaled_unit_width = scale_metric(96, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+
+        root_layout = self.layout()
+        if root_layout is not None:
+            root_layout.setSpacing(scaled_gap)
+
+        for form_layout in self.findChildren(QFormLayout):
+            form_layout.setHorizontalSpacing(scaled_gap)
+            form_layout.setVerticalSpacing(scaled_row_gap)
+
+        for row_layout in self.findChildren(QHBoxLayout):
+            row_layout.setSpacing(scaled_row_gap)
+
+        for unit_widget in self.findChildren(QWidget):
+            if unit_widget.property("sidebar_unit_widget") and hasattr(unit_widget, "setMaximumWidth"):
+                unit_widget.setMaximumWidth(scaled_unit_width)
+
     def _create_pt_flash_widget(self) -> QWidget:
         """Create PT flash configuration widget."""
         widget = QGroupBox("PT Flash Conditions")
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         # Pressure input
         p_layout = QHBoxLayout()
         self.pressure_edit = ValidatedLineEdit()
         self.pressure_edit.setPlaceholderText("Enter pressure")
-        p_layout.addWidget(self.pressure_edit)
 
-        self.pressure_unit = QComboBox()
+        self.pressure_unit = NoWheelComboBox()
         for unit in PressureUnit:
             self.pressure_unit.addItem(unit.value, unit)
         self.pressure_unit.setCurrentIndex(3)  # bar
-        p_layout.addWidget(self.pressure_unit)
+        self._configure_unit_row(p_layout, self.pressure_edit, self.pressure_unit)
 
         layout.addRow("Pressure:", p_layout)
 
@@ -203,13 +253,12 @@ class ConditionsInputWidget(QWidget):
         t_layout = QHBoxLayout()
         self.temperature_edit = ValidatedLineEdit()
         self.temperature_edit.setPlaceholderText("Enter temperature")
-        t_layout.addWidget(self.temperature_edit)
 
-        self.temperature_unit = QComboBox()
+        self.temperature_unit = NoWheelComboBox()
         for unit in TemperatureUnit:
             self.temperature_unit.addItem(unit.value, unit)
         self.temperature_unit.setCurrentIndex(1)  # C
-        t_layout.addWidget(self.temperature_unit)
+        self._configure_unit_row(t_layout, self.temperature_edit, self.temperature_unit)
 
         layout.addRow("Temperature:", t_layout)
 
@@ -219,10 +268,11 @@ class ConditionsInputWidget(QWidget):
         """Create phase envelope configuration widget."""
         widget = QGroupBox("Phase Envelope Settings")
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         # Temperature range
         t_min_layout = QHBoxLayout()
-        self.env_t_min = QDoubleSpinBox()
+        self.env_t_min = NoWheelDoubleSpinBox()
         self.env_t_min.setRange(-200, 500)
         self.env_t_min.setValue(-123.15)  # 150 K in C
         self.env_t_min.setDecimals(2)
@@ -231,7 +281,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Min Temperature:", t_min_layout)
 
         t_max_layout = QHBoxLayout()
-        self.env_t_max = QDoubleSpinBox()
+        self.env_t_max = NoWheelDoubleSpinBox()
         self.env_t_max.setRange(-200, 600)
         self.env_t_max.setValue(326.85)  # 600 K in C
         self.env_t_max.setDecimals(2)
@@ -240,12 +290,12 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Max Temperature:", t_max_layout)
 
         # Number of points
-        self.env_n_points = QSpinBox()
+        self.env_n_points = NoWheelSpinBox()
         self.env_n_points.setRange(10, 500)
         self.env_n_points.setValue(50)
         layout.addRow("Number of Points:", self.env_n_points)
 
-        self.env_tracing_method = QComboBox()
+        self.env_tracing_method = NoWheelComboBox()
         self.env_tracing_method.addItem(
             "Continuation (Default)",
             PhaseEnvelopeTracingMethod.CONTINUATION,
@@ -269,27 +319,26 @@ class ConditionsInputWidget(QWidget):
         """Create a bubble/dew point configuration widget."""
         widget = QGroupBox(title)
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         t_layout = QHBoxLayout()
         temperature = ValidatedLineEdit()
         temperature.setPlaceholderText("Enter temperature")
         temperature.setText("100")
         setattr(self, temperature_attr, temperature)
-        t_layout.addWidget(temperature)
 
-        temperature_unit = QComboBox()
+        temperature_unit = NoWheelComboBox()
         for unit in TemperatureUnit:
             temperature_unit.addItem(unit.value, unit)
         temperature_unit.setCurrentIndex(1)  # C
         setattr(self, f"{temperature_attr}_unit", temperature_unit)
-        t_layout.addWidget(temperature_unit)
+        self._configure_unit_row(t_layout, temperature, temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
-        guess_layout = QHBoxLayout()
         guess_enabled = QCheckBox("Use initial pressure guess")
         setattr(self, guess_enabled_attr, guess_enabled)
-        guess_layout.addWidget(guess_enabled)
-        layout.addRow("Pressure Guess:", guess_layout)
+        guess_enabled.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        layout.addRow("Pressure Guess:", guess_enabled)
 
         guess_spin_layout = QHBoxLayout()
         guess_spin = ValidatedLineEdit()
@@ -297,15 +346,14 @@ class ConditionsInputWidget(QWidget):
         guess_spin.setText("100")
         guess_spin.setEnabled(False)
         setattr(self, guess_spin_attr, guess_spin)
-        guess_spin_layout.addWidget(guess_spin)
 
-        guess_unit = QComboBox()
+        guess_unit = NoWheelComboBox()
         for unit in PressureUnit:
             guess_unit.addItem(unit.value, unit)
         guess_unit.setCurrentIndex(3)  # bar
         guess_unit.setEnabled(False)
         setattr(self, f"{guess_spin_attr}_unit", guess_unit)
-        guess_spin_layout.addWidget(guess_unit)
+        self._configure_unit_row(guess_spin_layout, guess_spin, guess_unit)
         layout.addRow("", guess_spin_layout)
 
         guess_enabled.toggled.connect(guess_spin.setEnabled)
@@ -334,10 +382,11 @@ class ConditionsInputWidget(QWidget):
         """Create CCE configuration widget."""
         widget = QGroupBox("CCE Settings")
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         # Temperature
         t_layout = QHBoxLayout()
-        self.cce_temperature = QDoubleSpinBox()
+        self.cce_temperature = NoWheelDoubleSpinBox()
         self.cce_temperature.setRange(-200, 500)
         self.cce_temperature.setValue(100)
         self.cce_temperature.setDecimals(2)
@@ -347,7 +396,7 @@ class ConditionsInputWidget(QWidget):
 
         # Start pressure
         p_start_layout = QHBoxLayout()
-        self.cce_p_start = QDoubleSpinBox()
+        self.cce_p_start = NoWheelDoubleSpinBox()
         self.cce_p_start.setRange(0.01, 10000)
         self.cce_p_start.setValue(500)
         self.cce_p_start.setDecimals(2)
@@ -357,7 +406,7 @@ class ConditionsInputWidget(QWidget):
 
         # End pressure
         p_end_layout = QHBoxLayout()
-        self.cce_p_end = QDoubleSpinBox()
+        self.cce_p_end = NoWheelDoubleSpinBox()
         self.cce_p_end.setRange(0.01, 10000)
         self.cce_p_end.setValue(50)
         self.cce_p_end.setDecimals(2)
@@ -366,7 +415,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("End Pressure:", p_end_layout)
 
         # Number of steps
-        self.cce_n_steps = QSpinBox()
+        self.cce_n_steps = NoWheelSpinBox()
         self.cce_n_steps.setRange(2, 200)
         self.cce_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.cce_n_steps)
@@ -383,9 +432,10 @@ class ConditionsInputWidget(QWidget):
         """Create Differential Liberation configuration widget."""
         widget = QGroupBox("Differential Liberation Settings")
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         t_layout = QHBoxLayout()
-        self.dl_temperature = QDoubleSpinBox()
+        self.dl_temperature = NoWheelDoubleSpinBox()
         self.dl_temperature.setRange(-200, 500)
         self.dl_temperature.setValue(100)
         self.dl_temperature.setDecimals(2)
@@ -394,7 +444,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Temperature:", t_layout)
 
         bubble_layout = QHBoxLayout()
-        self.dl_bubble_pressure = QDoubleSpinBox()
+        self.dl_bubble_pressure = NoWheelDoubleSpinBox()
         self.dl_bubble_pressure.setRange(0.01, 10000)
         self.dl_bubble_pressure.setValue(150)
         self.dl_bubble_pressure.setDecimals(2)
@@ -403,7 +453,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Bubble Pressure:", bubble_layout)
 
         end_layout = QHBoxLayout()
-        self.dl_p_end = QDoubleSpinBox()
+        self.dl_p_end = NoWheelDoubleSpinBox()
         self.dl_p_end.setRange(0.01, 10000)
         self.dl_p_end.setValue(10)
         self.dl_p_end.setDecimals(2)
@@ -411,7 +461,7 @@ class ConditionsInputWidget(QWidget):
         end_layout.addWidget(QLabel("bar"))
         layout.addRow("End Pressure:", end_layout)
 
-        self.dl_n_steps = QSpinBox()
+        self.dl_n_steps = NoWheelSpinBox()
         self.dl_n_steps.setRange(2, 200)
         self.dl_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.dl_n_steps)
@@ -428,10 +478,11 @@ class ConditionsInputWidget(QWidget):
         """Create CVD configuration widget."""
         widget = QGroupBox("CVD Settings")
         layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
 
         # Temperature
         t_layout = QHBoxLayout()
-        self.cvd_temperature = QDoubleSpinBox()
+        self.cvd_temperature = NoWheelDoubleSpinBox()
         self.cvd_temperature.setRange(-200, 500)
         self.cvd_temperature.setValue(100)
         self.cvd_temperature.setDecimals(2)
@@ -441,7 +492,7 @@ class ConditionsInputWidget(QWidget):
 
         # Dew pressure
         p_dew_layout = QHBoxLayout()
-        self.cvd_p_dew = QDoubleSpinBox()
+        self.cvd_p_dew = NoWheelDoubleSpinBox()
         self.cvd_p_dew.setRange(0.01, 10000)
         self.cvd_p_dew.setValue(300)
         self.cvd_p_dew.setDecimals(2)
@@ -451,7 +502,7 @@ class ConditionsInputWidget(QWidget):
 
         # End pressure
         p_end_layout = QHBoxLayout()
-        self.cvd_p_end = QDoubleSpinBox()
+        self.cvd_p_end = NoWheelDoubleSpinBox()
         self.cvd_p_end.setRange(0.01, 10000)
         self.cvd_p_end.setValue(50)
         self.cvd_p_end.setDecimals(2)
@@ -460,7 +511,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("End Pressure:", p_end_layout)
 
         # Number of steps
-        self.cvd_n_steps = QSpinBox()
+        self.cvd_n_steps = NoWheelSpinBox()
         self.cvd_n_steps.setRange(5, 200)
         self.cvd_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.cvd_n_steps)
@@ -473,9 +524,10 @@ class ConditionsInputWidget(QWidget):
         layout = QVBoxLayout(widget)
 
         form_layout = QFormLayout()
+        self._configure_form_layout(form_layout)
 
         reservoir_pressure_layout = QHBoxLayout()
-        self.separator_reservoir_pressure = QDoubleSpinBox()
+        self.separator_reservoir_pressure = NoWheelDoubleSpinBox()
         self.separator_reservoir_pressure.setRange(0.01, 10000)
         self.separator_reservoir_pressure.setValue(300)
         self.separator_reservoir_pressure.setDecimals(2)
@@ -484,7 +536,7 @@ class ConditionsInputWidget(QWidget):
         form_layout.addRow("Reservoir Pressure:", reservoir_pressure_layout)
 
         reservoir_temperature_layout = QHBoxLayout()
-        self.separator_reservoir_temperature = QDoubleSpinBox()
+        self.separator_reservoir_temperature = NoWheelDoubleSpinBox()
         self.separator_reservoir_temperature.setRange(-200, 500)
         self.separator_reservoir_temperature.setValue(100)
         self.separator_reservoir_temperature.setDecimals(2)
@@ -928,7 +980,7 @@ class ConditionsInputWidget(QWidget):
         self,
         enabled_widget: QCheckBox,
         spin_widget: QLineEdit,
-        unit_widget: QComboBox,
+        unit_widget: QWidget,
     ) -> Optional[float]:
         """Return an optional initial pressure guess in Pa."""
         if not enabled_widget.isChecked():
@@ -940,7 +992,7 @@ class ConditionsInputWidget(QWidget):
     def _get_saturation_temperature_k(
         self,
         temperature_widget: QLineEdit,
-        unit_widget: QComboBox,
+        unit_widget: QWidget,
     ) -> float:
         """Return a saturation temperature in Kelvin."""
         value = float(temperature_widget.text())

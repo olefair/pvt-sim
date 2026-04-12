@@ -9,6 +9,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.schemas import (
     PressureUnit,
     PTFlashConfig,
@@ -58,22 +59,29 @@ class TextOutputWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
 
         self._hint = QLabel("Text output / run report")
         self._hint.setStyleSheet("color: #9ca3af;")
-        layout.addWidget(self._hint)
+        self._layout.addWidget(self._hint)
 
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         mono = QFont("Consolas")
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self.text.setFont(mono)
-        layout.addWidget(self.text, 1)
+        self._layout.addWidget(self.text, 1)
 
         self.clear()
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale the monospace report view with the app zoom."""
+        self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        font = self.text.font()
+        font.setPointSizeF(scale_metric(11, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.text.setFont(font)
 
     def clear(self) -> None:
         self.text.setPlainText("(no results yet)")

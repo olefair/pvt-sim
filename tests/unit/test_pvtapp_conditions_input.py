@@ -27,6 +27,7 @@ from pvtapp.schemas import (
     RunConfig,
     TemperatureUnit,
 )
+from pvtapp.style import DEFAULT_UI_SCALE, UI_SCALE_STEP
 from pvtcore.validation.pete665_assignment import psia_to_pa
 
 try:
@@ -91,6 +92,39 @@ def test_conditions_widget_builds_bubble_point_config(app: QApplication) -> None
     assert config is not None
     assert config.temperature_k == pytest.approx(350.0)
     assert config.pressure_initial_pa == pytest.approx(1.25e7)
+
+
+def test_conditions_selectors_ignore_mouse_wheel_changes(app: QApplication) -> None:
+    widget = ConditionsInputWidget()
+    combo = widget.pressure_unit
+    initial_index = combo.currentIndex()
+    separator_pressure = widget.separator_reservoir_pressure
+    initial_pressure = separator_pressure.value()
+
+    class DummyWheelEvent:
+        def __init__(self) -> None:
+            self.ignored = False
+
+        def ignore(self) -> None:
+            self.ignored = True
+
+    event = DummyWheelEvent()
+    combo.wheelEvent(event)
+    separator_pressure.wheelEvent(event)
+
+    assert event.ignored is True
+    assert combo.currentIndex() == initial_index
+    assert separator_pressure.value() == initial_pressure
+
+
+def test_conditions_widget_scales_unit_widths_with_app_zoom(app: QApplication) -> None:
+    widget = ConditionsInputWidget()
+    initial_unit_width = widget.pressure_unit.maximumWidth()
+
+    widget.apply_ui_scale(DEFAULT_UI_SCALE + UI_SCALE_STEP)
+
+    assert widget.pressure_unit.maximumWidth() > initial_unit_width
+    assert widget.bubble_temperature_unit.maximumWidth() > initial_unit_width
 
 
 def test_conditions_widget_builds_dew_point_config(app: QApplication) -> None:

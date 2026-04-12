@@ -42,7 +42,7 @@ from pvtapp.schemas import (
     SeparatorStageResult,
     SolverDiagnostics,
 )
-from pvtapp.style import DEFAULT_UI_SCALE, UI_SCALE_STEP
+from pvtapp.style import DEFAULT_UI_SCALE, UI_SCALE_STEP, build_cato_stylesheet, scale_metric
 
 try:
     from pvtapp.main import PVTSimulatorWindow
@@ -968,6 +968,56 @@ def _summary_values(widget: ResultsTableWidget) -> dict[str, str]:
     }
 
 
+def test_results_table_scales_compact_columns_with_ui_zoom(app: QApplication) -> None:
+    table = ResultsTableWidget()
+    table.resize(340, 900)
+    table.display_result(_bubble_point_result())
+    table.show()
+    app.processEvents()
+
+    initial_summary_width = table.summary_table.columnWidth(0)
+    initial_composition_width = table.composition_table.columnWidth(1)
+
+    table.apply_ui_scale(DEFAULT_UI_SCALE + UI_SCALE_STEP)
+    app.processEvents()
+
+    assert table.summary_table.columnWidth(0) > initial_summary_width
+    assert table.composition_table.columnWidth(1) > initial_composition_width
+
+
+def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> None:
+    stylesheet = build_cato_stylesheet(scale=DEFAULT_UI_SCALE)
+
+    assert "QLabel" in stylesheet
+    assert "background: transparent;" in stylesheet
+    assert "QComboBox::drop-down" in stylesheet
+    assert "border-top-right-radius" in stylesheet
+    assert "border-bottom-right-radius" in stylesheet
+    assert "QGroupBox" in stylesheet
+    assert "border: none;" in stylesheet
+
+
+def test_results_tables_align_to_shared_right_edge(app: QApplication) -> None:
+    table = ResultsTableWidget()
+    table.resize(340, 900)
+    table.display_result(_bubble_point_result())
+    table.show()
+    app.processEvents()
+    table.apply_ui_scale(DEFAULT_UI_SCALE)
+    app.processEvents()
+
+    def _column_span(widget: ResultsTableWidget, attr: str) -> int:
+        grid = getattr(widget, attr)
+        return sum(grid.columnWidth(column) for column in range(grid.columnCount()))
+
+    summary_span = _column_span(table, "summary_table")
+    composition_span = _column_span(table, "composition_table")
+    details_span = _column_span(table, "details_table")
+
+    assert abs(summary_span - composition_span) <= 2
+    assert abs(details_span - composition_span) <= 2
+
+
 def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication) -> None:
     config = _run_config(
         {
@@ -1066,6 +1116,9 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
 
     assert summary["Bubble Pressure"] == "12.00 MPa"
     assert summary["Temperature"] == "170.33 F"
+    assert "Solver Status" not in summary
+    assert "Final Residual" not in summary
+    assert table.summary_table.item(0, 0).text() == "Bubble Pressure"
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -1482,12 +1535,25 @@ def test_main_window_zoom_controls_rescale_shell(window: PVTSimulatorWindow) -> 
     initial_scale = window.ui_scale
     initial_progress_width = window.progress_bar.maximumWidth()
     initial_fixed_min_width = window.workspace.fixed_pane.minimumWidth()
+    initial_results_min_width = window.workspace.results_pane.minimumWidth()
+    initial_text_font_size = window.text_output_widget.text.font().pointSizeF()
 
     window._zoom_in()
 
+    zoomed_scale = DEFAULT_UI_SCALE + UI_SCALE_STEP
     assert window.ui_scale == pytest.approx(DEFAULT_UI_SCALE + UI_SCALE_STEP)
     assert window.progress_bar.maximumWidth() > initial_progress_width
-    assert window.workspace.fixed_pane.minimumWidth() > initial_fixed_min_width
+    assert window.workspace.fixed_pane.minimumWidth() == scale_metric(
+        initial_fixed_min_width,
+        zoomed_scale,
+        reference_scale=DEFAULT_UI_SCALE,
+    )
+    assert window.workspace.results_pane.minimumWidth() == scale_metric(
+        initial_results_min_width,
+        zoomed_scale,
+        reference_scale=DEFAULT_UI_SCALE,
+    )
+    assert window.text_output_widget.text.font().pointSizeF() > initial_text_font_size
     assert window.status_label.text() == "Zoom: 120%"
 
     window._reset_zoom()
@@ -1495,6 +1561,8 @@ def test_main_window_zoom_controls_rescale_shell(window: PVTSimulatorWindow) -> 
     assert window.ui_scale == pytest.approx(initial_scale)
     assert window.progress_bar.maximumWidth() == initial_progress_width
     assert window.workspace.fixed_pane.minimumWidth() == initial_fixed_min_width
+    assert window.workspace.results_pane.minimumWidth() == initial_results_min_width
+    assert window.text_output_widget.text.font().pointSizeF() == initial_text_font_size
 
 
 def test_main_window_restores_persisted_zoom_between_sessions(

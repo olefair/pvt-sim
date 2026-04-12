@@ -9,21 +9,25 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
-    QTabWidget,
     QLabel,
+    QFrame,
     QGroupBox,
     QPushButton,
     QFileDialog,
     QMessageBox,
+    QScrollArea,
+    QSizePolicy,
 )
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.schemas import (
     RunResult,
     RunStatus,
@@ -73,57 +77,234 @@ class ResultsTableWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._current_result: Optional[RunResult] = None
+        self._ui_scale = DEFAULT_UI_SCALE
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """Create the widget UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
 
         # Header with run info
-        header_layout = QHBoxLayout()
+        self._header_layout = QHBoxLayout()
+        self._header_layout.setContentsMargins(0, 0, 0, 0)
+        self._header_layout.setSpacing(8)
         self.run_id_label = QLabel("No results")
         self.run_id_label.setStyleSheet("font-weight: bold;")
-        header_layout.addWidget(self.run_id_label)
+        self.run_id_label.setWordWrap(True)
+        self.run_id_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._header_layout.addWidget(self.run_id_label)
 
         self.status_label = QLabel("")
-        header_layout.addWidget(self.status_label)
-        header_layout.addStretch()
+        self._header_layout.addWidget(self.status_label)
+        self._header_layout.addStretch()
 
         # Export buttons
         self.export_csv_btn = QPushButton("Export CSV")
         self.export_csv_btn.clicked.connect(lambda: self.export_requested.emit("csv"))
         self.export_json_btn = QPushButton("Export JSON")
         self.export_json_btn.clicked.connect(lambda: self.export_requested.emit("json"))
-        header_layout.addWidget(self.export_csv_btn)
-        header_layout.addWidget(self.export_json_btn)
+        self._header_layout.addWidget(self.export_csv_btn)
+        self._header_layout.addWidget(self.export_json_btn)
 
-        layout.addLayout(header_layout)
+        self._layout.addLayout(self._header_layout)
 
-        # Tab widget for different result views
-        self.tabs = QTabWidget()
-
-        # Summary tab
-        self.summary_table = QTableWidget()
+        # Public tables remain stable for existing desktop/widget tests.
+        self.summary_table = self._create_section_table()
         self.summary_table.setColumnCount(2)
         self.summary_table.setHorizontalHeaderLabels(["Property", "Value"])
-        self.summary_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
+
+        self.composition_table = self._create_section_table()
+        self.details_table = self._create_section_table()
+
+        self.summary_section = self._build_table_section("Summary", self.summary_table)
+        self.composition_section = self._build_table_section("Compositions", self.composition_table)
+        self.details_section = self._build_table_section("Details", self.details_table)
+
+        self.sections_scroll = QScrollArea()
+        self.sections_scroll.setWidgetResizable(True)
+        self.sections_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        self._sections_host = QWidget()
+        self._sections_layout = QVBoxLayout(self._sections_host)
+        self._sections_layout.setContentsMargins(0, 0, 0, 0)
+        self._sections_layout.setSpacing(10)
+        self._sections_layout.addWidget(self.summary_section)
+        self._sections_layout.addWidget(self.composition_section)
+        self._sections_layout.addWidget(self.details_section)
+        self._sections_layout.addStretch(1)
+
+        self.sections_scroll.setWidget(self._sections_host)
+        self._layout.addWidget(self.sections_scroll, 1)
+
+        # Deprecated legacy attribute kept as a sentinel for compatibility.
+        self.tabs = None
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Refresh column sizing after global zoom changes."""
+        self._ui_scale = ui_scale
+        self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._header_layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._sections_layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._finalize_section_tables()
+
+    @staticmethod
+    def _create_section_table() -> QTableWidget:
+        """Create a compact read-only table for the fixed right rail."""
+        table = QTableWidget()
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setWordWrap(False)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.horizontalHeader().setStretchLastSection(False)
+        return table
+
+    @staticmethod
+    def _build_table_section(title: str, table: QTableWidget) -> QGroupBox:
+        """Wrap a results table in a standalone titled section."""
+        section = QGroupBox(title)
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(0)
+        section_layout.addWidget(table)
+        return section
+
+    def _compact_summary_columns(self) -> None:
+        """Keep the always-on summary table compact in the fixed right rail."""
+        self.summary_table.resizeColumnsToContents()
+        if self.summary_table.columnCount() < 2:
+            return
+        for column in range(self.summary_table.columnCount()):
+            self.summary_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        padding = scale_metric(10, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        property_width = max(
+            scale_metric(120, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            min(
+                scale_metric(168, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+                self.summary_table.columnWidth(0) + padding,
+            ),
         )
-        self.summary_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
+        value_width = max(
+            scale_metric(88, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            min(
+                scale_metric(132, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+                self.summary_table.columnWidth(1) + padding,
+            ),
         )
-        self.tabs.addTab(self.summary_table, "Summary")
+        self.summary_table.setColumnWidth(0, property_width)
+        self.summary_table.setColumnWidth(1, value_width)
 
-        # Compositions tab
-        self.composition_table = QTableWidget()
-        self.tabs.addTab(self.composition_table, "Compositions")
+    @staticmethod
+    def _column_width_bounds(column_name: str, column_index: int) -> tuple[int, int]:
+        """Return pragmatic min/max widths for right-rail result tables."""
+        label = column_name.lower()
+        if column_index == 0:
+            if any(token in label for token in ("component", "property", "stage")):
+                return 82, 132
+            if "type" in label:
+                return 64, 88
+            return 56, 96
+        if "value" in label:
+            return 84, 132
+        if "fugacity" in label:
+            return 88, 112
+        if any(token in label for token in ("temperature", "pressure", "moles")):
+            return 80, 104
+        if any(token in label for token in ("liquid", "vapor", "feed", "k-value", "z-factor")):
+            return 74, 92
+        if any(token in label for token in ("dropout", "converged", "frac")):
+            return 72, 92
+        return 68, 96
 
-        # Details tab
-        self.details_table = QTableWidget()
-        self.tabs.addTab(self.details_table, "Details")
+    def _compact_data_columns(self, table: QTableWidget) -> None:
+        """Size non-summary tables to content rather than stretching the rail."""
+        if table.columnCount() == 0:
+            return
+        table.resizeColumnsToContents()
+        for column in range(table.columnCount()):
+            header = table.horizontalHeaderItem(column)
+            header_label = header.text() if header is not None else ""
+            minimum, maximum = self._column_width_bounds(header_label, column)
+            minimum = scale_metric(minimum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            maximum = scale_metric(maximum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+            width = max(
+                minimum,
+                min(
+                    maximum,
+                    table.columnWidth(column) + scale_metric(10, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+                ),
+            )
+            table.setColumnWidth(column, width)
 
-        layout.addWidget(self.tabs)
+    def _expand_columns_to_fill(self, table: QTableWidget) -> None:
+        """Distribute unused table width so stacked sections share the same right edge."""
+        column_count = table.columnCount()
+        if column_count == 0:
+            return
+
+        available_width = table.viewport().width()
+        if available_width <= 0:
+            available_width = (
+                table.width()
+                - table.verticalHeader().width()
+                - (2 * table.frameWidth())
+            )
+        if available_width <= 0:
+            return
+
+        occupied_width = sum(table.columnWidth(column) for column in range(column_count))
+        slack = available_width - occupied_width
+        if slack <= 0:
+            return
+
+        per_column, remainder = divmod(slack, column_count)
+        for column in range(column_count):
+            growth = per_column + (1 if column < remainder else 0)
+            if growth > 0:
+                table.setColumnWidth(column, table.columnWidth(column) + growth)
+
+    def _sync_table_height(self, table: QTableWidget) -> None:
+        """Let the outer scroll area own scrolling instead of nested table scrollbars."""
+        table.resizeRowsToContents()
+        header_height = table.horizontalHeader().height() if table.horizontalHeader().isVisible() else 0
+        body_height = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        height = max(
+            scale_metric(72, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            header_height
+            + body_height
+            + (2 * table.frameWidth())
+            + scale_metric(6, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+        )
+        table.setMinimumHeight(height)
+        table.setMaximumHeight(height)
+
+    @staticmethod
+    def _section_has_content(table: QTableWidget) -> bool:
+        return table.columnCount() > 0 and table.rowCount() > 0
+
+    def _finalize_section_tables(self) -> None:
+        """Apply compact widths, fixed heights, and section visibility."""
+        self._compact_summary_columns()
+        self._compact_data_columns(self.composition_table)
+        self._compact_data_columns(self.details_table)
+        for table in (self.summary_table, self.composition_table, self.details_table):
+            self._expand_columns_to_fill(table)
+
+        for table in (self.summary_table, self.composition_table, self.details_table):
+            self._sync_table_height(table)
+
+        self.summary_section.setVisible(True)
+        self.composition_section.setVisible(self._section_has_content(self.composition_table))
+        self.details_section.setVisible(self._section_has_content(self.details_table))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._finalize_section_tables()
 
     def clear(self) -> None:
         """Clear all result displays."""
@@ -133,6 +314,7 @@ class ResultsTableWidget(QWidget):
         self.summary_table.setRowCount(0)
         self.composition_table.setRowCount(0)
         self.details_table.setRowCount(0)
+        self._finalize_section_tables()
 
     def display_result(self, result: RunResult) -> None:
         """Display a calculation result.
@@ -175,6 +357,7 @@ class ResultsTableWidget(QWidget):
             self._display_separator(result.separator_result)
         else:
             self._display_error(result)
+        self._finalize_section_tables()
 
     def _pt_flash_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
         """Return the preferred PT flash display units."""
@@ -207,6 +390,30 @@ class ResultsTableWidget(QWidget):
             ("C7+ SG+", "-" if plus_fraction.sg_plus_60f is None else f"{plus_fraction.sg_plus_60f:.3f}"),
         ]
 
+    @staticmethod
+    def _solver_summary_rows(
+        *,
+        converged: bool,
+        iterations: Optional[int] = None,
+        final_residual: Optional[float] = None,
+        solver_status: Optional[str] = None,
+        invariant_check: Optional[str] = None,
+    ) -> list[tuple[str, str]]:
+        """Keep low-signal solver bookkeeping below the headline results."""
+        rows: list[tuple[str, str]] = []
+        rows.append(("Converged", "Yes" if converged else "No"))
+        if solver_status is not None:
+            normalized_status = solver_status.replace("_", " ").title()
+            if not (converged and normalized_status == "Converged"):
+                rows.append(("Solver Status", normalized_status))
+        if iterations is not None:
+            rows.append(("Iterations", str(iterations)))
+        if final_residual is not None and not converged:
+            rows.append(("Final Residual", f"{final_residual:.2e}"))
+        if invariant_check is not None:
+            rows.append(("Invariant Check", invariant_check))
+        return rows
+
     def _display_pt_flash(self, result: PTFlashResult) -> None:
         """Display PT flash results."""
         pressure_unit, temperature_unit = self._pt_flash_display_units()
@@ -214,7 +421,6 @@ class ResultsTableWidget(QWidget):
 
         # Summary table
         summary_data = [
-            ("Converged", "Yes" if result.converged else "No"),
             ("Phase State", result.phase.title()),
         ]
 
@@ -227,10 +433,16 @@ class ResultsTableWidget(QWidget):
         summary_data.extend([
             ("Vapor Fraction", f"{result.vapor_fraction:.6f}"),
             ("Liquid Fraction", f"{1 - result.vapor_fraction:.6f}"),
-            ("Iterations", str(result.diagnostics.iterations)),
-            ("Final Residual", f"{result.diagnostics.final_residual:.2e}"),
         ])
         summary_data.extend(self._plus_fraction_summary_rows())
+        summary_data.extend(
+            self._solver_summary_rows(
+                converged=result.converged,
+                iterations=result.diagnostics.iterations,
+                final_residual=result.diagnostics.final_residual,
+                solver_status=result.diagnostics.status.value,
+            )
+        )
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -358,25 +570,20 @@ class ResultsTableWidget(QWidget):
         """Display bubble-point or dew-point results."""
         pressure_unit, temperature_unit = self._saturation_display_units()
         summary_data = [
-            ("Converged", "Yes" if result.converged else "No"),
             (pressure_label, _format_pressure(result.pressure_pa, pressure_unit)),
             ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
             (stability_label, "Yes" if stability_value else "No"),
-            ("Iterations", str(result.iterations)),
-            ("Final Residual", f"{result.residual:.2e}"),
         ]
-
-        if result.diagnostics is not None:
-            summary_data.insert(1, (
-                "Solver Status",
-                result.diagnostics.status.value.replace("_", " ").title(),
-            ))
         summary_data.extend(self._plus_fraction_summary_rows())
-        if result.certificate is not None:
-            summary_data.append((
-                "Invariant Check",
-                "Pass" if result.certificate.passed else "Fail",
-            ))
+        summary_data.extend(
+            self._solver_summary_rows(
+                converged=result.converged,
+                iterations=result.iterations,
+                final_residual=result.residual,
+                solver_status=None if result.diagnostics is None else result.diagnostics.status.value,
+                invariant_check=None if result.certificate is None else ("Pass" if result.certificate.passed else "Fail"),
+            )
+        )
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
