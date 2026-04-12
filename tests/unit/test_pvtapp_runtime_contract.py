@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from pvtapp.job_runner import ProgressCallback, run_calculation, validate_runtime_config
 from pvtapp.schemas import RunConfig, RunStatus
 
@@ -121,3 +123,23 @@ def test_run_calculation_writes_cancelled_manifest_when_callback_requests_stop(
     assert stored_result["status"] == RunStatus.CANCELLED.value
     assert stored_result["error_message"] == "Calculation was cancelled by user"
     assert stored_result["pt_flash_result"] is None
+
+
+def test_calculation_thread_preserves_cancel_request_before_worker_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("PySide6")
+    from pvtapp.workers import CalculationThread, CalculationWorker
+
+    observed: dict[str, bool] = {}
+
+    def fake_run(self: CalculationWorker) -> None:
+        observed["cancelled"] = self._cancelled
+
+    monkeypatch.setattr(CalculationWorker, "run", fake_run)
+
+    thread = CalculationThread(config=_pt_flash_config())
+    thread.cancel()
+    thread.run()
+
+    assert observed["cancelled"] is True

@@ -14,10 +14,11 @@ import pytest
 
 try:
     from PySide6.QtCore import QSettings
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMessageBox
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     QSettings = None  # type: ignore[assignment]
     QApplication = None  # type: ignore[assignment]
+    QMessageBox = None  # type: ignore[assignment]
 
 from pvtapp.schemas import (
     CCEResult,
@@ -495,6 +496,20 @@ def _separator_result() -> RunResult:
     )
 
 
+def _cancelled_result() -> RunResult:
+    config = _pt_flash_config()
+    return RunResult(
+        run_id="cancelled-result",
+        run_name="cancelled-result",
+        status=RunStatus.CANCELLED,
+        error_message="Calculation was cancelled by user",
+        started_at=_started_at(),
+        completed_at=_started_at(),
+        duration_seconds=0.5,
+        config=config,
+    )
+
+
 RESULT_BUILDERS: tuple[tuple[str, Callable[[], RunResult], str, str], ...] = (
     ("pt_flash", _pt_flash_result, "Component", "Pt Flash"),
     ("bubble_point", _bubble_point_result, "Component", "Bubble point"),
@@ -660,6 +675,26 @@ def test_main_window_exports_csv_for_supported_results(
 
     assert rows[0][0] == expected_header
     assert any(expected_cell in cell for row in rows[1:] for cell in row)
+
+
+def test_main_window_rejects_csv_export_for_cancelled_results(
+    window: PVTSimulatorWindow,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filename = tmp_path / "cancelled.csv"
+    warnings: list[tuple[str, str]] = []
+
+    def fake_warning(_parent, title: str, message: str):
+        warnings.append((title, message))
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(QMessageBox, "warning", fake_warning)
+
+    window._export_csv(_cancelled_result(), str(filename))
+
+    assert warnings == [("Export Error", "CSV export is only available for completed calculations")]
+    assert not filename.exists()
 
 
 def test_main_window_zoom_controls_rescale_shell(window: PVTSimulatorWindow) -> None:
