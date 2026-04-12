@@ -1,0 +1,7 @@
+interface:
+  display_name: "OpenClaw Agent Optimize"
+  short_description: "Audit an OpenClaw workspace for cost, context bloat, delegation, cron posture, and reliability before proposing changes."
+  default_prompt: "Use $openclaw-agent-optimize to audit an OpenClaw workspace, identify the dominant optimization drivers, and produce options, a recommended plan, exact proposed changes, rollback steps, and verification guidance without applying persistent changes."
+
+policy:
+  allow_implicit_invocation: false

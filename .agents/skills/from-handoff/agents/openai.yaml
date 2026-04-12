@@ -1,0 +1,7 @@
+interface:
+  display_name: "From Handoff"
+  short_description: "Resume work from where a previous session left off. Reads the most recent session handoff directly from the..."
+  default_prompt: "Use $from-handoff to resume work from the latest verified handoff."
+
+policy:
+  allow_implicit_invocation: false

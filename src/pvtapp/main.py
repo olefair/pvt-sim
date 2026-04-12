@@ -30,13 +30,16 @@ from PySide6.QtWidgets import (
 )
 
 from pvtapp import __version__, __app_name__
+from pvtapp.plus_fraction_policy import resolve_plus_fraction_entry
 from pvtapp.schemas import (
+    COMPOSITION_SUM_TOLERANCE,
     RunConfig,
     RunResult,
     RunStatus,
     FluidComposition,
     ComponentEntry,
     CalculationType,
+    EOSType,
 )
 from pvtapp.widgets import (
     CompositionInputWidget,
@@ -142,7 +145,7 @@ class PVTSimulatorWindow(QMainWindow):
         clear_action.triggered.connect(self._clear_composition)
         edit_menu.addAction(clear_action)
 
-        normalize_action = QAction("&Normalize Composition", self)
+        normalize_action = QAction("&Normalize Feed", self)
         normalize_action.triggered.connect(self._normalize_composition)
         edit_menu.addAction(normalize_action)
 
@@ -229,7 +232,7 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Outputs / tools (single shared instances)
         self.results_table = ResultsTableWidget()
-        self.results_plot = ResultsPlotWidget()
+        self.results_plot = ResultsPlotWidget(view_mode="phase_envelope_only")
         self.diagnostics_widget = DiagnosticsWidget()
         self.text_output_widget = TextOutputWidget()
 
@@ -305,9 +308,16 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Composition edits drive derived views
         self.composition_widget.composition_edited.connect(self._update_component_dependent_views)
+        self.conditions_widget.conditions_changed.connect(self._sync_characterization_context)
+        self._sync_characterization_context()
 
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
+
+    @Slot()
+    def _sync_characterization_context(self) -> None:
+        """Keep plus-fraction auto-characterization aligned with the active workflow."""
+        self.composition_widget.set_calculation_type_context(self.conditions_widget.get_calculation_type())
 
     @property
     def ui_scale(self) -> float:
@@ -400,12 +410,37 @@ class PVTSimulatorWindow(QMainWindow):
         if hasattr(self, "interaction_params_widget"):
             self.interaction_params_widget.update_components(component_ids)
 
+    def _offer_feed_normalization_if_needed(self) -> bool:
+        """Offer to normalize the entered feed instead of failing immediately."""
+        total = self.composition_widget._get_sum()
+        if total <= 0.0 or abs(total - 1.0) <= COMPOSITION_SUM_TOLERANCE:
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Normalize Feed",
+            (
+                f"The current feed totals {total:.8f}, not 1.0.\n\n"
+                "Normalize the feed in the GUI and continue?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        self.composition_widget._normalize()
+        return True
+
     def _build_config(self) -> Optional[RunConfig]:
         """Build RunConfig from current input state.
 
         Returns:
             RunConfig if valid, None otherwise
         """
+        if not self._offer_feed_normalization_if_needed():
+            return None
+
         # Get and validate composition
         composition = self.composition_widget.get_composition()
         if composition is None:
@@ -482,7 +517,21 @@ class PVTSimulatorWindow(QMainWindow):
             return None
 
         try:
-            return RunConfig(**config_kwargs)
+            config = RunConfig(**config_kwargs)
+            plus_fraction = config.composition.plus_fraction
+            if plus_fraction is None:
+                return config
+
+            resolved_plus = resolve_plus_fraction_entry(
+                config.composition.components,
+                plus_fraction,
+                config.calculation_type,
+            )
+            if resolved_plus == plus_fraction:
+                return config
+
+            resolved_composition = config.composition.model_copy(update={"plus_fraction": resolved_plus})
+            return config.model_copy(update={"composition": resolved_composition})
         except Exception as e:
             self._show_validation_error(str(e))
             return None
@@ -502,6 +551,8 @@ class PVTSimulatorWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.composition_widget.table.setRowCount(0)
+            if hasattr(self.composition_widget, "_reset_heavy_inputs"):
+                self.composition_widget._reset_heavy_inputs()
             # Keep the sum/status in sync and refresh dependent panels
             if hasattr(self.composition_widget, "_update_sum"):
                 self.composition_widget._update_sum()
@@ -726,6 +777,9 @@ class PVTSimulatorWindow(QMainWindow):
     @Slot()
     def _validate_input(self) -> None:
         """Validate all inputs and show result."""
+        if not self._offer_feed_normalization_if_needed():
+            return
+
         # Validate composition
         comp_valid, comp_error = self.composition_widget.validate()
         if not comp_valid:

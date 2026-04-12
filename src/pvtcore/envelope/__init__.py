@@ -14,6 +14,25 @@ from .trace import (
     TracedEnvelopeResult,
 )
 
+from .local_roots import (
+    RootBracket,
+    scan_branch_roots,
+)
+
+from .continuation import (
+    ContinuationState,
+    ContinuationTraceResult,
+    CriticalJunction,
+    EnvelopeContinuationResult,
+    resolve_local_branch_candidates,
+    seed_continuation_state,
+    advance_continuation_state,
+    detect_continuation_critical_junction,
+    trace_branch_continuation,
+    trace_branch_continuation_adaptive,
+    trace_envelope_continuation,
+)
+
 from .critical_point import (
     detect_critical_point,
     estimate_critical_point_kays,
@@ -61,6 +80,19 @@ __all__ = [
     'estimate_cricondenbar',
     'trace_phase_envelope',
     'TracedEnvelopeResult',
+    'RootBracket',
+    'scan_branch_roots',
+    'ContinuationState',
+    'ContinuationTraceResult',
+    'CriticalJunction',
+    'EnvelopeContinuationResult',
+    'resolve_local_branch_candidates',
+    'seed_continuation_state',
+    'advance_continuation_state',
+    'detect_continuation_critical_junction',
+    'trace_branch_continuation',
+    'trace_branch_continuation_adaptive',
+    'trace_envelope_continuation',
     # Critical point
     'detect_critical_point',
     'estimate_critical_point_kays',

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Workspace Progress"
+  short_description: "Workspace-wide progress aggregator."
+  default_prompt: "Use $workspace-progress to generate a workspace-wide prioritized progress report."
+
+policy:
+  allow_implicit_invocation: false

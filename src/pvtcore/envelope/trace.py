@@ -19,6 +19,12 @@ from ..flash.dew_point import calculate_dew_point
 from ..models.component import Component
 from .critical_point import detect_critical_point
 
+_TERMINATING_SATURATION_REASONS = {
+    "no_saturation",
+    "degenerate_trivial_boundary",
+    "post_check_failed",
+}
+
 
 @dataclass
 class TracedEnvelopeResult:
@@ -31,6 +37,64 @@ class TracedEnvelopeResult:
     critical_point: Optional[Tuple[float, float]]
     cricondenbar: Optional[Tuple[float, float]]
     cricondentherm: Optional[Tuple[float, float]]
+
+
+def _refine_upper_bubble_endpoint(
+    *,
+    composition: NDArray[np.float64],
+    components: List[Component],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    T_success: float,
+    P_success: float,
+    T_fail: float,
+    max_refinements: int = 16,
+    temperature_tol: float = 0.05,
+) -> Optional[Tuple[float, float]]:
+    """Refine the last successful bubble point before a terminal high-temperature failure."""
+    T_low = float(T_success)
+    T_high = float(T_fail)
+    best_T = float(T_success)
+    best_P = float(P_success)
+    P_guess = float(P_success)
+
+    for _ in range(int(max_refinements)):
+        if (T_high - T_low) <= float(temperature_tol):
+            break
+
+        T_mid = 0.5 * (T_low + T_high)
+        try:
+            br = calculate_bubble_point(
+                T_mid,
+                composition,
+                components,
+                eos,
+                pressure_initial=P_guess,
+                binary_interaction=binary_interaction,
+                check_stability=False,
+                post_check_stability_flip=True,
+                post_check_action="raise",
+            )
+            if (
+                getattr(br, "converged", True)
+                and float(_P_MIN) * 1.001 < float(br.pressure) < float(_P_MAX) * 0.999
+            ):
+                best_T = float(T_mid)
+                best_P = float(br.pressure)
+                P_guess = float(br.pressure)
+                T_low = float(T_mid)
+            else:
+                T_high = float(T_mid)
+        except PhaseError as e:
+            if e.details.get("reason") not in _TERMINATING_SATURATION_REASONS:
+                raise
+            T_high = float(T_mid)
+        except (ConvergenceError, ValidationError):
+            T_high = float(T_mid)
+
+    if best_T > float(T_success) + 1e-9:
+        return best_T, best_P
+    return None
 
 
 def trace_phase_envelope(
@@ -83,6 +147,7 @@ def trace_phase_envelope(
 
     P_bubble_prev: Optional[float] = None
     P_dew_prev: Optional[float] = None
+    bubble_failure_T: Optional[float] = None
 
     for T in T_grid:
         try:
@@ -94,6 +159,8 @@ def trace_phase_envelope(
                 pressure_initial=P_bubble_prev,
                 binary_interaction=binary_interaction,
                 check_stability=False,
+                post_check_stability_flip=True,
+                post_check_action="raise",
             )
             # Reject non-converged or bound-clamped results; these indicate no saturation within the search bounds.
             if not getattr(br, 'converged', True):
@@ -116,10 +183,13 @@ def trace_phase_envelope(
             bubble_P_list.append(float(br.pressure))
             P_bubble_prev = float(br.pressure)
         except PhaseError as e:
-            if e.details.get("reason") != "no_saturation":
+            if e.details.get("reason") not in _TERMINATING_SATURATION_REASONS:
                 raise
+            if bubble_T_list and bubble_failure_T is None and float(T) > bubble_T_list[-1]:
+                bubble_failure_T = float(T)
         except (ConvergenceError, ValidationError):
-            pass
+            if bubble_T_list and bubble_failure_T is None and float(T) > bubble_T_list[-1]:
+                bubble_failure_T = float(T)
 
         try:
             dr = calculate_dew_point(
@@ -130,6 +200,8 @@ def trace_phase_envelope(
                 pressure_initial=P_dew_prev,
                 binary_interaction=binary_interaction,
                 check_stability=False,
+                post_check_stability_flip=True,
+                post_check_action="raise",
             )
             # Reject non-converged or bound-clamped results; these indicate no saturation within the search bounds.
             if not getattr(dr, 'converged', True):
@@ -152,10 +224,25 @@ def trace_phase_envelope(
             dew_P_list.append(float(dr.pressure))
             P_dew_prev = float(dr.pressure)
         except PhaseError as e:
-            if e.details.get("reason") != "no_saturation":
+            if e.details.get("reason") not in _TERMINATING_SATURATION_REASONS:
                 raise
         except (ConvergenceError, ValidationError):
             pass
+
+    if bubble_T_list and bubble_failure_T is not None:
+        refined_bubble = _refine_upper_bubble_endpoint(
+            composition=z,
+            components=components,
+            eos=eos,
+            binary_interaction=binary_interaction,
+            T_success=float(bubble_T_list[-1]),
+            P_success=float(bubble_P_list[-1]),
+            T_fail=float(bubble_failure_T),
+        )
+        if refined_bubble is not None:
+            refined_T, refined_P = refined_bubble
+            bubble_T_list.append(float(refined_T))
+            bubble_P_list.append(float(refined_P))
 
     bubble_T = np.asarray(bubble_T_list, dtype=np.float64)
     bubble_P = np.asarray(bubble_P_list, dtype=np.float64)

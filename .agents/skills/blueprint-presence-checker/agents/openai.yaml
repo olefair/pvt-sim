@@ -1,0 +1,7 @@
+interface:
+  display_name: "Blueprint Check"
+  short_description: "Find an existing blueprint before implementation"
+  default_prompt: "Use $blueprint-presence-checker to see whether this implementation already has a blueprint in the docs vault."
+
+policy:
+  allow_implicit_invocation: false

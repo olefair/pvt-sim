@@ -1,0 +1,7 @@
+interface:
+  display_name: "Session Handoff"
+  short_description: "Trigger on /handoff, handoff, session summary, continuation doc, checkpoint, wrap up, capture what we did,..."
+  default_prompt: "Use $session-handoff to write a verified handoff for this session."
+
+policy:
+  allow_implicit_invocation: false

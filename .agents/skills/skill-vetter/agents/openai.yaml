@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Vetter"
+  short_description: "Audit a skill package for security, packaging, compatibility, and trust risks before installation."
+  default_prompt: "Use $skill-vetter to audit a skill folder or .skill archive before installation, collect evidence, run compatibility checks, classify risk, and produce an install verdict."
+
+policy:
+  allow_implicit_invocation: false

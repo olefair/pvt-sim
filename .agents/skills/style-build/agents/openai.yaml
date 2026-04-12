@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Build"
+  short_description: "Stage 4 of the cognitive style chain: focused execution. The implementation stage — produces deliverables w..."
+  default_prompt: "Use $style-build to execute the current plan with minimal commentary."
+
+policy:
+  allow_implicit_invocation: false

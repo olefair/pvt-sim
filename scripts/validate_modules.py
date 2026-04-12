@@ -103,6 +103,11 @@ def main() -> None:
             description="Validates component database schema, groups, and basic thermo sanity",
         ),
         ValidationStep(
+            name="Component Alias Contract Audit",
+            script="audit_component_aliases.py",
+            description="Checks alias uniqueness and app picker/runtime component contract alignment",
+        ),
+        ValidationStep(
             name="Component Integration Tests",
             script="validate_components.py",
             description="Tests component loading, PPR78 decomposition, and k_ij calculation",

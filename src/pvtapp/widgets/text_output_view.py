@@ -8,7 +8,16 @@ from typing import Optional
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
-from pvtapp.schemas import RunResult
+from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
+from pvtapp.schemas import (
+    PressureUnit,
+    PTFlashConfig,
+    RunResult,
+    SaturationPointConfig,
+    TemperatureUnit,
+    pressure_from_pa,
+    temperature_from_k,
+)
 
 
 def _fmt_dt(dt: Optional[datetime]) -> str:
@@ -22,6 +31,26 @@ def _fmt_dt(dt: Optional[datetime]) -> str:
 
 def _pa_to_bar(p_pa: float) -> float:
     return float(p_pa) / 1e5
+
+
+def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 5) -> str:
+    return f"{pressure_from_pa(value_pa, unit):.{precision}f} {unit.value}"
+
+
+def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int = 3) -> str:
+    return f"{temperature_from_k(value_k, unit):.{precision}f} {unit.value}"
+
+
+def _pt_flash_units(config: Optional[PTFlashConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
+
+
+def _saturation_units(config: Optional[SaturationPointConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
 
 
 class TextOutputWidget(QWidget):
@@ -73,16 +102,29 @@ class TextOutputWidget(QWidget):
         lines.append("------------------")
         for entry in cfg.composition.components:
             lines.append(f"{entry.component_id:<8s} {entry.mole_fraction:>12.6f}")
+        if cfg.composition.plus_fraction is not None:
+            plus_fraction = cfg.composition.plus_fraction
+            lines.append(f"{plus_fraction.label:<8s} {plus_fraction.z_plus:>12.6f}")
         lines.append("")
+        if cfg.composition.plus_fraction is not None:
+            plus_fraction = cfg.composition.plus_fraction
+            lines.append("C7+ characterization")
+            lines.append("-------------------")
+            lines.append(describe_plus_fraction_policy(plus_fraction))
+            lines.append(f"MW+ = {plus_fraction.mw_plus_g_per_mol:.6f} g/mol")
+            if plus_fraction.sg_plus_60f is not None:
+                lines.append(f"SG+ = {plus_fraction.sg_plus_60f:.6f}")
+            lines.append("")
 
         # Calculation-specific
         if result.pt_flash_result is not None and cfg.pt_flash_config is not None:
             t = cfg.pt_flash_config.temperature_k
             p = cfg.pt_flash_config.pressure_pa
+            pressure_unit, temperature_unit = _pt_flash_units(cfg.pt_flash_config)
             lines.append("PT-flash")
             lines.append("-------")
-            lines.append(f"T = {t:.3f} K")
-            lines.append(f"P = {_pa_to_bar(p):.5f} bar")
+            lines.append(f"T = {_format_temperature(t, temperature_unit)}")
+            lines.append(f"P = {_format_pressure(p, pressure_unit)}")
             lines.append("")
 
             r = result.pt_flash_result
@@ -102,14 +144,19 @@ class TextOutputWidget(QWidget):
 
         elif result.bubble_point_result is not None:
             r = result.bubble_point_result
+            pressure_unit, temperature_unit = _saturation_units(cfg.bubble_point_config)
             lines.append("Bubble point")
             lines.append("------------")
-            lines.append(f"T = {r.temperature_k:.3f} K")
-            lines.append(f"Pb = {_pa_to_bar(r.pressure_pa):.5f} bar")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"Pb = {_format_pressure(r.pressure_pa, pressure_unit)}")
             lines.append(f"Converged: {r.converged}")
+            if r.diagnostics is not None:
+                lines.append(f"Solver status: {r.diagnostics.status.value}")
             lines.append(f"Stable liquid: {r.stable_liquid}")
             lines.append(f"Iterations: {r.iterations}")
             lines.append(f"Residual: {r.residual:.5e}")
+            if r.certificate is not None:
+                lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
             lines.append("Component       x            y            K")
             for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
@@ -123,14 +170,19 @@ class TextOutputWidget(QWidget):
 
         elif result.dew_point_result is not None:
             r = result.dew_point_result
+            pressure_unit, temperature_unit = _saturation_units(cfg.dew_point_config)
             lines.append("Dew point")
             lines.append("---------")
-            lines.append(f"T = {r.temperature_k:.3f} K")
-            lines.append(f"Pd = {_pa_to_bar(r.pressure_pa):.5f} bar")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"Pd = {_format_pressure(r.pressure_pa, pressure_unit)}")
             lines.append(f"Converged: {r.converged}")
+            if r.diagnostics is not None:
+                lines.append(f"Solver status: {r.diagnostics.status.value}")
             lines.append(f"Stable vapor: {r.stable_vapor}")
             lines.append(f"Iterations: {r.iterations}")
             lines.append(f"Residual: {r.residual:.5e}")
+            if r.certificate is not None:
+                lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
             lines.append("Component       x            y            K")
             for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
@@ -146,8 +198,13 @@ class TextOutputWidget(QWidget):
             r = result.phase_envelope_result
             lines.append("Phase envelope")
             lines.append("--------------")
+            lines.append(f"Tracer:        {r.tracing_method.value}")
             lines.append(f"Bubble points: {len(r.bubble_curve)}")
             lines.append(f"Dew points:    {len(r.dew_curve)}")
+            if r.continuation_switched is not None:
+                lines.append(f"Switched:      {'yes' if r.continuation_switched else 'no'}")
+            if r.critical_source is not None:
+                lines.append(f"Critical src:  {r.critical_source}")
 
             if r.critical_point is not None:
                 cp = r.critical_point

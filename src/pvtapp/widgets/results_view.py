@@ -23,10 +23,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
 from pvtapp.schemas import (
     RunResult,
     RunStatus,
     PTFlashResult,
+    PTFlashConfig,
     BubblePointResult,
     DewPointResult,
     PhaseEnvelopeResult,
@@ -34,6 +36,11 @@ from pvtapp.schemas import (
     DLResult,
     CVDResult,
     SeparatorResult,
+    SaturationPointConfig,
+    PressureUnit,
+    TemperatureUnit,
+    pressure_from_pa,
+    temperature_from_k,
 )
 
 
@@ -42,6 +49,16 @@ PLOT_CANVAS_COLOR = PLOT_SURFACE_COLOR
 PLOT_TEXT_COLOR = "#e5e7eb"
 PLOT_GRID_COLOR = "#223044"
 PLOT_LEGEND_FACE_COLOR = "#121f34"
+
+
+def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 2) -> str:
+    """Format a pressure in the requested display unit."""
+    return f"{pressure_from_pa(value_pa, unit):.{precision}f} {unit.value}"
+
+
+def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int = 2) -> str:
+    """Format a temperature in the requested display unit."""
+    return f"{temperature_from_k(value_k, unit):.{precision}f} {unit.value}"
 
 
 class ResultsTableWidget(QWidget):
@@ -159,17 +176,61 @@ class ResultsTableWidget(QWidget):
         else:
             self._display_error(result)
 
+    def _pt_flash_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred PT flash display units."""
+        config: Optional[PTFlashConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.pt_flash_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _saturation_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred saturation display units."""
+        config: Optional[SaturationPointConfig] = None
+        if self._current_result is not None:
+            config = (
+                self._current_result.config.bubble_point_config
+                or self._current_result.config.dew_point_config
+            )
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _plus_fraction_summary_rows(self) -> list[tuple[str, str]]:
+        if self._current_result is None or self._current_result.config.composition.plus_fraction is None:
+            return []
+        plus_fraction = self._current_result.config.composition.plus_fraction
+        return [
+            ("C7+ Policy", describe_plus_fraction_policy(plus_fraction)),
+            ("C7+ MW+", f"{plus_fraction.mw_plus_g_per_mol:.3f} g/mol"),
+            ("C7+ SG+", "-" if plus_fraction.sg_plus_60f is None else f"{plus_fraction.sg_plus_60f:.3f}"),
+        ]
+
     def _display_pt_flash(self, result: PTFlashResult) -> None:
         """Display PT flash results."""
+        pressure_unit, temperature_unit = self._pt_flash_display_units()
+        config = self._current_result.config.pt_flash_config if self._current_result else None
+
         # Summary table
         summary_data = [
             ("Converged", "Yes" if result.converged else "No"),
             ("Phase State", result.phase.title()),
+        ]
+
+        if config is not None:
+            summary_data.extend([
+                ("Pressure", _format_pressure(config.pressure_pa, pressure_unit)),
+                ("Temperature", _format_temperature(config.temperature_k, temperature_unit)),
+            ])
+
+        summary_data.extend([
             ("Vapor Fraction", f"{result.vapor_fraction:.6f}"),
             ("Liquid Fraction", f"{1 - result.vapor_fraction:.6f}"),
             ("Iterations", str(result.diagnostics.iterations)),
             ("Final Residual", f"{result.diagnostics.final_residual:.2e}"),
-        ]
+        ])
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -254,6 +315,7 @@ class ResultsTableWidget(QWidget):
                 f"{result.cricondentherm.temperature_k - 273.15:.2f} C, "
                 f"{result.cricondentherm.pressure_pa / 1e5:.2f} bar"
             ))
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -294,14 +356,27 @@ class ResultsTableWidget(QWidget):
         stability_value: bool,
     ) -> None:
         """Display bubble-point or dew-point results."""
+        pressure_unit, temperature_unit = self._saturation_display_units()
         summary_data = [
             ("Converged", "Yes" if result.converged else "No"),
-            (pressure_label, f"{result.pressure_pa / 1e5:.2f} bar"),
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            (pressure_label, _format_pressure(result.pressure_pa, pressure_unit)),
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
             (stability_label, "Yes" if stability_value else "No"),
             ("Iterations", str(result.iterations)),
             ("Final Residual", f"{result.residual:.2e}"),
         ]
+
+        if result.diagnostics is not None:
+            summary_data.insert(1, (
+                "Solver Status",
+                result.diagnostics.status.value.replace("_", " ").title(),
+            ))
+        summary_data.extend(self._plus_fraction_summary_rows())
+        if result.certificate is not None:
+            summary_data.append((
+                "Invariant Check",
+                "Pass" if result.certificate.passed else "Fail",
+            ))
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -378,6 +453,7 @@ class ResultsTableWidget(QWidget):
                 "Saturation Pressure",
                 f"{result.saturation_pressure_pa / 1e5:.2f} bar"
             ))
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -421,6 +497,7 @@ class ResultsTableWidget(QWidget):
             ("Converged", "Yes" if result.converged else "No"),
             ("Steps", str(len(result.steps))),
         ]
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -471,6 +548,7 @@ class ResultsTableWidget(QWidget):
             ("Initial Z", f"{result.initial_z:.4f}"),
             ("Steps", str(len(result.steps))),
         ]
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -524,6 +602,7 @@ class ResultsTableWidget(QWidget):
             ("Oil Density", f"{result.stock_tank_oil_density:.4f}"),
             ("Stages", str(len(result.stages))),
         ]
+        summary_data.extend(self._plus_fraction_summary_rows())
 
         self.summary_table.setRowCount(len(summary_data))
         for row, (prop, value) in enumerate(summary_data):
@@ -588,9 +667,17 @@ class ResultsPlotWidget(QWidget):
     Uses matplotlib for high-quality publication-ready plots.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        view_mode: str = "generic",
+    ):
         super().__init__(parent)
+        if view_mode not in {"generic", "phase_envelope_only"}:
+            raise ValueError(f"Unsupported ResultsPlotWidget view_mode: {view_mode}")
         self._current_result: Optional[RunResult] = None
+        self._view_mode = view_mode
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -685,7 +772,16 @@ class ResultsPlotWidget(QWidget):
         self.figure.clear()
         self._apply_figure_theme()
 
-        if result.pt_flash_result:
+        if self._view_mode == "phase_envelope_only":
+            if result.phase_envelope_result:
+                self._plot_phase_envelope(result.phase_envelope_result)
+            else:
+                calc_label = result.config.calculation_type.value.replace("_", " ").title()
+                self._plot_placeholder(
+                    "Phase envelope view is only populated by phase-envelope runs.\n"
+                    f"Latest result type: {calc_label}."
+                )
+        elif result.pt_flash_result:
             self._plot_pt_flash(result.pt_flash_result)
         elif result.bubble_point_result:
             self._plot_bubble_point(result.bubble_point_result)
@@ -703,6 +799,41 @@ class ResultsPlotWidget(QWidget):
             self._plot_separator(result.separator_result)
 
         self.canvas.draw()
+
+    def _saturation_pressure_unit(self) -> PressureUnit:
+        """Return the preferred saturation pressure unit."""
+        config: Optional[SaturationPointConfig] = None
+        if self._current_result is not None:
+            config = (
+                self._current_result.config.bubble_point_config
+                or self._current_result.config.dew_point_config
+            )
+        if config is None:
+            return PressureUnit.BAR
+        return config.pressure_unit
+
+    def _plot_placeholder(self, message: str) -> None:
+        """Render a neutral placeholder instead of a misleading plot."""
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.grid(False)
+        ax.text(
+            0.5,
+            0.5,
+            message,
+            color=PLOT_TEXT_COLOR,
+            ha="center",
+            va="center",
+            wrap=True,
+            transform=ax.transAxes,
+        )
+        ax.set_title("Phase Envelope")
+        self._apply_axes_theme(ax)
+        self.figure.tight_layout()
 
     def _plot_pt_flash(self, result: PTFlashResult) -> None:
         """Plot PT flash results (composition bar chart)."""
@@ -734,23 +865,46 @@ class ResultsPlotWidget(QWidget):
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(PLOT_CANVAS_COLOR)
 
+        critical_xy: tuple[float, float] | None = None
+        if result.critical_point:
+            critical_xy = (
+                result.critical_point.temperature_k - 273.15,
+                result.critical_point.pressure_pa / 1e5,
+            )
+
+        def _curve_xy(points) -> tuple[list[float], list[float]]:
+            xy = [
+                (p.temperature_k - 273.15, p.pressure_pa / 1e5)
+                for p in points
+            ]
+            if critical_xy is not None:
+                crit_t, crit_p = critical_xy
+                is_duplicate = any(
+                    abs(t - crit_t) <= 1e-9 and abs(p - crit_p) <= 1e-9
+                    for t, p in xy
+                )
+                if not is_duplicate:
+                    xy.append(critical_xy)
+                    xy.sort(key=lambda item: item[0])
+            temps = [t for t, _ in xy]
+            pressures = [p for _, p in xy]
+            return temps, pressures
+
         # Bubble curve
         if result.bubble_curve:
-            temps = [p.temperature_k - 273.15 for p in result.bubble_curve]
-            pressures = [p.pressure_pa / 1e5 for p in result.bubble_curve]
+            temps, pressures = _curve_xy(result.bubble_curve)
             ax.plot(temps, pressures, 'b-', linewidth=2, label='Bubble Point')
 
         # Dew curve
         if result.dew_curve:
-            temps = [p.temperature_k - 273.15 for p in result.dew_curve]
-            pressures = [p.pressure_pa / 1e5 for p in result.dew_curve]
+            temps, pressures = _curve_xy(result.dew_curve)
             ax.plot(temps, pressures, 'r-', linewidth=2, label='Dew Point')
 
         # Critical point
-        if result.critical_point:
+        if critical_xy is not None:
             ax.plot(
-                result.critical_point.temperature_k - 273.15,
-                result.critical_point.pressure_pa / 1e5,
+                critical_xy[0],
+                critical_xy[1],
                 'ko', markersize=10, label='Critical Point'
             )
 
@@ -801,7 +955,8 @@ class ResultsPlotWidget(QWidget):
 
         ax.set_xlabel("Component")
         ax.set_ylabel("Mole Fraction")
-        ax.set_title(f"{title} at {result.pressure_pa / 1e5:.2f} bar")
+        pressure_unit = self._saturation_pressure_unit()
+        ax.set_title(f"{title} at {_format_pressure(result.pressure_pa, pressure_unit)}")
         ax.set_xticks(x)
         ax.set_xticklabels(components, rotation=45, ha="right")
         ax.legend()

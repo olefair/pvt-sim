@@ -1,0 +1,7 @@
+interface:
+  display_name: "Advise"
+  short_description: "Decision assistance for project work."
+  default_prompt: "Use $advise to recommend the best next step based on the current project context."
+
+policy:
+  allow_implicit_invocation: false

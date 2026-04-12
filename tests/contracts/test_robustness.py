@@ -345,32 +345,28 @@ class TestBubbleDewPointConvergence:
         assert isinstance(result.history.n_iterations, int)
 
     def test_bubble_point_max_iters_with_very_low_limit(self, binary_mixture):
-        """Bubble point with very low max_iterations may return MAX_ITERS status."""
+        """Bubble point must honor an exhausted iteration budget."""
         comp_list, eos, z = binary_mixture
 
-        # Use extremely low max_iterations to potentially trigger MAX_ITERS
-        result = calculate_bubble_point(280, z, comp_list, eos, max_iterations=2)
+        # This case normally needs multiple iterations, so a budget of 2 must stop early.
+        result = calculate_bubble_point(250, z, comp_list, eos, max_iterations=2)
 
-        # Should return a result (not crash) with appropriate status
         assert result is not None
-        assert result.status in (
-            ConvergenceStatus.CONVERGED,
-            ConvergenceStatus.MAX_ITERS,
-        )
+        assert result.status == ConvergenceStatus.MAX_ITERS
+        assert result.iterations <= 2
+        assert result.converged is False
 
     def test_dew_point_max_iters_with_very_low_limit(self, binary_mixture):
-        """Dew point with very low max_iterations may return MAX_ITERS status."""
+        """Dew point must honor an exhausted iteration budget."""
         comp_list, eos, z = binary_mixture
 
-        # Use extremely low max_iterations
+        # This case normally needs multiple iterations, so a budget of 2 must stop early.
         result = calculate_dew_point(280, z, comp_list, eos, max_iterations=2)
 
-        # Should return a result (not crash) with appropriate status
         assert result is not None
-        assert result.status in (
-            ConvergenceStatus.CONVERGED,
-            ConvergenceStatus.MAX_ITERS,
-        )
+        assert result.status == ConvergenceStatus.MAX_ITERS
+        assert result.iterations <= 2
+        assert result.converged is False
 
     def test_bubble_point_history_has_residuals(self, binary_mixture):
         """Bubble point history should track residuals."""

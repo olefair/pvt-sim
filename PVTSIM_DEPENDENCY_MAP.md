@@ -142,6 +142,112 @@ For each active slice, include:
   last structural update:
   - 2026-04-11
 
+- directive / task name: saturation validation lane unification
+  owner / lane: Codex in current thermo-validation thread
+  touched repo surfaces:
+  - `src/pvtcore/flash/bubble_point.py`
+  - `src/pvtcore/flash/dew_point.py`
+  - `src/pvtcore/validation/external_corpus.py`
+  - `tests/validation/test_saturation_equation_benchmarks.py`
+  - `tests/validation/test_plus_fraction_dew_characterization.py`
+  - `tests/validation/test_plus_fraction_bubble_characterization.py`
+  - `tests/validation/test_phase_envelope_runtime_matrix.py`
+  - `tests/validation/test_external_corpus_schema.py`
+  - `tests/validation/test_vs_mi_pvt.py`
+  - `tests/validation/mi_pvt/README.md`
+  - `docs/validation/bubble_point_validation_matrix.md`
+  - `docs/validation/dew_point_validation_matrix.md`
+  - `docs/validation/phase_envelope_validation_matrix.md`
+  - `docs/validation/mi_pvt_phase_envelope_roster.md`
+  - `docs/validation_plan.md`
+  - `src/pvtapp/job_runner.py`
+  - `src/pvtapp/main.py`
+  - `src/pvtapp/schemas.py`
+  - `src/pvtapp/widgets/composition_input.py`
+  - `src/pvtapp/widgets/conditions_input.py`
+  - `src/pvtapp/widgets/results_view.py`
+  - `src/pvtapp/widgets/text_output_view.py`
+  - `src/pvtapp/widgets/diagnostics_view.py`
+  - `tests/unit/test_pvtapp_conditions_input.py`
+  - `tests/unit/test_pvtapp_desktop_contract.py`
+  - `tests/unit/test_pvtapp_runtime_contract.py`
+  - `tests/unit/test_pvtapp_remaining_workflows.py`
+  - `tests/unit/test_pvtapp_zero_fraction_duplicates.py`
+  - `tests/unit/test_saturation.py`
+  upstream dependencies:
+  - the 2026-04-11 desktop-contract baseline remains the upstream runtime shell baseline for any app-surface changes
+  - bubble-point and dew-point authority, robustness, and GUI honesty are treated as one saturation lane because the solver methods and failure semantics are intentionally mirrored
+  - external-data ingestion and corpus acquisition remain required before full physical-accuracy signoff
+  blocked_by / blockers:
+  - no measured external pure-component saturation anchors have been entered yet
+  - no measured external rich-fluid `C1`-`C6` + `C7+` bubble/dew anchors have been entered yet
+  - MI-PVT or literature envelope overlays for the current runtime matrix roster are still secondary/manual, not fully ingested
+  status:
+  - handoff-ready; internal solver/runtime and practical family coverage established, external-authority lane still open
+  coordination rule:
+  - do not split bubble and dew saturation validation into separate concurrent slices unless the controller records a file-level partition first
+  - if app result surfaces are touched, keep the runtime semantics aligned with the same certificates and failure states exposed by the thermo layer
+  last structural update:
+  - 2026-04-12
+
+- directive / task name: runtime surface consolidation + assignment validation expansion
+  owner / lane: Ole + Codex on `codex/handoff-external-validation`
+  touched repo surfaces:
+  - `AGENTS.md`
+  - `README.md`
+  - `docs/development.md`
+  - `docs/runtime_surface_standard.md`
+  - `docs/runtime_surface_consolidation_blueprint.md`
+  - `docs/validation/`
+  - `examples/pete665_assignment_case.json`
+  - `scripts/audit_component_aliases.py`
+  - `scripts/debug_phase_envelope_roots.py`
+  - `scripts/run_pete665_assignment.py`
+  - `scripts/validate_modules.py`
+  - `src/pvtapp/assignment_case.py`
+  - `src/pvtapp/component_catalog.py`
+  - `src/pvtapp/job_runner.py`
+  - `src/pvtapp/main.py`
+  - `src/pvtapp/plus_fraction_policy.py`
+  - `src/pvtapp/schemas.py`
+  - `src/pvtapp/widgets/`
+  - `src/pvtcore/envelope/`
+  - `src/pvtcore/experiments/cce.py`
+  - `src/pvtcore/flash/bubble_point.py`
+  - `src/pvtcore/flash/dew_point.py`
+  - `src/pvtcore/io/data_io.py`
+  - `src/pvtcore/models/component.py`
+  - `src/pvtcore/validation/`
+  - `tests/unit/test_envelope_*`
+  - `tests/unit/test_pete665_assignment.py`
+  - `tests/unit/test_pvtapp_*`
+  - `tests/unit/test_saturation.py`
+  - `tests/unit/test_validation_backend_registry.py`
+  - `tests/validation/mi_pvt/`
+  - `tests/validation/prode/`
+  - `tests/validation/thermopack/`
+  - `tests/validation/test_phase_envelope_release_gates.py`
+  - `tests/validation/test_phase_envelope_runtime_matrix.py`
+  - `tests/validation/test_plus_fraction_bubble_characterization.py`
+  - `tests/validation/test_plus_fraction_dew_characterization.py`
+  - `tests/validation/test_saturation_equation_benchmarks.py`
+  - `tests/validation/test_vs_mi_pvt.py`
+  - `tests/validation/test_vs_prode.py`
+  - `tests/validation/test_vs_thermopack.py`
+  upstream dependencies:
+  - the 2026-04-11 desktop-contract baseline remains the app/runtime shell baseline
+  - the 2026-04-12 saturation-validation lane remains upstream for bubble/dew authority and external-corpus intake
+  - runtime-surface honesty must stay aligned with `docs/runtime_surface_standard.md`
+  blocked_by / blockers:
+  - a fresh targeted verification pass is still required before declaring the branch clean
+  - full-suite status remains intentionally unknown unless explicitly requested
+  status:
+  - dirty-worktree cleanup in progress; preparing one coherent checkpoint commit
+  coordination rule:
+  - do not run overlapping edits across `src/pvtapp/`, `src/pvtcore/flash/`, `src/pvtcore/envelope/`, `src/pvtcore/validation/`, and validation docs until this cleanup checkpoint lands
+  last structural update:
+  - 2026-04-12
+
 ## Dependency refresh protocol
 
 Refresh this file immediately when any of the following happens:
@@ -176,3 +282,5 @@ Do not run concurrent delegated work against the same repo surface unless the co
 - 2026-04-09: Recorded the active local pvtapp + packaging slice and flagged shared-surface coordination.
 - 2026-04-11: Expanded the active local slice to include `job_runner.py`, `capabilities.py`, and desktop contract alignment work.
 - 2026-04-11: Promoted the validated desktop-contract slice to the canonical baseline on `main`.
+- 2026-04-12: Added the unified saturation-validation lane so bubble-point and dew-point authority, robustness, and GUI honesty stay in one controlled surface.
+- 2026-04-12: Added the runtime-surface consolidation + assignment validation expansion slice to capture the current branch scope while the dirty worktree is being cleaned for commit.

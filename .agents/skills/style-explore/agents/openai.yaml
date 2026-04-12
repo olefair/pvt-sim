@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Explore"
+  short_description: "Stage 1 of the cognitive style chain: divergent exploration. Activates wide-open, assumption-challenging, n..."
+  default_prompt: "Use $style-explore to investigate the problem space before converging on a plan."
+
+policy:
+  allow_implicit_invocation: false

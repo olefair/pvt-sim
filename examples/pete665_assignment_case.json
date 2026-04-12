@@ -1,0 +1,81 @@
+{
+  "name": "PETE 665 assignment baseline",
+  "source_document": "INDIVIDUAL PROJECT PETE665 Spring 2026_UPDATED_APRIL 1.docx",
+  "notes": [
+    "Uses the assignment feed exactly as listed in the project document.",
+    "BIPs are forced to zero for the baseline run path.",
+    "The heavy pseudo-component includes only the properties supplied by the assignment; supporting Tb and Vc values are derived at runtime to satisfy the current Component contract."
+  ],
+  "temperature_by_initials_f": {
+    "TLA": 127.8,
+    "TAS": 115.5,
+    "TEM": 120.5,
+    "TJE": 119.5,
+    "TJP": 129.7,
+    "TOF": 128.5,
+    "THI": 132.8,
+    "TGA": 116.7,
+    "TANS": 125.0
+  },
+  "fluid": {
+    "basis": "mole",
+    "components": [
+      {
+        "id": "C1",
+        "z": 0.19962
+      },
+      {
+        "id": "C2",
+        "z": 0.10010
+      },
+      {
+        "id": "C3",
+        "z": 0.18579
+      },
+      {
+        "id": "nC4",
+        "z": 0.09036
+      },
+      {
+        "id": "nC5",
+        "z": 0.18851
+      },
+      {
+        "id": "PSEUDO_PLUS",
+        "z": 0.23563
+      }
+    ],
+    "inline_components": {
+      "PSEUDO_PLUS": {
+        "name": "PSEUDO+",
+        "formula": "PSEUDO+",
+        "mw_g_per_mol": 86.177,
+        "tc_value": 453.65,
+        "tc_unit": "F",
+        "pc_value": 436.293,
+        "pc_unit": "psia",
+        "omega": 0.296
+      }
+    }
+  },
+  "targets": {
+    "bips": "zero",
+    "saturation_type": "bubble_point",
+    "cce_pressures": {
+      "values": [
+        1500.0,
+        1250.0,
+        1000.0
+      ],
+      "unit": "psia"
+    },
+    "dl_pressures": {
+      "values": [
+        500.0,
+        300.0,
+        100.0
+      ],
+      "unit": "psia"
+    }
+  }
+}

@@ -9,6 +9,19 @@ Core thermodynamics + PVT workflows:
 
 This repo uses a **src-layout** Python package: `pvtcore`.
 
+## Canonical Documentation
+
+Durable simulator and developer context lives in normal repo docs:
+
+- `docs/architecture.md`
+- `docs/development.md`
+- `docs/runtime_surface_standard.md`
+- `docs/technical_notes.md`
+- `docs/numerical_methods.md`
+- `docs/input_schema.md`
+- `docs/units.md`
+- `docs/validation_plan.md`
+
 ## Windows quick start
 
 This simulator is intended to run natively on Windows. If you are launching it locally, use the PowerShell route first.
@@ -62,10 +75,19 @@ python -m pip install -U pip
 python -m pip install -e '.[dev]'
 ```
 
-This `dev` extra is headless developer tooling. If you also want to launch the desktop app or run GUI/widget tests, install:
+This `dev` extra includes the headless developer tooling plus the approved
+permissive validation backends (`thermo`, `thermopack`). If you also want to
+launch the desktop app or run GUI/widget tests, install:
 
 ```bash
 python -m pip install -e '.[gui,dev]'
+```
+
+For a full local validation surface on Windows, the intended reset/install
+command is:
+
+```powershell
+python.exe -m pip install -e .[full,dev]
 ```
 
 Run tests:

@@ -17,18 +17,26 @@ except ModuleNotFoundError:  # pragma: no cover - environment dependent
     QStyleOptionViewItem = None  # type: ignore[assignment]
     Qt = None  # type: ignore[assignment]
 
-from pvtapp.schemas import FluidComposition
+from pvtapp.schemas import CalculationType, FluidComposition, PlusFractionCharacterizationPreset
 
 try:
+    from pvtapp.component_catalog import STANDARD_COMPONENTS
     from pvtapp.widgets.composition_input import (
         COMPONENT_DROPDOWN_BUTTON_WIDTH,
+        HEAVY_MODE_INLINE,
+        HEAVY_MODE_PLUS,
         MOLE_FRACTION_COLUMN_MIN_WIDTH,
         CompositionInputWidget,
     )
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
+    STANDARD_COMPONENTS = None  # type: ignore[assignment]
     COMPONENT_DROPDOWN_BUTTON_WIDTH = None  # type: ignore[assignment]
+    HEAVY_MODE_INLINE = None  # type: ignore[assignment]
+    HEAVY_MODE_PLUS = None  # type: ignore[assignment]
     MOLE_FRACTION_COLUMN_MIN_WIDTH = None  # type: ignore[assignment]
     CompositionInputWidget = None  # type: ignore[assignment]
+
+from pvtcore.models import resolve_component_id
 
 
 @pytest.fixture(scope="module")
@@ -52,7 +60,7 @@ def test_zero_fraction_duplicate_placeholder_rows_are_ignored_in_runtime_validat
     widget.table.setRowCount(0)
 
     widget._add_component_row("C1", 0.7)
-    widget._add_component_row("C7+", 0.3)
+    widget._add_component_row("C7", 0.3)
     widget._add_component_row("C1", 0.0)
 
     is_valid, message = widget.validate()
@@ -61,7 +69,7 @@ def test_zero_fraction_duplicate_placeholder_rows_are_ignored_in_runtime_validat
 
     composition = widget.get_composition()
     assert isinstance(composition, FluidComposition)
-    assert [entry.component_id for entry in composition.components] == ["C1", "C7+"]
+    assert [entry.component_id for entry in composition.components] == ["C1", "C7"]
     assert [entry.mole_fraction for entry in composition.components] == pytest.approx([0.7, 0.3])
 
 
@@ -75,6 +83,226 @@ def test_positive_fraction_duplicates_still_fail_validation(app: QApplication) -
     is_valid, message = widget.validate()
     assert is_valid is False
     assert "Duplicate component IDs" in message
+
+
+def test_alias_duplicates_fail_after_canonical_resolution(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+
+    widget._add_component_row("C4", 0.5)
+    widget._add_component_row("nC4", 0.5)
+
+    is_valid, message = widget.validate()
+    assert is_valid is False
+    assert "Duplicate component IDs after alias resolution" in message
+    assert "C4" in message
+    assert "nC4" in message
+
+
+def test_unknown_component_ids_fail_widget_validation(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+
+    widget._add_component_row("C7+", 1.0)
+
+    is_valid, message = widget.validate()
+    assert is_valid is False
+    assert "not found in database" in message
+
+
+def test_plus_fraction_mode_contributes_to_total_and_returns_plus_fraction_schema(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.7)
+    widget.set_calculation_type_context(CalculationType.BUBBLE_POINT)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_PLUS))
+    widget.plus_z_edit.setText("0.3")
+    widget.plus_mw_edit.setText("150.0")
+    widget.plus_sg_edit.setText("0.82")
+
+    is_valid, message = widget.validate()
+    assert is_valid is True
+    assert message == ""
+
+    composition = widget.get_composition()
+    assert isinstance(composition, FluidComposition)
+    assert composition.plus_fraction is not None
+    assert composition.plus_fraction.z_plus == pytest.approx(0.3)
+    assert composition.plus_fraction.mw_plus_g_per_mol == pytest.approx(150.0)
+    assert composition.plus_fraction.sg_plus_60f == pytest.approx(0.82)
+    assert composition.plus_fraction.characterization_preset.value == "auto"
+    assert composition.plus_fraction.resolved_characterization_preset.value == "volatile_oil"
+    assert composition.plus_fraction.split_mw_model == "table"
+    assert composition.plus_fraction.max_carbon_number == 20
+    assert composition.plus_fraction.lumping_enabled is True
+    assert composition.plus_fraction.lumping_n_groups == 6
+
+
+def test_plus_fraction_mode_round_trips_advanced_characterization_fields(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.7333)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_PLUS))
+    widget.plus_characterization_preset.setCurrentIndex(
+        widget.plus_characterization_preset.findData(PlusFractionCharacterizationPreset.MANUAL)
+    )
+    widget.plus_label_edit.setText("C7+")
+    widget.plus_cut_start_spin.setValue(7)
+    widget.plus_z_edit.setText("0.2667")
+    widget.plus_mw_edit.setText("119.7876")
+    widget.plus_sg_edit.setText("0.82")
+    widget.plus_end_spin.setValue(20)
+    widget.plus_split_mw_model.setCurrentText("table")
+    widget.plus_lumping_enabled.setChecked(True)
+    widget.plus_lumping_groups_spin.setValue(6)
+
+    composition = widget.get_composition()
+
+    assert isinstance(composition, FluidComposition)
+    assert composition.plus_fraction is not None
+    assert composition.plus_fraction.characterization_preset.value == "manual"
+    assert composition.plus_fraction.resolved_characterization_preset is None
+    assert composition.plus_fraction.max_carbon_number == 20
+    assert composition.plus_fraction.split_mw_model == "table"
+    assert composition.plus_fraction.lumping_enabled is True
+    assert composition.plus_fraction.lumping_n_groups == 6
+
+    reloaded = CompositionInputWidget()
+    reloaded.set_composition(composition)
+
+    assert reloaded.heavy_mode.currentData() == HEAVY_MODE_PLUS
+    assert PlusFractionCharacterizationPreset(reloaded.plus_characterization_preset.currentData()).value == "manual"
+    assert reloaded.plus_split_mw_model.currentText() == "table"
+    assert reloaded.plus_lumping_enabled.isChecked() is True
+    assert reloaded.plus_lumping_groups_spin.value() == 6
+    assert reloaded.plus_lumping_groups_spin.isEnabled() is True
+
+
+def test_auto_plus_fraction_policy_tracks_workflow_context(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("N2", 0.0060)
+    widget._add_component_row("CO2", 0.0250)
+    widget._add_component_row("C1", 0.6400)
+    widget._add_component_row("C2", 0.1100)
+    widget._add_component_row("C3", 0.0750)
+    widget._add_component_row("iC4", 0.0250)
+    widget._add_component_row("C4", 0.0250)
+    widget._add_component_row("iC5", 0.0180)
+    widget._add_component_row("C5", 0.0160)
+    widget._add_component_row("C6", 0.0140)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_PLUS))
+    widget.plus_z_edit.setText("0.046")
+    widget.plus_mw_edit.setText("128.25512173913043")
+    widget.plus_sg_edit.setText("0.7571304347826087")
+
+    widget.set_calculation_type_context(CalculationType.DEW_POINT)
+    composition = widget.get_composition()
+
+    assert composition is not None
+    assert composition.plus_fraction is not None
+    assert composition.plus_fraction.resolved_characterization_preset.value == "gas_condensate"
+    assert composition.plus_fraction.split_mw_model == "paraffin"
+    assert composition.plus_fraction.max_carbon_number == 18
+    assert composition.plus_fraction.lumping_n_groups == 2
+
+
+def test_inline_pseudo_mode_returns_inline_component_schema(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.6)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_INLINE))
+    widget.inline_component_id_edit.setText("PSEUDO_PLUS")
+    widget.inline_name_edit.setText("PSEUDO+")
+    widget.inline_formula_edit.setText("PSEUDO+")
+    widget.inline_z_edit.setText("0.4")
+    widget.inline_mw_edit.setText("150.0")
+    widget.inline_tc_edit.setText("520.0")
+    widget.inline_pc_edit.setText("3500000.0")
+    widget.inline_omega_edit.setText("0.45")
+
+    is_valid, message = widget.validate()
+    assert is_valid is True
+    assert message == ""
+
+    composition = widget.get_composition()
+    assert isinstance(composition, FluidComposition)
+    assert [entry.component_id for entry in composition.components] == ["C1", "PSEUDO_PLUS"]
+    assert [entry.mole_fraction for entry in composition.components] == pytest.approx([0.6, 0.4])
+    assert len(composition.inline_components) == 1
+    spec = composition.inline_components[0]
+    assert spec.component_id == "PSEUDO_PLUS"
+    assert spec.molecular_weight_g_per_mol == pytest.approx(150.0)
+    assert spec.critical_temperature_k == pytest.approx(520.0)
+    assert spec.critical_pressure_pa == pytest.approx(3.5e6)
+
+
+def test_inline_pseudo_ids_cannot_conflict_with_database_components(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.6)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_INLINE))
+    widget.inline_component_id_edit.setText("nC4")
+    widget.inline_name_edit.setText("bad pseudo")
+    widget.inline_formula_edit.setText("bad pseudo")
+    widget.inline_z_edit.setText("0.4")
+    widget.inline_mw_edit.setText("150.0")
+    widget.inline_tc_edit.setText("520.0")
+    widget.inline_pc_edit.setText("3500000.0")
+    widget.inline_omega_edit.setText("0.45")
+
+    is_valid, message = widget.validate()
+    assert is_valid is False
+    assert "conflicts with a database component or alias" in message
+
+
+def test_normalize_feed_scales_inline_pseudo_fraction(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.7)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_INLINE))
+    widget.inline_component_id_edit.setText("PSEUDO_PLUS")
+    widget.inline_name_edit.setText("PSEUDO+")
+    widget.inline_formula_edit.setText("PSEUDO+")
+    widget.inline_z_edit.setText("0.4")
+    widget.inline_mw_edit.setText("150.0")
+    widget.inline_tc_edit.setText("520.0")
+    widget.inline_pc_edit.setText("3500000.0")
+    widget.inline_omega_edit.setText("0.45")
+
+    widget._normalize()
+
+    composition = widget.get_composition()
+    assert composition is not None
+    assert [entry.component_id for entry in composition.components] == ["C1", "PSEUDO_PLUS"]
+    assert [entry.mole_fraction for entry in composition.components] == pytest.approx(
+        [0.636364, 0.363636],
+        abs=1e-6,
+    )
+
+
+def test_normalize_feed_scales_plus_fraction(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.8)
+    widget.heavy_mode.setCurrentIndex(widget.heavy_mode.findData(HEAVY_MODE_PLUS))
+    widget.plus_z_edit.setText("0.4")
+    widget.plus_mw_edit.setText("150.0")
+    widget.plus_sg_edit.setText("0.82")
+
+    widget._normalize()
+
+    composition = widget.get_composition()
+    assert composition is not None
+    assert composition.components[0].mole_fraction == pytest.approx(0.666667, abs=1e-6)
+    assert composition.plus_fraction is not None
+    assert composition.plus_fraction.z_plus == pytest.approx(0.333333, abs=1e-6)
+
+
+def test_standard_component_picker_only_lists_resolvable_components() -> None:
+    assert STANDARD_COMPONENTS is not None
+    for component_id in STANDARD_COMPONENTS:
+        assert resolve_component_id(component_id)
 
 
 def test_component_table_grows_to_show_new_rows_without_internal_scroll(app: QApplication) -> None:

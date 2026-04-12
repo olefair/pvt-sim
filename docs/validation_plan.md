@@ -2,11 +2,12 @@
 
 ## Philosophy
 
-Every numerical result must be traceable to either:
-1. A published experimental dataset, or
-2. Output from validated commercial software (MI PVT)
+Every numerical result must be traceable to one of:
+1. A published experimental dataset,
+2. An independent reference solve of the governing equations, or
+3. A secondary commercial-software cross-check for graphical surfaces such as phase envelopes
 
-"It runs without crashing" is not validation. "It matches experiment to within measurement uncertainty" is validation.
+"It runs without crashing" is not validation. "It matches experiment, or it matches an independent equation-based reference where that is the correct authority, and any remaining commercial cross-checks are clearly secondary" is validation.
 
 ---
 
@@ -29,9 +30,9 @@ Verify module interactions work correctly.
 ### Level 3: Regression Tests
 Verify results match validated reference calculations.
 
-**Scope:** Full simulations against published data
+**Scope:** Full simulations against published data or independent reference solves
 **Frequency:** Run before releases
-**Pass Criteria:** Match experimental data within measurement uncertainty
+**Pass Criteria:** Match external data within measurement uncertainty, or match independent reference equations within numerical tolerance
 
 ---
 
@@ -103,7 +104,7 @@ Binary system at specified conditions:
 
 ### 5. Phase Envelope
 
-**Validation Source:** MI PVT output for identical composition
+**Validation Source:** MI PVT output for identical composition, used as a secondary graphical cross-check
 
 Test fluid: Homework composition (from course materials)
 
@@ -113,7 +114,28 @@ Test fluid: Homework composition (from course materials)
 | Cricondentherm | TBD | TBD | | | < 1°F |
 | Critical | TBD | TBD | | | < 1% |
 
-**Test:** Generate phase envelope, compare key points.
+**Test:** Generate phase envelope, compare key points and overall graphical behavior.
+**Boundary:** Do not use MI PVT as the authoritative scalar baseline for bubble-point or dew-point pressures.
+**Detailed signoff matrix:** `docs/validation/phase_envelope_validation_matrix.md`
+**Recommended MI PVT case roster:** `docs/validation/mi_pvt_phase_envelope_roster.md`
+**Optional automated ThermoPack lane:** `tests/validation/thermopack/`
+**External backend policy:** `docs/validation/external_validation_engine.md`
+
+Course-derived interpretation for this repo:
+
+- `VLE class exercise March 3, 2026`: same-equation scalar bubble/dew checks. Agreement should be at the rounding level, not "within a few percent."
+- `Pb and Pd calculation class exercise_PR EOS_March 17, 2026.xlsx`: same-equation PR-EOS checks with explicit `kij`. Agreement should again be at the rounding level.
+- `Use the MI PVT oil and simulate the DL_CALCULATIONS_March 31, 2026`: workflow-level MI PVT cross-check for DL-style flash outputs, not an authoritative scalar baseline for saturation or envelope pressures.
+
+Commercial/software cross-check policy:
+
+- MI PVT remains a manual secondary surface for course-compatible cases.
+- The active automated external engine is limited to permissive backends under
+  `docs/validation/external_validation_engine.md`.
+- ThermoPack is the primary external EOS/VLE comparison lane under
+  `tests/validation/thermopack/`.
+- These external lanes do not replace the repo's equation-based solver
+  correctness tests.
 
 ---
 
@@ -210,35 +232,35 @@ tests/
 │   ├── test_cubic_solver.py
 │   ├── test_rachford_rice.py
 │   └── ...
-├── integration/
-│   ├── test_flash_workflow.py
-│   └── ...
-├── regression/
+├── validation/
+│   ├── test_saturation_equation_benchmarks.py
+│   ├── test_external_corpus_schema.py
 │   ├── test_vs_mi_pvt.py
-│   ├── test_vs_experiment.py
+│   ├── external_data/
+│   │   ├── acquisition_manifest.json
+│   │   ├── cases/
+│   │   └── templates/
+│   ├── mi_pvt/
+│   │   └── cases/
 │   └── ...
-└── data/
-    ├── experimental/
-    │   ├── c1_nc4_vle.csv
-    │   └── ...
-    ├── mi_pvt_reference/
-    │   └── homework_fluid_envelope.csv
-    └── nist/
-        └── pure_component_props.json
 ```
 
 ### Data Format
-Experimental data stored as CSV with metadata header:
-```csv
-# Source: Experiment (1985), Table 2
-# System: Methane-nButane
-# Temperature: 311.0 K
-# Units: P(bar), x(mole fraction), y(mole fraction)
-P,x_C1,y_C1
-10.0,0.0234,0.892
-20.0,0.0523,0.935
-...
-```
+
+External physical-accuracy anchors now have a repo-local JSON intake surface:
+
+- schema/loader: `src/pvtcore/validation/external_corpus.py`
+- planned acquisition backlog: `tests/validation/external_data/acquisition_manifest.json`
+- ready-case templates: `tests/validation/external_data/templates/`
+
+Use one of the supported JSON shapes instead of ad hoc CSV or one-off test data:
+
+- `pure_component_saturation`
+- `literature_vle_tieline`
+- `lab_c7plus_saturation`
+
+This keeps the equation-authority lane, external physical-accuracy lane, and
+MI-PVT cross-check lane separated cleanly.
 
 ---
 

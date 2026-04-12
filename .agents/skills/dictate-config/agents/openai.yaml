@@ -1,0 +1,7 @@
+interface:
+  display_name: "Dictate Config"
+  short_description: "Manage and update the dictate tool's configuration — use this skill whenever the user mentions any dictate..."
+  default_prompt: "Use $dictate-config to update the dictate transcription configuration."
+
+policy:
+  allow_implicit_invocation: false

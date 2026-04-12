@@ -42,6 +42,19 @@ listings, `git diff` or `git log` when available, ordinary edit tools, and the
 project's real test commands. Never stop or fail merely because a repo MCP
 server is unavailable.
 
+## Workspace Docs Vault
+
+When this skill reads from or writes to `docs/`, treat that directory as the
+shared Obsidian vault rooted at `C:\Users\olefa\dev\pete-workspace\docs`, not
+as a repo-local `docs/` folder inside an individual project repo or uploaded
+snapshot. Treat YAML frontmatter, `[[wikilinks]]`, and backlink-oriented body
+linking as part of the operating contract, not optional formatting.
+When the current workspace uses the Pete docs vault, also follow
+`docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`,
+`docs/reference/workspace/reference_generated-document-routing_v1_2026-03-17.md`,
+and
+`docs/reference/workspace/reference_vault-context-intake-and-link-strengthening_v1_2026-03-19.md`.
+
 ## Vault Output Contract
 
 When an investigation should be persisted as a durable note in the Pete

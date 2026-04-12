@@ -25,6 +25,13 @@ Autonomous implementation engine: take an uploaded implementation blueprint (fea
 **Phase 2**: Build correctly through disciplined edit-test-fix iteration.
 **Phase 3**: Hand off to the auditor, remediate from the written audit artifact, and do not call the blueprint complete until audit PASS.
 
+**Workspace docs vault:** In this workspace, `docs/` means the shared
+Obsidian vault rooted at `C:\Users\olefa\dev\pete-workspace\docs`, not a
+repo-local `docs/` folder inside an individual project repo or uploaded
+snapshot. Treat YAML frontmatter, `[[wikilinks]]`, and backlink-oriented body
+linking as part of the operating contract whenever reading or writing notes
+there.
+
 **Pete vault rule:** When the current workspace uses the Pete docs vault, read and follow `docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`, `docs/reference/workspace/reference_generated-document-routing_v1_2026-03-17.md`, `docs/reference/workspace/reference_workspace-conventions.md`, and `docs/reference/workspace/reference_vault-context-intake-and-link-strengthening_v1_2026-03-19.md`. Use the shared intake and backlink workflow from the last note for `links`, `related`, lineage fields, body wikilinks, and backlink fallback search when preloading blueprint context or emitting vault-native audit artifacts. The blueprint-specific rules below are deltas, not substitutes.
 
 ## MCP-Free Execution Rule

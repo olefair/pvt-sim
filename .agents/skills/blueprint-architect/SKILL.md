@@ -22,6 +22,13 @@ Repository analysis and blueprint generation engine: deeply understand a codebas
 
 **Principle:** You cannot design what you do not understand, and you cannot understand what you have not measured. Every claim must be backed by tool output; every risk must have data; every blueprint section must trace to something you read.
 
+**Workspace docs vault:** In this workspace, `docs/` means the shared
+Obsidian vault rooted at `C:\Users\olefa\dev\pete-workspace\docs`, not a
+repo-local `docs/` folder inside an individual project repo or uploaded
+snapshot. Treat YAML frontmatter, `[[wikilinks]]`, and backlink-oriented body
+linking as part of the operating contract whenever reading or writing notes
+there.
+
 **Pete vault rule:** When the current workspace uses the Pete docs vault, read and follow `docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`, `docs/reference/workspace/reference_generated-document-routing_v1_2026-03-17.md`, `docs/reference/workspace/reference_workspace-conventions.md`, and `docs/reference/workspace/reference_vault-context-intake-and-link-strengthening_v1_2026-03-19.md`. Use the shared intake and backlink workflow from the last note for `links`, `related`, lineage fields, body wikilinks, and backlink fallback search when reading or emitting blueprint notes. The blueprint-specific rules below are deltas, not substitutes.
 
 ## MCP-Free Execution Rule
@@ -149,7 +156,7 @@ Do not leave naming or placement implicit. New blueprints must use canonical low
 **Step 5d — Render canonical blueprint:** Write the canonical blueprint note
 manually using the required metadata above plus title, goal, repo anchors, and
 ordered milestones. Use the derived vault path
-`docs/blueprints/<implementer>/<project>/blueprints_<slug>.md` when writing to
+`docs/blueprints/<implementer>/<project>/blueprint_<slug>.md` when writing to
 the Pete docs vault. Do not invent alternate blueprint directories, filenames,
 or frontmatter shapes.
 

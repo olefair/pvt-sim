@@ -1,5 +1,19 @@
 # PVT-SIM Architecture
 
+Simulator architecture belongs in this docs set, not in repo-root agent
+orientation files.
+
+## Canonical Companion Docs
+
+- `docs/development.md` for stack, coding conventions, and error-handling
+  expectations
+- `docs/runtime_surface_standard.md` for the canonical app/runtime parity rule
+- `docs/technical_notes.md` for equations and thermo dependency ordering
+- `docs/numerical_methods.md` for solver policy and convergence rules
+- `docs/input_schema.md` for fluid/config contracts
+- `docs/units.md` for canonical internal units
+- `docs/validation_plan.md` for validation targets and strategy
+
 ## System Overview
 
 PVT-SIM is a modular phase behavior simulator designed for both standalone use and integration into larger systems. The architecture separates concerns into distinct layers:

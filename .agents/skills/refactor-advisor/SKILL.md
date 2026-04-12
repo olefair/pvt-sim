@@ -43,14 +43,27 @@ listings, `git diff` or `git log` when available, ordinary edit tools, and the
 project's real test commands. Never stop or fail merely because a repo MCP
 server is unavailable.
 
+## Workspace Docs Vault
+
+When this skill reads from or writes to `docs/`, treat that directory as the
+shared Obsidian vault rooted at `C:\Users\olefa\dev\pete-workspace\docs`, not
+as a repo-local `docs/` folder inside an individual project repo or uploaded
+snapshot. Treat YAML frontmatter, `[[wikilinks]]`, and backlink-oriented body
+linking as part of the operating contract, not optional formatting.
+When the current workspace uses the Pete docs vault, also follow
+`docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`,
+`docs/reference/workspace/reference_generated-document-routing_v1_2026-03-17.md`,
+and
+`docs/reference/workspace/reference_vault-context-intake-and-link-strengthening_v1_2026-03-19.md`.
+
 ## Vault Output Contract
 
 Broad refactor strategies that coordinate multiple child blueprints belong
 in the plan family. Narrow single-scope refactors should become blueprints
 instead of faux plans.
 
-- Default path: `docs/plans/<project>/plans_<slug>.md`
-- Workspace path: `docs/plans/workspace/plans_<slug>.md`
+- Default path: `docs/plans/<project>/plan_<slug>.md`
+- Workspace path: `docs/plans/workspace/plan_<slug>.md`
 - Template family: `docs/templates/template_plan-canonical_v3_2026-03-17.md`
 - `category: refactor`
 - Required canonical plan fields still apply: `project`, `repos`, `status`, `created`, `updated`, `links`, `related`, `external_links`, `child_plans`, and `child_blueprints`

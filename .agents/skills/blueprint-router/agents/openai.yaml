@@ -1,0 +1,7 @@
+interface:
+  display_name: "Blueprint Router"
+  short_description: "Find an existing canonical blueprint or generate a compact intake brief for one."
+  default_prompt: "Route this implementation request to an existing blueprint or generate a blueprint intake brief."
+
+policy:
+  allow_implicit_invocation: false

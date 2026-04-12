@@ -7,10 +7,12 @@ reference data to ensure database accuracy.
 import pytest
 from pathlib import Path
 from pvtcore.models.component import (
+    build_component_alias_index,
     Component,
-    load_components,
     get_component,
     get_components_cached,
+    load_components,
+    resolve_component_id,
 )
 
 
@@ -371,10 +373,31 @@ class TestComponentDataValidation:
         assert methane.name == 'Methane'
         assert methane.formula == 'CH4'
 
+    def test_get_component_accepts_alias(self):
+        """Test that aliases resolve to the canonical component."""
+        n_butane = get_component('nC4')
+        assert n_butane.id == 'C4'
+        assert n_butane.name == 'n-Butane'
+
     def test_get_component_invalid_id(self):
         """Test that get_component() raises KeyError for invalid ID."""
         with pytest.raises(KeyError):
             get_component('INVALID')
+
+    def test_resolve_component_id_accepts_aliases_names_and_formulas(self):
+        """Test the canonical component resolver."""
+        components = load_components()
+        assert resolve_component_id('nC4', components) == 'C4'
+        assert resolve_component_id('n-pentane', components) == 'C5'
+        assert resolve_component_id('methane', components) == 'C1'
+        assert resolve_component_id('CH4', components) == 'C1'
+
+    def test_component_alias_index_contains_expected_aliases(self):
+        """Test the alias index generated from the component database."""
+        alias_index = build_component_alias_index()
+        assert alias_index['nc4'] == 'C4'
+        assert alias_index['n-pentane'] == 'C5'
+        assert alias_index['methane'] == 'C1'
 
     def test_get_components_cached(self):
         """Test cached component loading."""
