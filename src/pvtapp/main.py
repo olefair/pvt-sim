@@ -602,6 +602,14 @@ class PVTSimulatorWindow(QMainWindow):
 
     def _export_csv(self, result: RunResult, filename: str) -> None:
         """Export result to CSV file."""
+        if result.status != RunStatus.COMPLETED:
+            QMessageBox.warning(
+                self,
+                "Export Error",
+                "CSV export is only available for completed calculations",
+            )
+            return
+
         try:
             import csv
 

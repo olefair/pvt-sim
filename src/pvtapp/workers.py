@@ -167,6 +167,7 @@ class CalculationThread(QThread):
         self.output_dir = output_dir
         self.write_artifacts = write_artifacts
         self._worker: Optional[CalculationWorker] = None
+        self._cancel_requested = False
 
     def run(self) -> None:
         """Thread entry point - creates and runs the worker."""
@@ -175,6 +176,9 @@ class CalculationThread(QThread):
             output_dir=self.output_dir,
             write_artifacts=self.write_artifacts,
         )
+
+        if self._cancel_requested:
+            self._worker.cancel()
 
         # Connect worker signals to thread signals
         self._worker.started.connect(self.started.emit)
@@ -187,6 +191,7 @@ class CalculationThread(QThread):
 
     def cancel(self) -> None:
         """Request cancellation of the calculation."""
+        self._cancel_requested = True
         if self._worker:
             self._worker.cancel()
 
