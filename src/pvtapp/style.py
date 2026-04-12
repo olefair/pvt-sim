@@ -6,19 +6,32 @@ apply a consistent, Cato-like dark theme and scalable spacing.
 
 from __future__ import annotations
 
+MIN_UI_SCALE = 0.8
+MAX_UI_SCALE = 1.6
+DEFAULT_UI_SCALE = 1.10
+UI_SCALE_STEP = 0.10
 
-def build_cato_dark_stylesheet(*, scale: float = 1.0) -> str:
+
+def clamp_ui_scale(scale: float) -> float:
+    """Clamp UI scale into the supported desktop range."""
+    return max(MIN_UI_SCALE, min(MAX_UI_SCALE, float(scale)))
+
+
+def scale_metric(value: float, scale: float, *, reference_scale: float = 1.0) -> int:
+    """Scale a pixel metric against a reference scale."""
+    clamped = clamp_ui_scale(scale)
+    return max(1, int(round(value * clamped / reference_scale)))
+
+
+def build_cato_dark_stylesheet(*, scale: float = DEFAULT_UI_SCALE) -> str:
     """Return a dark QSS theme roughly aligned with the Pete/Cato window.
 
     Args:
         scale: UI scale factor applied to padding/radii/font sizes.
     """
 
-    # Clamp to avoid absurd values.
-    scale = max(0.8, min(1.6, float(scale)))
-
     def px(value: float) -> int:
-        return max(1, int(round(value * scale)))
+        return scale_metric(value, scale)
 
     return f"""
 /* Base */

@@ -21,6 +21,8 @@ python.exe -m pip install -U pip
 python.exe -m pip install -e .[full]
 ```
 
+`.[full]` is the intended Windows desktop install surface: GUI runtime + SciPy-backed features. If you only want the lighter GUI-only stack, use `python.exe -m pip install -e .[gui]`.
+
 ### Launch
 ```powershell
 pvtsim-gui
@@ -37,7 +39,7 @@ pvtsim validate examples\pt_flash_config.json
 - `pvtsim-cli` -> CLI entrypoint
 
 ### Current workflow surface
-The current `pvtapp` workflow surface includes:
+The current desktop `pvtapp` GUI surface includes:
 - PT flash
 - bubble point
 - dew point
@@ -58,6 +60,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e '.[dev]'
+```
+
+This `dev` extra is headless developer tooling. If you also want to launch the desktop app or run GUI/widget tests, install:
+
+```bash
+python -m pip install -e '.[gui,dev]'
 ```
 
 Run tests:

@@ -13,19 +13,25 @@ python -m venv .venv
 ```
 
 ## Install Dependencies
+GUI-only desktop runtime:
 ```powershell
 python -m pip install -e ".[gui]"
 ```
 
-If you need SciPy-backed features:
+Full desktop runtime (GUI + SciPy-backed features):
 ```powershell
-python -m pip install -e ".[gui,full]"
+python -m pip install -e ".[full]"
+```
+
+Developer tooling with GUI:
+```powershell
+python -m pip install -e ".[gui,dev]"
 ```
 
 ## Run From Source
 ```powershell
-pvtsim
-pvtsim-cli validate
+pvtsim-gui
+pvtsim validate examples\pt_flash_config.json
 ```
 
 ## Build (PyInstaller)
@@ -53,5 +59,5 @@ Installer output: `dist_installer\`.
 ## Troubleshooting
 - PySide6 plugin errors at runtime (missing Qt platform plugins): rebuild and ensure the PySide6 hooks are included, and confirm `dist\pvtsim\PySide6\plugins` exists after build.
 - Matplotlib backend errors (e.g., QtAgg missing): ensure `matplotlib` is installed and rebuild; the spec includes `matplotlib.backends.backend_qtagg`.
-- Missing SciPy: SciPy is optional; features that rely on SciPy will raise a clear import error if used. Install with `pip install -e ".[gui,full]"`.
+- Missing SciPy: SciPy is optional in the base install; features that rely on SciPy will raise a clear import error if used. Install the full desktop/runtime surface with `pip install -e ".[full]"`.
 - Logs: `build_logs\build_windows.log` and `build_logs\build_installer.log`.

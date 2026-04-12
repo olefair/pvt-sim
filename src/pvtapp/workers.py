@@ -16,7 +16,7 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from pvtapp.schemas import RunConfig, RunResult, RunStatus
+from pvtapp.schemas import RunConfig, RunResult
 from pvtapp.job_runner import run_calculation, ProgressCallback
 
 
@@ -97,19 +97,6 @@ class CalculationWorker(QObject):
                 write_artifacts=self.write_artifacts,
             )
 
-            # Check if cancelled
-            if self._cancelled:
-                result = RunResult(
-                    run_id=run_id,
-                    run_name=self.config.run_name,
-                    status=RunStatus.CANCELLED,
-                    error_message="Calculation was cancelled by user",
-                    started_at=result.started_at,
-                    completed_at=result.completed_at,
-                    duration_seconds=result.duration_seconds,
-                    config=self.config,
-                )
-
             self.finished.emit(result)
 
         except Exception as e:
@@ -142,6 +129,10 @@ class _QtProgressCallback(ProgressCallback):
 
     def on_cancelled(self, run_id: str) -> None:
         pass
+
+    def is_cancelled(self) -> bool:
+        """Report whether the worker has received a cancellation request."""
+        return self.worker._cancelled
 
 
 class CalculationThread(QThread):

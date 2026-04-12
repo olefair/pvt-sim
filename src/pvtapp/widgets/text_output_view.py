@@ -100,6 +100,48 @@ class TextOutputWidget(QWidget):
                 lines.append(f"{cid:<8s} {y:>12.6f}")
             lines.append("")
 
+        elif result.bubble_point_result is not None:
+            r = result.bubble_point_result
+            lines.append("Bubble point")
+            lines.append("------------")
+            lines.append(f"T = {r.temperature_k:.3f} K")
+            lines.append(f"Pb = {_pa_to_bar(r.pressure_pa):.5f} bar")
+            lines.append(f"Converged: {r.converged}")
+            lines.append(f"Stable liquid: {r.stable_liquid}")
+            lines.append(f"Iterations: {r.iterations}")
+            lines.append(f"Residual: {r.residual:.5e}")
+            lines.append("")
+            lines.append("Component       x            y            K")
+            for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
+                lines.append(
+                    f"{cid:<8s} "
+                    f"{r.liquid_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.vapor_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.k_values.get(cid, 0.0):>12.6f}"
+                )
+            lines.append("")
+
+        elif result.dew_point_result is not None:
+            r = result.dew_point_result
+            lines.append("Dew point")
+            lines.append("---------")
+            lines.append(f"T = {r.temperature_k:.3f} K")
+            lines.append(f"Pd = {_pa_to_bar(r.pressure_pa):.5f} bar")
+            lines.append(f"Converged: {r.converged}")
+            lines.append(f"Stable vapor: {r.stable_vapor}")
+            lines.append(f"Iterations: {r.iterations}")
+            lines.append(f"Residual: {r.residual:.5e}")
+            lines.append("")
+            lines.append("Component       x            y            K")
+            for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
+                lines.append(
+                    f"{cid:<8s} "
+                    f"{r.liquid_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.vapor_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.k_values.get(cid, 0.0):>12.6f}"
+                )
+            lines.append("")
+
         elif result.phase_envelope_result is not None:
             r = result.phase_envelope_result
             lines.append("Phase envelope")
@@ -149,6 +191,79 @@ class TextOutputWidget(QWidget):
                 lines.append(f"{_pa_to_bar(step.pressure_pa):>10.5f} {step.relative_volume:>10.5f} {z_txt:>8s}")
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
+            lines.append("")
+
+        elif result.dl_result is not None:
+            r = result.dl_result
+            lines.append("Differential liberation")
+            lines.append("-----------------------")
+            lines.append(f"T = {r.temperature_k:.3f} K")
+            lines.append(f"Pb = {_pa_to_bar(r.bubble_pressure_pa):.5f} bar")
+            lines.append(f"Rsi = {r.rsi:.5f}")
+            lines.append(f"Boi = {r.boi:.5f}")
+            lines.append(f"Converged: {r.converged}")
+            lines.append("")
+            lines.append("P (bar)         Rs         Bo         Bt     VaporFrac")
+            for step in r.steps[:80]:
+                lines.append(
+                    f"{_pa_to_bar(step.pressure_pa):>10.5f} "
+                    f"{step.rs:>10.5f} "
+                    f"{step.bo:>10.5f} "
+                    f"{step.bt:>10.5f} "
+                    f"{step.vapor_fraction:>12.5f}"
+                )
+            if len(r.steps) > 80:
+                lines.append(f"... ({len(r.steps) - 80} more)")
+            lines.append("")
+
+        elif result.cvd_result is not None:
+            r = result.cvd_result
+            lines.append("CVD")
+            lines.append("---")
+            lines.append(f"T = {r.temperature_k:.3f} K")
+            lines.append(f"Pd = {_pa_to_bar(r.dew_pressure_pa):.5f} bar")
+            lines.append(f"Initial Z = {r.initial_z:.5f}")
+            lines.append("")
+            lines.append("P (bar)     Liquid Dropout   Cum. Gas     Z")
+            for step in r.steps[:80]:
+                z_two_phase = "" if step.z_two_phase is None else f"{step.z_two_phase:.5f}"
+                lines.append(
+                    f"{_pa_to_bar(step.pressure_pa):>10.5f} "
+                    f"{step.liquid_dropout:>16.5f} "
+                    f"{step.cumulative_gas_produced:>10.5f} "
+                    f"{z_two_phase:>8s}"
+                )
+            if len(r.steps) > 80:
+                lines.append(f"... ({len(r.steps) - 80} more)")
+            lines.append("")
+
+        elif result.separator_result is not None:
+            r = result.separator_result
+            lines.append("Separator train")
+            lines.append("---------------")
+            lines.append(f"Converged = {r.converged}")
+            lines.append(f"Bo = {r.bo:.5f}")
+            lines.append(f"Rs = {r.rs:.5f}")
+            lines.append(f"Rs (scf/STB) = {r.rs_scf_stb:.5f}")
+            lines.append(f"Bg = {r.bg:.5f}")
+            lines.append(f"API = {r.api_gravity:.3f}")
+            lines.append(f"Stock-tank oil density = {r.stock_tank_oil_density:.5f}")
+            lines.append("")
+            lines.append("Stage         P (bar)      T (K)    VaporFrac   LiquidMol    VaporMol")
+            for stage in r.stages[:80]:
+                vapor_fraction = "" if stage.vapor_fraction is None else f"{stage.vapor_fraction:.5f}"
+                liquid_moles = "" if stage.liquid_moles is None else f"{stage.liquid_moles:.5f}"
+                vapor_moles = "" if stage.vapor_moles is None else f"{stage.vapor_moles:.5f}"
+                lines.append(
+                    f"{stage.stage_name[:12]:<12s} "
+                    f"{_pa_to_bar(stage.pressure_pa):>10.5f} "
+                    f"{stage.temperature_k:>10.3f} "
+                    f"{vapor_fraction:>11s} "
+                    f"{liquid_moles:>11s} "
+                    f"{vapor_moles:>11s}"
+                )
+            if len(r.stages) > 80:
+                lines.append(f"... ({len(r.stages) - 80} more)")
             lines.append("")
 
         else:

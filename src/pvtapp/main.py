@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Optional
 import uuid
 
-from PySide6.QtCore import Qt, Slot
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtCore import QSettings, Qt, Slot
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -53,8 +53,18 @@ from pvtapp.widgets import (
     ViewSpec,
 )
 from pvtapp.workers import CalculationThread
+from pvtapp.style import (
+    DEFAULT_UI_SCALE,
+    UI_SCALE_STEP,
+    build_cato_dark_stylesheet,
+    clamp_ui_scale,
+    scale_metric,
+)
 
 from pvtcore.models import load_components
+
+SETTINGS_ORGANIZATION = "PVT-SIM"
+UI_SCALE_SETTINGS_KEY = "ui/scale"
 
 
 class PVTSimulatorWindow(QMainWindow):
@@ -64,6 +74,11 @@ class PVTSimulatorWindow(QMainWindow):
         super().__init__()
         self._current_thread: Optional[CalculationThread] = None
         self._run_history: list[RunResult] = []
+        self._ui_scale = DEFAULT_UI_SCALE
+        self._ui_scale_initialized = False
+        self._base_min_window_size = (1400, 900)
+        self._base_progress_width = 200
+        self._settings = self._create_settings()
 
         # Component DB (for critical props / BIPs views)
         self._components_db = load_components()
@@ -74,12 +89,12 @@ class PVTSimulatorWindow(QMainWindow):
         self._setup_central_widget()
         self._setup_statusbar()
         self._connect_signals()
+        self._ui_scale = self._load_persisted_ui_scale()
+        self._apply_ui_scale(self._ui_scale, announce=False)
 
     def _setup_window(self) -> None:
         """Configure main window properties."""
         self.setWindowTitle(f"{__app_name__} v{__version__}")
-        # Upscaled default footprint (still resizable)
-        self.setMinimumSize(1400, 900)
 
     def _setup_menus(self) -> None:
         """Create menu bar and menus."""
@@ -154,7 +169,20 @@ class PVTSimulatorWindow(QMainWindow):
 
         # View menu
         view_menu = menubar.addMenu("&View")
-        # Dock widget toggles will be added when docks are created
+        self.zoom_in_action = QAction("Zoom &In", self)
+        self.zoom_in_action.setShortcuts(self._build_zoom_in_shortcuts())
+        self.zoom_in_action.triggered.connect(self._zoom_in)
+        view_menu.addAction(self.zoom_in_action)
+
+        self.zoom_out_action = QAction("Zoom &Out", self)
+        self.zoom_out_action.setShortcuts(self._build_zoom_out_shortcuts())
+        self.zoom_out_action.triggered.connect(self._zoom_out)
+        view_menu.addAction(self.zoom_out_action)
+
+        self.reset_zoom_action = QAction("&Actual Size", self)
+        self.reset_zoom_action.setShortcut(QKeySequence("Ctrl+0"))
+        self.reset_zoom_action.triggered.connect(self._reset_zoom)
+        view_menu.addAction(self.reset_zoom_action)
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -216,7 +244,6 @@ class PVTSimulatorWindow(QMainWindow):
         self.vapor_saturation_widget = vapor_placeholder
 
         view_specs = [
-            ViewSpec("inputs", "Feeds / Inputs"),
             ViewSpec("critical_props", "Critical prop."),
             ViewSpec("interaction_params", "Interaction para."),
             ViewSpec("log", "Log"),
@@ -228,7 +255,6 @@ class PVTSimulatorWindow(QMainWindow):
         ]
 
         view_widgets = {
-            "inputs": self.inputs_panel,
             "critical_props": self.critical_props_widget,
             "interaction_params": self.interaction_params_widget,
             "log": self.run_log_widget,
@@ -242,8 +268,11 @@ class PVTSimulatorWindow(QMainWindow):
         self.workspace = TwoPaneWorkspace(
             view_specs=view_specs,
             view_widgets=view_widgets,
-            left_default="inputs",
-            right_default="phase_envelope",
+            left_default="phase_envelope",
+            right_default="results_table",
+            fixed_widget=self.inputs_panel,
+            fixed_title="Run Inputs",
+            fixed_width=360,
         )
         self.setCentralWidget(self.workspace)
 
@@ -264,7 +293,7 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Progress bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(200)
+        self.progress_bar.setMaximumWidth(self._base_progress_width)
         self.progress_bar.setVisible(False)
         statusbar.addPermanentWidget(self.progress_bar)
 
@@ -279,6 +308,84 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
+
+    @property
+    def ui_scale(self) -> float:
+        """Return the active app UI scale."""
+        return self._ui_scale
+
+    def _create_settings(self) -> QSettings:
+        """Return the persistent settings store for desktop app preferences."""
+        return QSettings(SETTINGS_ORGANIZATION, __app_name__)
+
+    def _load_persisted_ui_scale(self) -> float:
+        """Load the saved UI scale, falling back to the desktop default."""
+        raw_value = self._settings.value(UI_SCALE_SETTINGS_KEY, DEFAULT_UI_SCALE)
+        try:
+            return clamp_ui_scale(float(raw_value))
+        except (TypeError, ValueError):
+            return DEFAULT_UI_SCALE
+
+    def _persist_ui_scale(self) -> None:
+        """Persist the current UI scale for the next app launch."""
+        self._settings.setValue(UI_SCALE_SETTINGS_KEY, self._ui_scale)
+        self._settings.sync()
+
+    def _scaled_metric(self, value: int) -> int:
+        """Scale window-level fixed metrics relative to the default shell."""
+        return scale_metric(value, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+
+    @staticmethod
+    def _build_zoom_in_shortcuts() -> list[QKeySequence]:
+        shortcuts = list(QKeySequence.keyBindings(QKeySequence.StandardKey.ZoomIn))
+        for extra in (QKeySequence("Ctrl+="), QKeySequence("Ctrl++")):
+            if extra not in shortcuts:
+                shortcuts.append(extra)
+        return shortcuts
+
+    @staticmethod
+    def _build_zoom_out_shortcuts() -> list[QKeySequence]:
+        shortcuts = list(QKeySequence.keyBindings(QKeySequence.StandardKey.ZoomOut))
+        extra = QKeySequence("Ctrl+-")
+        if extra not in shortcuts:
+            shortcuts.append(extra)
+        return shortcuts
+
+    def _apply_ui_scale(self, scale: float, *, announce: bool) -> None:
+        """Apply global UI zoom and refresh fixed-size shell geometry."""
+        clamped_scale = clamp_ui_scale(scale)
+        previous_scale = self._ui_scale
+        self._ui_scale = clamped_scale
+
+        QApplication.instance().setStyleSheet(build_cato_dark_stylesheet(scale=clamped_scale))
+
+        min_width, min_height = self._base_min_window_size
+        self.setMinimumSize(self._scaled_metric(min_width), self._scaled_metric(min_height))
+        self.progress_bar.setMaximumWidth(self._scaled_metric(self._base_progress_width))
+        self.workspace.apply_ui_scale(clamped_scale, previous_scale=previous_scale)
+        self.composition_widget.apply_ui_scale(clamped_scale)
+        self.diagnostics_widget.apply_ui_scale(clamped_scale)
+        self.updateGeometry()
+        self._persist_ui_scale()
+        self._ui_scale_initialized = True
+
+        if announce:
+            self.status_label.setText(f"Zoom: {int(round(clamped_scale * 100))}%")
+
+    @Slot()
+    def _zoom_in(self) -> None:
+        """Increase the app UI zoom."""
+        self._apply_ui_scale(self._ui_scale + UI_SCALE_STEP, announce=True)
+
+    @Slot()
+    def _zoom_out(self) -> None:
+        """Decrease the app UI zoom."""
+        self._apply_ui_scale(self._ui_scale - UI_SCALE_STEP, announce=True)
+
+    @Slot()
+    def _reset_zoom(self) -> None:
+        """Restore the app UI zoom to the default baseline."""
+        self._apply_ui_scale(DEFAULT_UI_SCALE, announce=True)
 
     @Slot()
     def _update_component_dependent_views(self) -> None:
@@ -326,6 +433,18 @@ class PVTSimulatorWindow(QMainWindow):
                 return None
             config_kwargs["pt_flash_config"] = pt_config
 
+        elif calc_type == CalculationType.BUBBLE_POINT:
+            bubble_config = self.conditions_widget.get_bubble_point_config()
+            if bubble_config is None:
+                return None
+            config_kwargs["bubble_point_config"] = bubble_config
+
+        elif calc_type == CalculationType.DEW_POINT:
+            dew_config = self.conditions_widget.get_dew_point_config()
+            if dew_config is None:
+                return None
+            config_kwargs["dew_point_config"] = dew_config
+
         elif calc_type == CalculationType.PHASE_ENVELOPE:
             env_config = self.conditions_widget.get_phase_envelope_config()
             if env_config is None:
@@ -338,9 +457,27 @@ class PVTSimulatorWindow(QMainWindow):
                 return None
             config_kwargs["cce_config"] = cce_config
 
+        elif calc_type == CalculationType.DL:
+            dl_config = self.conditions_widget.get_dl_config()
+            if dl_config is None:
+                return None
+            config_kwargs["dl_config"] = dl_config
+
+        elif calc_type == CalculationType.CVD:
+            cvd_config = self.conditions_widget.get_cvd_config()
+            if cvd_config is None:
+                return None
+            config_kwargs["cvd_config"] = cvd_config
+
+        elif calc_type == CalculationType.SEPARATOR:
+            separator_config = self.conditions_widget.get_separator_config()
+            if separator_config is None:
+                return None
+            config_kwargs["separator_config"] = separator_config
+
         else:
             self._show_validation_error(
-                f"Calculation type '{calc_type.value}' not yet implemented"
+                f"Calculation type '{calc_type.value}' is not currently exposed in the desktop GUI"
             )
             return None
 
@@ -480,6 +617,75 @@ class PVTSimulatorWindow(QMainWindow):
                             res.liquid_composition.get(comp, 0),
                             res.vapor_composition.get(comp, 0),
                             res.K_values.get(comp, 0),
+                        ])
+                elif result.bubble_point_result:
+                    res = result.bubble_point_result
+                    writer.writerow(["Component", "Liquid", "Vapor", "K-value"])
+                    for comp in sorted(res.liquid_composition.keys()):
+                        writer.writerow([
+                            comp,
+                            res.liquid_composition.get(comp, 0),
+                            res.vapor_composition.get(comp, 0),
+                            res.k_values.get(comp, 0),
+                        ])
+                elif result.dew_point_result:
+                    res = result.dew_point_result
+                    writer.writerow(["Component", "Liquid", "Vapor", "K-value"])
+                    for comp in sorted(res.liquid_composition.keys()):
+                        writer.writerow([
+                            comp,
+                            res.liquid_composition.get(comp, 0),
+                            res.vapor_composition.get(comp, 0),
+                            res.k_values.get(comp, 0),
+                        ])
+                elif result.phase_envelope_result:
+                    writer.writerow(["Type", "Temperature_C", "Pressure_bar"])
+                    for point in result.phase_envelope_result.bubble_curve:
+                        writer.writerow(["bubble", point.temperature_k - 273.15, point.pressure_pa / 1e5])
+                    for point in result.phase_envelope_result.dew_curve:
+                        writer.writerow(["dew", point.temperature_k - 273.15, point.pressure_pa / 1e5])
+                elif result.cce_result:
+                    writer.writerow(["Pressure_bar", "RelativeVolume", "LiquidFraction", "VaporFraction", "ZFactor"])
+                    for step in result.cce_result.steps:
+                        writer.writerow([
+                            step.pressure_pa / 1e5,
+                            step.relative_volume,
+                            step.liquid_fraction,
+                            step.vapor_fraction,
+                            step.z_factor,
+                        ])
+                elif result.dl_result:
+                    writer.writerow(["Pressure_bar", "Rs", "Bo", "Bt", "VaporFraction", "LiquidMolesRemaining"])
+                    for step in result.dl_result.steps:
+                        writer.writerow([
+                            step.pressure_pa / 1e5,
+                            step.rs,
+                            step.bo,
+                            step.bt,
+                            step.vapor_fraction,
+                            step.liquid_moles_remaining,
+                        ])
+                elif result.cvd_result:
+                    writer.writerow(["Pressure_bar", "LiquidDropout", "CumulativeGasProduced", "MolesRemaining", "ZTwoPhase"])
+                    for step in result.cvd_result.steps:
+                        writer.writerow([
+                            step.pressure_pa / 1e5,
+                            step.liquid_dropout,
+                            step.cumulative_gas_produced,
+                            step.moles_remaining,
+                            step.z_two_phase,
+                        ])
+                elif result.separator_result:
+                    writer.writerow(["Stage", "Pressure_bar", "Temperature_C", "VaporFraction", "LiquidMoles", "VaporMoles", "Converged"])
+                    for stage in result.separator_result.stages:
+                        writer.writerow([
+                            stage.stage_name,
+                            stage.pressure_pa / 1e5,
+                            stage.temperature_k - 273.15,
+                            stage.vapor_fraction,
+                            stage.liquid_moles,
+                            stage.vapor_moles,
+                            stage.converged,
                         ])
 
             self.status_label.setText(f"Exported: {Path(filename).name}")
@@ -672,10 +878,6 @@ def main():
 
     # Set application style
     app.setStyle("Fusion")
-
-    # Apply Cato-like dark theme + slight upscale
-    from pvtapp.style import build_cato_dark_stylesheet
-    app.setStyleSheet(build_cato_dark_stylesheet(scale=1.10))
 
     window = PVTSimulatorWindow()
     window.show()

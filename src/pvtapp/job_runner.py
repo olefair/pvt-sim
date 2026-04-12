@@ -35,6 +35,7 @@ from pvtapp.schemas import (
     InvariantCheck, SolverCertificate,
 )
 from pvtapp import __version__
+from pvtapp.capabilities import RUNTIME_UNSUPPORTED_EOS_MESSAGES
 
 
 # ==============================================================================
@@ -152,6 +153,25 @@ class ProgressCallback:
         """Called when calculation is cancelled."""
         pass
 
+    def is_cancelled(self) -> bool:
+        """Return whether the current run should stop cooperatively."""
+        return False
+
+
+class CalculationCancelledError(RuntimeError):
+    """Raised when the caller requests cooperative cancellation."""
+
+
+def _raise_if_cancelled(
+    callback: Optional[ProgressCallback],
+    *,
+    message: str = "Calculation was cancelled by user",
+) -> None:
+    """Abort the current run if the callback reports cancellation."""
+    is_cancelled = getattr(callback, "is_cancelled", None)
+    if callback is not None and callable(is_cancelled) and bool(is_cancelled()):
+        raise CalculationCancelledError(message)
+
 
 # ==============================================================================
 # Calculation Execution
@@ -246,53 +266,15 @@ def execute_pt_flash(
         ValueError: If configuration is invalid
         RuntimeError: If pvtcore raises an error
     """
-    from pvtcore.models import load_components, Component
-    from pvtcore.eos import PengRobinsonEOS
     from pvtcore.flash import pt_flash
 
     if callback:
         callback.on_progress(config.run_id or '', 0.1, "Loading components...")
 
-    # Load component database
-    all_components = load_components()
-
-    # Build component list and composition array
-    component_ids = [entry.component_id for entry in config.composition.components]
-    mole_fractions = [entry.mole_fraction for entry in config.composition.components]
-
-    # Validate all components exist
-    missing = [cid for cid in component_ids if cid not in all_components]
-    if missing:
-        raise ValueError(
-            f"Unknown component(s): {missing}. "
-            f"Available: {sorted(all_components.keys())}"
-        )
-
-    components = [all_components[cid] for cid in component_ids]
-    z = np.array(mole_fractions, dtype=np.float64)
-
     if callback:
         callback.on_progress(config.run_id or '', 0.2, "Setting up EOS...")
 
-    # Create EOS instance
-    eos = PengRobinsonEOS(components)
-
-    # Build binary interaction matrix if provided
-    binary_interaction = None
-    if config.binary_interaction:
-        n = len(components)
-        binary_interaction = np.zeros((n, n))
-        for pair_key, kij in config.binary_interaction.items():
-            parts = pair_key.split('-')
-            if len(parts) != 2:
-                raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
-            try:
-                i = component_ids.index(parts[0])
-                j = component_ids.index(parts[1])
-                binary_interaction[i, j] = kij
-                binary_interaction[j, i] = kij
-            except ValueError:
-                raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+    component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
 
     if callback:
         callback.on_progress(config.run_id or '', 0.3, "Running flash calculation...")
@@ -355,29 +337,15 @@ def execute_phase_envelope(
         ValueError: If configuration is invalid
         RuntimeError: If pvtcore raises an error
     """
-    from pvtcore.models import load_components
-    from pvtcore.eos import PengRobinsonEOS
     from pvtcore.envelope import trace_phase_envelope
 
     if callback:
         callback.on_progress(config.run_id or '', 0.1, "Loading components...")
 
-    # Load components
-    all_components = load_components()
-    component_ids = [entry.component_id for entry in config.composition.components]
-    mole_fractions = [entry.mole_fraction for entry in config.composition.components]
-
-    missing = [cid for cid in component_ids if cid not in all_components]
-    if missing:
-        raise ValueError(f"Unknown component(s): {missing}")
-
-    components = [all_components[cid] for cid in component_ids]
-    z = np.array(mole_fractions, dtype=np.float64)
-
     if callback:
         callback.on_progress(config.run_id or '', 0.2, "Setting up EOS...")
 
-    eos = PengRobinsonEOS(components)
+    _component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
 
     if callback:
         callback.on_progress(config.run_id or '', 0.3, "Tracing phase envelope...")
@@ -390,6 +358,7 @@ def execute_phase_envelope(
         T_min=env_config.temperature_min_k,
         T_max=env_config.temperature_max_k,
         n_points=env_config.n_points,
+        binary_interaction=binary_interaction,
     )
 
     if callback:
@@ -453,9 +422,8 @@ def _finite_or_none(value: float) -> Optional[float]:
     return as_float if np.isfinite(as_float) else None
 
 
-def _prepare_fluid_inputs(config: RunConfig):
-    """Build component IDs, objects, composition, EOS, and optional BIP matrix."""
-    from pvtcore.eos import PengRobinsonEOS
+def _load_component_inputs(config: RunConfig):
+    """Load component IDs, component models, and feed composition."""
     from pvtcore.models import load_components
 
     all_components = load_components()
@@ -471,8 +439,28 @@ def _prepare_fluid_inputs(config: RunConfig):
 
     components = [all_components[cid] for cid in component_ids]
     z = np.array(mole_fractions, dtype=np.float64)
-    eos = PengRobinsonEOS(components)
+    return component_ids, components, z
 
+
+def _build_runtime_eos(config: RunConfig, components):
+    """Build the runtime EOS instance declared by the run config."""
+    from pvtcore.eos import PengRobinsonEOS
+
+    if config.eos_type == EOSType.PENG_ROBINSON:
+        return PengRobinsonEOS(components)
+
+    if config.eos_type in RUNTIME_UNSUPPORTED_EOS_MESSAGES:
+        raise ValueError(RUNTIME_UNSUPPORTED_EOS_MESSAGES[config.eos_type])
+
+    raise ValueError(f"Unsupported EOS type: {config.eos_type}")
+
+
+def _build_binary_interaction_matrix(
+    component_ids: List[str],
+    components,
+    config: RunConfig,
+):
+    """Build the symmetric binary interaction matrix if one was supplied."""
     binary_interaction = None
     if config.binary_interaction:
         n = len(components)
@@ -488,7 +476,14 @@ def _prepare_fluid_inputs(config: RunConfig):
                 binary_interaction[j, i] = kij
             except ValueError:
                 raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+    return binary_interaction
 
+
+def _prepare_fluid_inputs(config: RunConfig):
+    """Build component IDs, objects, composition, EOS, and optional BIP matrix."""
+    component_ids, components, z = _load_component_inputs(config)
+    eos = _build_runtime_eos(config, components)
+    binary_interaction = _build_binary_interaction_matrix(component_ids, components, config)
     return component_ids, components, z, eos, binary_interaction
 
 
@@ -502,47 +497,15 @@ def execute_cce(
     callback: Optional[ProgressCallback] = None,
 ) -> CCEResult:
     """Execute a CCE calculation."""
-    from pvtcore.eos import PengRobinsonEOS
     from pvtcore.experiments.cce import simulate_cce
-    from pvtcore.models import load_components
 
     if callback:
         callback.on_progress(config.run_id or "", 0.1, "Loading components...")
 
-    all_components = load_components()
-    component_ids = [entry.component_id for entry in config.composition.components]
-    mole_fractions = [entry.mole_fraction for entry in config.composition.components]
-
-    missing = [cid for cid in component_ids if cid not in all_components]
-    if missing:
-        raise ValueError(
-            f"Unknown component(s): {missing}. "
-            f"Available: {sorted(all_components.keys())}"
-        )
-
-    components = [all_components[cid] for cid in component_ids]
-    z = np.array(mole_fractions, dtype=np.float64)
-
     if callback:
         callback.on_progress(config.run_id or "", 0.2, "Setting up EOS...")
 
-    eos = PengRobinsonEOS(components)
-
-    binary_interaction = None
-    if config.binary_interaction:
-        n = len(components)
-        binary_interaction = np.zeros((n, n))
-        for pair_key, kij in config.binary_interaction.items():
-            parts = pair_key.split("-")
-            if len(parts) != 2:
-                raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
-            try:
-                i = component_ids.index(parts[0])
-                j = component_ids.index(parts[1])
-                binary_interaction[i, j] = kij
-                binary_interaction[j, i] = kij
-            except ValueError:
-                raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+    _component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
 
     cce_config = config.cce_config
     if cce_config is None:
@@ -907,6 +870,8 @@ def run_calculation(
         write_config_artifact(config, run_dir)
 
     try:
+        _raise_if_cancelled(callback)
+
         # Execute based on calculation type
         pt_flash_result = None
         bubble_point_result = None
@@ -943,6 +908,8 @@ def run_calculation(
 
         else:
             raise ValueError(f"Unsupported calculation type: {config.calculation_type}")
+
+        _raise_if_cancelled(callback)
 
         completed_at = datetime.now()
         duration = (completed_at - started_at).total_seconds()
@@ -990,6 +957,44 @@ def run_calculation(
 
         if callback:
             callback.on_completed(run_id, result)
+
+        return result
+
+    except CalculationCancelledError as e:
+        completed_at = datetime.now()
+        duration = (completed_at - started_at).total_seconds()
+
+        cancelled_msg = str(e)
+        result = RunResult(
+            run_id=run_id,
+            run_name=config.run_name,
+            status=RunStatus.CANCELLED,
+            error_message=cancelled_msg,
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_seconds=duration,
+            config=config,
+        )
+
+        if write_artifacts and run_dir:
+            results_path = write_results_artifact(result, run_dir)
+
+            config_path = run_dir / 'config.json'
+            manifest = RunManifest(
+                run_id=run_id,
+                run_name=config.run_name,
+                created_at=started_at,
+                completed_at=completed_at,
+                pvt_simulator_version=__version__,
+                config_sha256=compute_file_sha256(config_path) if config_path.exists() else None,
+                results_sha256=compute_file_sha256(results_path) if results_path.exists() else None,
+                status=RunStatus.CANCELLED,
+                error_message=cancelled_msg,
+            )
+            write_manifest_artifact(manifest, run_dir)
+
+        if callback:
+            callback.on_cancelled(run_id)
 
         return result
 

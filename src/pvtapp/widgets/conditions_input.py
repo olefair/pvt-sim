@@ -20,6 +20,11 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSpinBox,
     QDoubleSpinBox,
+    QCheckBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QPushButton,
 )
 
 from pvtapp.schemas import (
@@ -31,6 +36,10 @@ from pvtapp.schemas import (
     PTFlashConfig,
     PhaseEnvelopeConfig,
     CCEConfig,
+    SaturationPointConfig,
+    DLConfig,
+    CVDConfig,
+    SeparatorConfig,
     SolverSettings,
     pressure_from_pa,
     temperature_from_k,
@@ -40,6 +49,14 @@ from pvtapp.schemas import (
     PRESSURE_MAX_PA,
     TEMPERATURE_MIN_K,
     TEMPERATURE_MAX_K,
+)
+from pvtapp.capabilities import (
+    GUI_CALCULATION_TYPE_LABELS,
+    GUI_SUPPORTED_CALCULATION_TYPES,
+    GUI_EOS_TYPE_LABELS,
+    GUI_SUPPORTED_EOS_TYPES,
+    is_gui_supported_calculation_type,
+    is_gui_supported_eos_type,
 )
 
 
@@ -91,16 +108,13 @@ class ConditionsInputWidget(QWidget):
         calc_layout = QFormLayout(calc_group)
 
         self.calc_type_combo = QComboBox()
-        for calc_type in CalculationType:
-            # Display friendly names
-            display_name = calc_type.value.replace("_", " ").title()
-            self.calc_type_combo.addItem(display_name, calc_type)
+        for calc_type in GUI_SUPPORTED_CALCULATION_TYPES:
+            self.calc_type_combo.addItem(GUI_CALCULATION_TYPE_LABELS[calc_type], calc_type)
         calc_layout.addRow("Type:", self.calc_type_combo)
 
         self.eos_combo = QComboBox()
-        for eos in EOSType:
-            display_name = eos.value.replace("_", "-").upper()
-            self.eos_combo.addItem(display_name, eos)
+        for eos in GUI_SUPPORTED_EOS_TYPES:
+            self.eos_combo.addItem(GUI_EOS_TYPE_LABELS[eos], eos)
         calc_layout.addRow("EOS:", self.eos_combo)
 
         layout.addWidget(calc_group)
@@ -116,9 +130,29 @@ class ConditionsInputWidget(QWidget):
         self.phase_env_widget = self._create_phase_envelope_widget()
         self.config_stack.addWidget(self.phase_env_widget)
 
+        # Bubble-point config
+        self.bubble_widget = self._create_bubble_point_widget()
+        self.config_stack.addWidget(self.bubble_widget)
+
+        # Dew-point config
+        self.dew_widget = self._create_dew_point_widget()
+        self.config_stack.addWidget(self.dew_widget)
+
         # CCE config
         self.cce_widget = self._create_cce_widget()
         self.config_stack.addWidget(self.cce_widget)
+
+        # DL config
+        self.dl_widget = self._create_dl_widget()
+        self.config_stack.addWidget(self.dl_widget)
+
+        # CVD config
+        self.cvd_widget = self._create_cvd_widget()
+        self.config_stack.addWidget(self.cvd_widget)
+
+        # Separator config
+        self.separator_widget = self._create_separator_widget()
+        self.config_stack.addWidget(self.separator_widget)
 
         # Placeholder for other calculation types
         self.placeholder_widget = QLabel("Configuration for this calculation type\ncoming soon...")
@@ -127,11 +161,9 @@ class ConditionsInputWidget(QWidget):
 
         layout.addWidget(self.config_stack)
 
-        # Solver settings (collapsed by default)
-        solver_group = QGroupBox("Solver Settings (Advanced)")
-        solver_group.setCheckable(True)
-        solver_group.setChecked(False)
-        solver_layout = QFormLayout(solver_group)
+        # Solver settings (always visible in the fixed inputs sidebar)
+        self.solver_group = QGroupBox("Tolerance / Solver Settings")
+        solver_layout = QFormLayout(self.solver_group)
 
         self.tolerance_edit = QLineEdit("1e-10")
         self.tolerance_edit.setValidator(QDoubleValidator(1e-15, 1e-1, 15))
@@ -142,7 +174,7 @@ class ConditionsInputWidget(QWidget):
         self.max_iters_spin.setValue(100)
         solver_layout.addRow("Max Iterations:", self.max_iters_spin)
 
-        layout.addWidget(solver_group)
+        layout.addWidget(self.solver_group)
 
         layout.addStretch()
 
@@ -213,6 +245,66 @@ class ConditionsInputWidget(QWidget):
 
         return widget
 
+    def _create_saturation_point_widget(
+        self,
+        *,
+        title: str,
+        temperature_attr: str,
+        guess_enabled_attr: str,
+        guess_spin_attr: str,
+    ) -> QWidget:
+        """Create a bubble/dew point configuration widget."""
+        widget = QGroupBox(title)
+        layout = QFormLayout(widget)
+
+        t_layout = QHBoxLayout()
+        temperature = QDoubleSpinBox()
+        temperature.setRange(-200, 500)
+        temperature.setValue(100)
+        temperature.setDecimals(2)
+        setattr(self, temperature_attr, temperature)
+        t_layout.addWidget(temperature)
+        t_layout.addWidget(QLabel("C"))
+        layout.addRow("Temperature:", t_layout)
+
+        guess_layout = QHBoxLayout()
+        guess_enabled = QCheckBox("Use initial pressure guess")
+        setattr(self, guess_enabled_attr, guess_enabled)
+        guess_layout.addWidget(guess_enabled)
+        layout.addRow("Pressure Guess:", guess_layout)
+
+        guess_spin_layout = QHBoxLayout()
+        guess_spin = QDoubleSpinBox()
+        guess_spin.setRange(0.01, 10000)
+        guess_spin.setValue(100)
+        guess_spin.setDecimals(2)
+        guess_spin.setEnabled(False)
+        setattr(self, guess_spin_attr, guess_spin)
+        guess_spin_layout.addWidget(guess_spin)
+        guess_spin_layout.addWidget(QLabel("bar"))
+        layout.addRow("", guess_spin_layout)
+
+        guess_enabled.toggled.connect(guess_spin.setEnabled)
+        return widget
+
+    def _create_bubble_point_widget(self) -> QWidget:
+        """Create bubble-point configuration widget."""
+        return self._create_saturation_point_widget(
+            title="Bubble-Point Settings",
+            temperature_attr="bubble_temperature",
+            guess_enabled_attr="bubble_pressure_guess_enabled",
+            guess_spin_attr="bubble_pressure_guess",
+        )
+
+    def _create_dew_point_widget(self) -> QWidget:
+        """Create dew-point configuration widget."""
+        return self._create_saturation_point_widget(
+            title="Dew-Point Settings",
+            temperature_attr="dew_temperature",
+            guess_enabled_attr="dew_pressure_guess_enabled",
+            guess_spin_attr="dew_pressure_guess",
+        )
+
     def _create_cce_widget(self) -> QWidget:
         """Create CCE configuration widget."""
         widget = QGroupBox("CCE Settings")
@@ -256,6 +348,177 @@ class ConditionsInputWidget(QWidget):
 
         return widget
 
+    def _create_dl_widget(self) -> QWidget:
+        """Create Differential Liberation configuration widget."""
+        widget = QGroupBox("Differential Liberation Settings")
+        layout = QFormLayout(widget)
+
+        t_layout = QHBoxLayout()
+        self.dl_temperature = QDoubleSpinBox()
+        self.dl_temperature.setRange(-200, 500)
+        self.dl_temperature.setValue(100)
+        self.dl_temperature.setDecimals(2)
+        t_layout.addWidget(self.dl_temperature)
+        t_layout.addWidget(QLabel("C"))
+        layout.addRow("Temperature:", t_layout)
+
+        bubble_layout = QHBoxLayout()
+        self.dl_bubble_pressure = QDoubleSpinBox()
+        self.dl_bubble_pressure.setRange(0.01, 10000)
+        self.dl_bubble_pressure.setValue(150)
+        self.dl_bubble_pressure.setDecimals(2)
+        bubble_layout.addWidget(self.dl_bubble_pressure)
+        bubble_layout.addWidget(QLabel("bar"))
+        layout.addRow("Bubble Pressure:", bubble_layout)
+
+        end_layout = QHBoxLayout()
+        self.dl_p_end = QDoubleSpinBox()
+        self.dl_p_end.setRange(0.01, 10000)
+        self.dl_p_end.setValue(10)
+        self.dl_p_end.setDecimals(2)
+        end_layout.addWidget(self.dl_p_end)
+        end_layout.addWidget(QLabel("bar"))
+        layout.addRow("End Pressure:", end_layout)
+
+        self.dl_n_steps = QSpinBox()
+        self.dl_n_steps.setRange(5, 200)
+        self.dl_n_steps.setValue(20)
+        layout.addRow("Number of Steps:", self.dl_n_steps)
+
+        return widget
+
+    def _create_cvd_widget(self) -> QWidget:
+        """Create CVD configuration widget."""
+        widget = QGroupBox("CVD Settings")
+        layout = QFormLayout(widget)
+
+        # Temperature
+        t_layout = QHBoxLayout()
+        self.cvd_temperature = QDoubleSpinBox()
+        self.cvd_temperature.setRange(-200, 500)
+        self.cvd_temperature.setValue(100)
+        self.cvd_temperature.setDecimals(2)
+        t_layout.addWidget(self.cvd_temperature)
+        t_layout.addWidget(QLabel("C"))
+        layout.addRow("Temperature:", t_layout)
+
+        # Dew pressure
+        p_dew_layout = QHBoxLayout()
+        self.cvd_p_dew = QDoubleSpinBox()
+        self.cvd_p_dew.setRange(0.01, 10000)
+        self.cvd_p_dew.setValue(300)
+        self.cvd_p_dew.setDecimals(2)
+        p_dew_layout.addWidget(self.cvd_p_dew)
+        p_dew_layout.addWidget(QLabel("bar"))
+        layout.addRow("Dew Pressure:", p_dew_layout)
+
+        # End pressure
+        p_end_layout = QHBoxLayout()
+        self.cvd_p_end = QDoubleSpinBox()
+        self.cvd_p_end.setRange(0.01, 10000)
+        self.cvd_p_end.setValue(50)
+        self.cvd_p_end.setDecimals(2)
+        p_end_layout.addWidget(self.cvd_p_end)
+        p_end_layout.addWidget(QLabel("bar"))
+        layout.addRow("End Pressure:", p_end_layout)
+
+        # Number of steps
+        self.cvd_n_steps = QSpinBox()
+        self.cvd_n_steps.setRange(5, 200)
+        self.cvd_n_steps.setValue(20)
+        layout.addRow("Number of Steps:", self.cvd_n_steps)
+
+        return widget
+
+    def _create_separator_widget(self) -> QWidget:
+        """Create separator-train configuration widget."""
+        widget = QGroupBox("Separator Settings")
+        layout = QVBoxLayout(widget)
+
+        form_layout = QFormLayout()
+
+        reservoir_pressure_layout = QHBoxLayout()
+        self.separator_reservoir_pressure = QDoubleSpinBox()
+        self.separator_reservoir_pressure.setRange(0.01, 10000)
+        self.separator_reservoir_pressure.setValue(300)
+        self.separator_reservoir_pressure.setDecimals(2)
+        reservoir_pressure_layout.addWidget(self.separator_reservoir_pressure)
+        reservoir_pressure_layout.addWidget(QLabel("bar"))
+        form_layout.addRow("Reservoir Pressure:", reservoir_pressure_layout)
+
+        reservoir_temperature_layout = QHBoxLayout()
+        self.separator_reservoir_temperature = QDoubleSpinBox()
+        self.separator_reservoir_temperature.setRange(-200, 500)
+        self.separator_reservoir_temperature.setValue(100)
+        self.separator_reservoir_temperature.setDecimals(2)
+        reservoir_temperature_layout.addWidget(self.separator_reservoir_temperature)
+        reservoir_temperature_layout.addWidget(QLabel("C"))
+        form_layout.addRow("Reservoir Temperature:", reservoir_temperature_layout)
+
+        self.separator_include_stock_tank = QCheckBox("Include stock-tank stage")
+        self.separator_include_stock_tank.setChecked(True)
+        form_layout.addRow("Stock Tank:", self.separator_include_stock_tank)
+
+        layout.addLayout(form_layout)
+
+        stages_label = QLabel("Separator Stages")
+        layout.addWidget(stages_label)
+
+        self.separator_stage_table = QTableWidget(0, 3)
+        self.separator_stage_table.setHorizontalHeaderLabels(["Name", "Pressure (bar)", "Temperature (C)"])
+        self.separator_stage_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.separator_stage_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.separator_stage_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.separator_stage_table)
+
+        button_row = QHBoxLayout()
+        self.add_separator_stage_btn = QPushButton("Add Stage")
+        self.remove_separator_stage_btn = QPushButton("Remove Selected")
+        self.add_separator_stage_btn.clicked.connect(self._add_separator_stage_row)
+        self.remove_separator_stage_btn.clicked.connect(self._remove_selected_separator_stage_rows)
+        button_row.addWidget(self.add_separator_stage_btn)
+        button_row.addWidget(self.remove_separator_stage_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        self._set_separator_stage_rows(
+            [
+                {"name": "HP", "pressure_bar": 30.0, "temperature_c": 46.85},
+                {"name": "LP", "pressure_bar": 5.0, "temperature_c": 26.85},
+            ]
+        )
+        return widget
+
+    def _add_separator_stage_row(
+        self,
+        *,
+        name: str = "",
+        pressure_bar: float = 10.0,
+        temperature_c: float = 25.0,
+    ) -> None:
+        """Append a separator-stage row."""
+        row = self.separator_stage_table.rowCount()
+        self.separator_stage_table.insertRow(row)
+        self.separator_stage_table.setItem(row, 0, QTableWidgetItem(name))
+        self.separator_stage_table.setItem(row, 1, QTableWidgetItem(f"{pressure_bar:.2f}"))
+        self.separator_stage_table.setItem(row, 2, QTableWidgetItem(f"{temperature_c:.2f}"))
+
+    def _remove_selected_separator_stage_rows(self) -> None:
+        """Remove selected separator-stage rows."""
+        rows = sorted({index.row() for index in self.separator_stage_table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self.separator_stage_table.removeRow(row)
+
+    def _set_separator_stage_rows(self, stages: list[dict[str, float | str]]) -> None:
+        """Replace the separator-stage table contents."""
+        self.separator_stage_table.setRowCount(0)
+        for stage in stages:
+            self._add_separator_stage_row(
+                name=str(stage.get("name", "")),
+                pressure_bar=float(stage.get("pressure_bar", 10.0)),
+                temperature_c=float(stage.get("temperature_c", 25.0)),
+            )
+
     def _connect_signals(self) -> None:
         """Connect widget signals."""
         self.calc_type_combo.currentIndexChanged.connect(self._on_calc_type_changed)
@@ -268,10 +531,20 @@ class ConditionsInputWidget(QWidget):
 
         if calc_type == CalculationType.PT_FLASH:
             self.config_stack.setCurrentWidget(self.pt_flash_widget)
+        elif calc_type == CalculationType.BUBBLE_POINT:
+            self.config_stack.setCurrentWidget(self.bubble_widget)
+        elif calc_type == CalculationType.DEW_POINT:
+            self.config_stack.setCurrentWidget(self.dew_widget)
         elif calc_type == CalculationType.PHASE_ENVELOPE:
             self.config_stack.setCurrentWidget(self.phase_env_widget)
         elif calc_type == CalculationType.CCE:
             self.config_stack.setCurrentWidget(self.cce_widget)
+        elif calc_type == CalculationType.DL:
+            self.config_stack.setCurrentWidget(self.dl_widget)
+        elif calc_type == CalculationType.CVD:
+            self.config_stack.setCurrentWidget(self.cvd_widget)
+        elif calc_type == CalculationType.SEPARATOR:
+            self.config_stack.setCurrentWidget(self.separator_widget)
         else:
             self.config_stack.setCurrentWidget(self.placeholder_widget)
 
@@ -281,7 +554,7 @@ class ConditionsInputWidget(QWidget):
         """Validate pressure input."""
         try:
             value = float(self.pressure_edit.text())
-            unit = self.pressure_unit.currentData()
+            unit = self._coerce_combo_enum(self.pressure_unit.currentData(), PressureUnit)
             pa = pressure_to_pa(value, unit)
 
             if pa < PRESSURE_MIN_PA or pa > PRESSURE_MAX_PA:
@@ -298,7 +571,7 @@ class ConditionsInputWidget(QWidget):
         """Validate temperature input."""
         try:
             value = float(self.temperature_edit.text())
-            unit = self.temperature_unit.currentData()
+            unit = self._coerce_combo_enum(self.temperature_unit.currentData(), TemperatureUnit)
             k = temperature_to_k(value, unit)
 
             if k < TEMPERATURE_MIN_K or k > TEMPERATURE_MAX_K:
@@ -311,16 +584,30 @@ class ConditionsInputWidget(QWidget):
             self.temperature_edit.set_valid(False)
             return False
 
+    @staticmethod
+    def _coerce_combo_enum(value, enum_type):
+        """Normalize Qt combo-box data back into the expected enum type."""
+        if isinstance(value, enum_type):
+            return value
+        return enum_type(value)
+
     def get_calculation_type(self) -> CalculationType:
         """Get selected calculation type."""
-        return self.calc_type_combo.currentData()
+        return self._coerce_combo_enum(self.calc_type_combo.currentData(), CalculationType)
 
     def get_eos_type(self) -> EOSType:
         """Get selected EOS."""
-        return self.eos_combo.currentData()
+        return self._coerce_combo_enum(self.eos_combo.currentData(), EOSType)
 
     def set_calculation_type(self, calc_type: CalculationType) -> None:
         """Set selected calculation type."""
+        calc_type = self._coerce_combo_enum(calc_type, CalculationType)
+        if not is_gui_supported_calculation_type(calc_type):
+            supported = ", ".join(calc.value for calc in GUI_SUPPORTED_CALCULATION_TYPES)
+            raise ValueError(
+                f"Calculation type '{calc_type.value}' is not currently exposed in the desktop GUI. "
+                f"Supported GUI types: {supported}"
+            )
         index = self.calc_type_combo.findData(calc_type)
         if index < 0:
             raise ValueError(f"Unsupported calculation type: {calc_type}")
@@ -328,6 +615,13 @@ class ConditionsInputWidget(QWidget):
 
     def set_eos_type(self, eos_type: EOSType) -> None:
         """Set selected EOS type."""
+        eos_type = self._coerce_combo_enum(eos_type, EOSType)
+        if not is_gui_supported_eos_type(eos_type):
+            supported = ", ".join(eos.value for eos in GUI_SUPPORTED_EOS_TYPES)
+            raise ValueError(
+                f"EOS '{eos_type.value}' is not currently exposed in the desktop GUI. "
+                f"Supported GUI EOS types: {supported}"
+            )
         index = self.eos_combo.findData(eos_type)
         if index < 0:
             raise ValueError(f"Unsupported EOS type: {eos_type}")
@@ -361,12 +655,58 @@ class ConditionsInputWidget(QWidget):
         self.env_t_max.setValue(config.temperature_max_k - 273.15)
         self.env_n_points.setValue(config.n_points)
 
+    def set_bubble_point_config(self, config: SaturationPointConfig) -> None:
+        """Load bubble-point config into widget controls."""
+        self.bubble_temperature.setValue(config.temperature_k - 273.15)
+        has_guess = config.pressure_initial_pa is not None
+        self.bubble_pressure_guess_enabled.setChecked(has_guess)
+        if config.pressure_initial_pa is not None:
+            self.bubble_pressure_guess.setValue(config.pressure_initial_pa / 1e5)
+
+    def set_dew_point_config(self, config: SaturationPointConfig) -> None:
+        """Load dew-point config into widget controls."""
+        self.dew_temperature.setValue(config.temperature_k - 273.15)
+        has_guess = config.pressure_initial_pa is not None
+        self.dew_pressure_guess_enabled.setChecked(has_guess)
+        if config.pressure_initial_pa is not None:
+            self.dew_pressure_guess.setValue(config.pressure_initial_pa / 1e5)
+
     def set_cce_config(self, config: CCEConfig) -> None:
         """Load CCE config into widget controls."""
         self.cce_temperature.setValue(config.temperature_k - 273.15)
         self.cce_p_start.setValue(config.pressure_start_pa / 1e5)
         self.cce_p_end.setValue(config.pressure_end_pa / 1e5)
         self.cce_n_steps.setValue(config.n_steps)
+
+    def set_dl_config(self, config: DLConfig) -> None:
+        """Load DL config into widget controls."""
+        self.dl_temperature.setValue(config.temperature_k - 273.15)
+        self.dl_bubble_pressure.setValue(config.bubble_pressure_pa / 1e5)
+        self.dl_p_end.setValue(config.pressure_end_pa / 1e5)
+        self.dl_n_steps.setValue(config.n_steps)
+
+    def set_cvd_config(self, config: CVDConfig) -> None:
+        """Load CVD config into widget controls."""
+        self.cvd_temperature.setValue(config.temperature_k - 273.15)
+        self.cvd_p_dew.setValue(config.dew_pressure_pa / 1e5)
+        self.cvd_p_end.setValue(config.pressure_end_pa / 1e5)
+        self.cvd_n_steps.setValue(config.n_steps)
+
+    def set_separator_config(self, config: SeparatorConfig) -> None:
+        """Load separator config into widget controls."""
+        self.separator_reservoir_pressure.setValue(config.reservoir_pressure_pa / 1e5)
+        self.separator_reservoir_temperature.setValue(config.reservoir_temperature_k - 273.15)
+        self.separator_include_stock_tank.setChecked(config.include_stock_tank)
+        self._set_separator_stage_rows(
+            [
+                {
+                    "name": stage.name,
+                    "pressure_bar": stage.pressure_pa / 1e5,
+                    "temperature_c": stage.temperature_k - 273.15,
+                }
+                for stage in config.separator_stages
+            ]
+        )
 
     def load_from_run_config(self, config: RunConfig) -> None:
         """Load a validated RunConfig into widget controls."""
@@ -378,6 +718,14 @@ class ConditionsInputWidget(QWidget):
             if config.pt_flash_config is None:
                 raise ValueError("RunConfig missing pt_flash_config")
             self.set_pt_flash_config(config.pt_flash_config)
+        elif config.calculation_type == CalculationType.BUBBLE_POINT:
+            if config.bubble_point_config is None:
+                raise ValueError("RunConfig missing bubble_point_config")
+            self.set_bubble_point_config(config.bubble_point_config)
+        elif config.calculation_type == CalculationType.DEW_POINT:
+            if config.dew_point_config is None:
+                raise ValueError("RunConfig missing dew_point_config")
+            self.set_dew_point_config(config.dew_point_config)
         elif config.calculation_type == CalculationType.PHASE_ENVELOPE:
             if config.phase_envelope_config is None:
                 raise ValueError("RunConfig missing phase_envelope_config")
@@ -386,6 +734,18 @@ class ConditionsInputWidget(QWidget):
             if config.cce_config is None:
                 raise ValueError("RunConfig missing cce_config")
             self.set_cce_config(config.cce_config)
+        elif config.calculation_type == CalculationType.DL:
+            if config.dl_config is None:
+                raise ValueError("RunConfig missing dl_config")
+            self.set_dl_config(config.dl_config)
+        elif config.calculation_type == CalculationType.CVD:
+            if config.cvd_config is None:
+                raise ValueError("RunConfig missing cvd_config")
+            self.set_cvd_config(config.cvd_config)
+        elif config.calculation_type == CalculationType.SEPARATOR:
+            if config.separator_config is None:
+                raise ValueError("RunConfig missing separator_config")
+            self.set_separator_config(config.separator_config)
         else:
             raise ValueError(
                 f"Loading calculation type '{config.calculation_type.value}' is not implemented"
@@ -412,8 +772,8 @@ class ConditionsInputWidget(QWidget):
             p_value = float(self.pressure_edit.text())
             t_value = float(self.temperature_edit.text())
 
-            p_unit = self.pressure_unit.currentData()
-            t_unit = self.temperature_unit.currentData()
+            p_unit = self._coerce_combo_enum(self.pressure_unit.currentData(), PressureUnit)
+            t_unit = self._coerce_combo_enum(self.temperature_unit.currentData(), TemperatureUnit)
 
             p_pa = pressure_to_pa(p_value, p_unit)
             t_k = temperature_to_k(t_value, t_unit)
@@ -445,6 +805,44 @@ class ConditionsInputWidget(QWidget):
             self.validation_error.emit(str(e))
             return None
 
+    def _get_optional_pressure_guess(
+        self,
+        enabled_widget: QCheckBox,
+        spin_widget: QDoubleSpinBox,
+    ) -> Optional[float]:
+        """Return an optional initial pressure guess in Pa."""
+        if not enabled_widget.isChecked():
+            return None
+        return spin_widget.value() * 1e5
+
+    def get_bubble_point_config(self) -> Optional[SaturationPointConfig]:
+        """Get bubble-point configuration if valid."""
+        try:
+            return SaturationPointConfig(
+                temperature_k=self.bubble_temperature.value() + 273.15,
+                pressure_initial_pa=self._get_optional_pressure_guess(
+                    self.bubble_pressure_guess_enabled,
+                    self.bubble_pressure_guess,
+                ),
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
+    def get_dew_point_config(self) -> Optional[SaturationPointConfig]:
+        """Get dew-point configuration if valid."""
+        try:
+            return SaturationPointConfig(
+                temperature_k=self.dew_temperature.value() + 273.15,
+                pressure_initial_pa=self._get_optional_pressure_guess(
+                    self.dew_pressure_guess_enabled,
+                    self.dew_pressure_guess,
+                ),
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
     def get_cce_config(self) -> Optional[CCEConfig]:
         """Get CCE configuration if valid."""
         try:
@@ -468,6 +866,83 @@ class ConditionsInputWidget(QWidget):
             self.validation_error.emit(str(e))
             return None
 
+    def get_dl_config(self) -> Optional[DLConfig]:
+        """Get DL configuration if valid."""
+        try:
+            t_k = self.dl_temperature.value() + 273.15
+            bubble_pressure_pa = self.dl_bubble_pressure.value() * 1e5
+            p_end_pa = self.dl_p_end.value() * 1e5
+
+            if bubble_pressure_pa <= p_end_pa:
+                self.validation_error.emit(
+                    "Bubble pressure must be greater than end pressure for DL"
+                )
+                return None
+
+            return DLConfig(
+                temperature_k=t_k,
+                bubble_pressure_pa=bubble_pressure_pa,
+                pressure_end_pa=p_end_pa,
+                n_steps=self.dl_n_steps.value(),
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
+    def get_cvd_config(self) -> Optional[CVDConfig]:
+        """Get CVD configuration if valid."""
+        try:
+            t_k = self.cvd_temperature.value() + 273.15
+            p_dew_pa = self.cvd_p_dew.value() * 1e5  # bar to Pa
+            p_end_pa = self.cvd_p_end.value() * 1e5
+
+            if p_dew_pa <= p_end_pa:
+                self.validation_error.emit(
+                    "Dew pressure must be greater than end pressure for CVD"
+                )
+                return None
+
+            return CVDConfig(
+                temperature_k=t_k,
+                dew_pressure_pa=p_dew_pa,
+                pressure_end_pa=p_end_pa,
+                n_steps=self.cvd_n_steps.value(),
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
+    def get_separator_config(self) -> Optional[SeparatorConfig]:
+        """Get separator configuration if valid."""
+        try:
+            stages = []
+            for row in range(self.separator_stage_table.rowCount()):
+                name_item = self.separator_stage_table.item(row, 0)
+                pressure_item = self.separator_stage_table.item(row, 1)
+                temperature_item = self.separator_stage_table.item(row, 2)
+                if pressure_item is None or temperature_item is None:
+                    raise ValueError(f"Separator stage row {row + 1} is incomplete")
+                stage_name = "" if name_item is None else name_item.text().strip()
+                pressure_pa = float(pressure_item.text()) * 1e5
+                temperature_k = float(temperature_item.text()) + 273.15
+                stages.append(
+                    {
+                        "name": stage_name,
+                        "pressure_pa": pressure_pa,
+                        "temperature_k": temperature_k,
+                    }
+                )
+
+            return SeparatorConfig(
+                reservoir_pressure_pa=self.separator_reservoir_pressure.value() * 1e5,
+                reservoir_temperature_k=self.separator_reservoir_temperature.value() + 273.15,
+                include_stock_tank=self.separator_include_stock_tank.isChecked(),
+                separator_stages=stages,
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
     def validate(self) -> Tuple[bool, str]:
         """Validate current conditions.
 
@@ -480,6 +955,14 @@ class ConditionsInputWidget(QWidget):
             config = self.get_pt_flash_config()
             if config is None:
                 return False, "Invalid PT flash conditions"
+        elif calc_type == CalculationType.BUBBLE_POINT:
+            config = self.get_bubble_point_config()
+            if config is None:
+                return False, "Invalid bubble-point conditions"
+        elif calc_type == CalculationType.DEW_POINT:
+            config = self.get_dew_point_config()
+            if config is None:
+                return False, "Invalid dew-point conditions"
         elif calc_type == CalculationType.PHASE_ENVELOPE:
             config = self.get_phase_envelope_config()
             if config is None:
@@ -488,7 +971,19 @@ class ConditionsInputWidget(QWidget):
             config = self.get_cce_config()
             if config is None:
                 return False, "Invalid CCE conditions"
+        elif calc_type == CalculationType.DL:
+            config = self.get_dl_config()
+            if config is None:
+                return False, "Invalid DL conditions"
+        elif calc_type == CalculationType.CVD:
+            config = self.get_cvd_config()
+            if config is None:
+                return False, "Invalid CVD conditions"
+        elif calc_type == CalculationType.SEPARATOR:
+            config = self.get_separator_config()
+            if config is None:
+                return False, "Invalid separator conditions"
         else:
-            return False, f"Calculation type '{calc_type.value}' not yet implemented"
+            return False, f"Calculation type '{calc_type.value}' is not currently exposed in the desktop GUI"
 
         return True, ""

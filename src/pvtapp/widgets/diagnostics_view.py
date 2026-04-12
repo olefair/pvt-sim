@@ -26,6 +26,7 @@ from pvtapp.schemas import (
     SolverDiagnostics,
     ConvergenceStatusEnum,
 )
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 
 
 class DiagnosticsWidget(QWidget):
@@ -33,6 +34,7 @@ class DiagnosticsWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._ui_scale = DEFAULT_UI_SCALE
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -61,7 +63,7 @@ class DiagnosticsWidget(QWidget):
         iter_box.addWidget(QLabel("Iterations"))
         self.iterations_label = QLabel("-")
         self.iterations_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.iterations_label.setStyleSheet("font-size: 18pt; font-weight: bold;")
+        self.iterations_label.setStyleSheet("font-weight: bold;")
         iter_box.addWidget(self.iterations_label)
         metrics_layout.addLayout(iter_box)
 
@@ -70,7 +72,7 @@ class DiagnosticsWidget(QWidget):
         res_box.addWidget(QLabel("Final Residual"))
         self.residual_label = QLabel("-")
         self.residual_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.residual_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        self.residual_label.setStyleSheet("font-weight: bold;")
         res_box.addWidget(self.residual_label)
         metrics_layout.addLayout(res_box)
 
@@ -79,7 +81,7 @@ class DiagnosticsWidget(QWidget):
         red_box.addWidget(QLabel("Residual Reduction"))
         self.reduction_label = QLabel("-")
         self.reduction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.reduction_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        self.reduction_label.setStyleSheet("font-weight: bold;")
         red_box.addWidget(self.reduction_label)
         metrics_layout.addLayout(red_box)
 
@@ -140,6 +142,18 @@ class DiagnosticsWidget(QWidget):
         self.log_text.setMaximumHeight(100)
         log_layout.addWidget(self.log_text)
         layout.addWidget(log_group)
+
+        self.apply_ui_scale(self._ui_scale)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale diagnostic widget elements that are not controlled by QSS."""
+        self._ui_scale = ui_scale
+        iterations_px = scale_metric(24, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        detail_px = scale_metric(19, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        self.iterations_label.setStyleSheet(f"font-size: {iterations_px}px; font-weight: bold;")
+        self.residual_label.setStyleSheet(f"font-size: {detail_px}px; font-weight: bold;")
+        self.reduction_label.setStyleSheet(f"font-size: {detail_px}px; font-weight: bold;")
+        self.log_text.setMaximumHeight(scale_metric(100, ui_scale, reference_scale=DEFAULT_UI_SCALE))
 
     def clear(self) -> None:
         """Clear all diagnostics displays."""

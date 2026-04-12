@@ -173,6 +173,7 @@
       "id": "iC4",
       "name": "Isobutane",
       "aliases": [
+        "iC4",
         "i-Butane",
         "2-Methylpropane"
       ],
@@ -228,6 +229,7 @@
       "id": "iC5",
       "name": "Isopentane",
       "aliases": [
+        "iC5",
         "i-Pentane",
         "2-Methylbutane"
       ],
@@ -256,6 +258,7 @@
       "id": "neoC5",
       "name": "Neopentane",
       "aliases": [
+        "neoC5",
         "2,2-Dimethylpropane"
       ],
       "formula": "C5H12",
@@ -282,6 +285,7 @@
       "id": "C6",
       "name": "n-Hexane",
       "aliases": [
+        "C6",
         "nC6",
         "n-Hexane",
         "Hexane"
@@ -310,6 +314,7 @@
       "id": "C7",
       "name": "n-Heptane",
       "aliases": [
+        "C7",
         "nC7",
         "n-Heptane",
         "Heptane"
@@ -338,6 +343,7 @@
       "id": "C8",
       "name": "n-Octane",
       "aliases": [
+        "C8",
         "nC8",
         "n-Octane",
         "Octane"
@@ -366,6 +372,7 @@
       "id": "C9",
       "name": "n-Nonane",
       "aliases": [
+        "C9",
         "nC9",
         "n-Nonane",
         "Nonane"
@@ -394,6 +401,7 @@
       "id": "C10",
       "name": "n-Decane",
       "aliases": [
+        "C10",
         "nC10",
         "n-Decane",
         "Decane"

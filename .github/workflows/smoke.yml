@@ -1,0 +1,48 @@
+name: smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: pvt-sim smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run fast tests
+        run: |
+          pytest tests/unit/test_flash.py \
+                 tests/unit/test_pvtapp_phase_envelope_workflow.py \
+                 tests/unit/test_pvtapp_cce_workflow.py \
+                 tests/unit/test_cli_validate.py \
+                 tests/contracts/test_invariants.py \
+                 -q
+
+      - name: Validate phase-envelope example
+        run: pvtsim validate examples/phase_envelope_config.json
+
+      - name: Run phase-envelope example
+        run: pvtsim run --no-artifacts examples/phase_envelope_config.json
+
+      - name: Validate PT-flash example
+        run: pvtsim validate examples/pt_flash_config.json
+
+      - name: Run PT-flash example
+        run: pvtsim run --no-artifacts examples/pt_flash_config.json

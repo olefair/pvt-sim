@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -20,7 +21,6 @@ from pvtapp.schemas import (
     PhaseEnvelopePoint,
     PhaseEnvelopeResult,
     RunConfig,
-    RunManifest,
     RunResult,
     RunStatus,
     SolverSettings,
@@ -49,14 +49,14 @@ def app() -> QApplication:
 def _build_phase_envelope_run_result() -> RunResult:
     phase_envelope = PhaseEnvelopeResult(
         bubble_curve=[
-            PhaseEnvelopePoint(temperature_k=300.0, pressure_pa=8.0e6),
-            PhaseEnvelopePoint(temperature_k=320.0, pressure_pa=7.0e6),
+            PhaseEnvelopePoint(temperature_k=300.0, pressure_pa=8.0e6, point_type="bubble"),
+            PhaseEnvelopePoint(temperature_k=320.0, pressure_pa=7.0e6, point_type="bubble"),
         ],
         dew_curve=[
-            PhaseEnvelopePoint(temperature_k=340.0, pressure_pa=6.5e6),
-            PhaseEnvelopePoint(temperature_k=360.0, pressure_pa=5.5e6),
+            PhaseEnvelopePoint(temperature_k=340.0, pressure_pa=6.5e6, point_type="dew"),
+            PhaseEnvelopePoint(temperature_k=360.0, pressure_pa=5.5e6, point_type="dew"),
         ],
-        critical_point=PhaseEnvelopePoint(temperature_k=330.0, pressure_pa=7.2e6),
+        critical_point=PhaseEnvelopePoint(temperature_k=330.0, pressure_pa=7.2e6, point_type="critical"),
         cricondenbar=None,
         cricondentherm=None,
     )
@@ -66,6 +66,7 @@ def _build_phase_envelope_run_result() -> RunResult:
         run_name="style-test",
         calculation_type=CalculationType.PHASE_ENVELOPE,
         status=RunStatus.COMPLETED,
+        started_at=datetime(2026, 4, 8, 8, 0, 0),
         config=RunConfig(
             calculation_type=CalculationType.PHASE_ENVELOPE,
             eos_type="peng_robinson",
@@ -73,7 +74,6 @@ def _build_phase_envelope_run_result() -> RunResult:
             solver_settings=SolverSettings(),
             phase_envelope_config={"temperature_min_k": 250.0, "temperature_max_k": 400.0, "n_points": 20},
         ),
-        manifest=RunManifest(run_id="style-test"),
         phase_envelope_result=phase_envelope,
     )
 
@@ -87,13 +87,14 @@ def test_plot_widget_uses_dark_surface_before_render(app: QApplication) -> None:
     assert widget.canvas.palette().color(widget.canvas.backgroundRole()).name().lower() == QColor(PLOT_SURFACE_COLOR).name().lower()
 
 
-def test_phase_envelope_plot_uses_light_canvas_after_render(app: QApplication) -> None:
+def test_phase_envelope_plot_keeps_dark_canvas_after_render(app: QApplication) -> None:
     widget = ResultsPlotWidget()
     if not getattr(widget, "_matplotlib_available", False):
         pytest.skip("matplotlib Qt backend unavailable")
 
     widget.display_result(_build_phase_envelope_run_result())
 
+    assert QColor(PLOT_CANVAS_COLOR).name().lower() == QColor(PLOT_SURFACE_COLOR).name().lower()
     assert widget.figure.get_facecolor()[:3] == pytest.approx(QColor(PLOT_CANVAS_COLOR).getRgbF()[:3], abs=1e-3)
     ax = widget.figure.axes[0]
     assert ax.get_facecolor()[:3] == pytest.approx(QColor(PLOT_CANVAS_COLOR).getRgbF()[:3], abs=1e-3)

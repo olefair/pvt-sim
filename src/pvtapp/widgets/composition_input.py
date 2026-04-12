@@ -20,9 +20,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QGroupBox,
+    QSizePolicy,
+    QLineEdit,
+    QStyledItemDelegate,
 )
 
 from pvtapp.schemas import ComponentEntry, FluidComposition, COMPOSITION_SUM_TOLERANCE
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 
 
 # Standard components available for selection
@@ -30,6 +34,73 @@ STANDARD_COMPONENTS = [
     "N2", "CO2", "H2S", "C1", "C2", "C3", "iC4", "nC4",
     "iC5", "nC5", "C6", "C7+",
 ]
+
+COMPONENT_DROPDOWN_BUTTON_WIDTH = 34
+COMPONENT_COLUMN_SIDE_MARGIN = 6
+COMPONENT_COLUMN_MIN_WIDTH = 96
+COMPONENT_COLUMN_MAX_WIDTH = 140
+MOLE_FRACTION_COLUMN_MIN_WIDTH = 108
+
+
+class ClickSelectComboBox(QComboBox):
+    """Combo box that ignores mouse-wheel changes.
+
+    This prevents accidental component changes when the cursor happens to be
+    hovering over an already selected component while the user is trying to
+    scroll the surrounding inputs panel.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None, *, ui_scale: float = DEFAULT_UI_SCALE) -> None:
+        super().__init__(parent)
+        self.apply_ui_scale(ui_scale)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Update the drop-down affordance to match the active UI scale."""
+        dropdown_width = scale_metric(
+            COMPONENT_DROPDOWN_BUTTON_WIDTH,
+            ui_scale,
+            reference_scale=DEFAULT_UI_SCALE,
+        )
+        self.setStyleSheet(
+            f"QComboBox {{ padding-right: {dropdown_width + 4}px; }}"
+            f"QComboBox::drop-down {{ width: {dropdown_width}px; border: none; }}"
+        )
+
+    def wheelEvent(self, event) -> None:  # pragma: no cover - simple UI guard
+        event.ignore()
+
+
+class MoleFractionItemDelegate(QStyledItemDelegate):
+    """Compact table-cell editor for mole fractions.
+
+    Prevents the global rounded/padded QLineEdit style from clipping the text
+    inside a table row when the user edits a mole-fraction value.
+    """
+
+    @staticmethod
+    def _horizontal_padding_for_font_height(font_height: int) -> int:
+        return max(2, int(round(font_height * 0.25)))
+
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        editor.setFrame(False)
+        editor.setFont(option.font)
+        editor.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        font_height = max(editor.fontMetrics().height(), option.fontMetrics.height())
+        horizontal_padding = self._horizontal_padding_for_font_height(font_height)
+        editor.setStyleSheet(
+            f"padding: 0px {horizontal_padding}px;"
+            "margin: 0px;"
+            "border: none;"
+            "border-radius: 0px;"
+            "background: transparent;"
+        )
+        return editor
+
+    def updateEditorGeometry(self, editor, option, index) -> None:
+        rect = option.rect.adjusted(1, 0, -1, 0)
+        editor.setGeometry(rect)
 
 
 class CompositionInputWidget(QWidget):
@@ -48,6 +119,7 @@ class CompositionInputWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._ui_scale = DEFAULT_UI_SCALE
         self._setup_ui()
         self._connect_signals()
 
@@ -67,10 +139,14 @@ class CompositionInputWidget(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Component", "Mole Fraction"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setAlternatingRowColors(True)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.table.setItemDelegateForColumn(1, MoleFractionItemDelegate(self.table))
         group_layout.addWidget(self.table)
+        self._sync_column_widths()
 
         # Button row
         button_layout = QHBoxLayout()
@@ -102,6 +178,19 @@ class CompositionInputWidget(QWidget):
 
         layout.addWidget(group)
 
+    def _scaled_metric(self, value: int) -> int:
+        """Scale metrics relative to the current default desktop baseline."""
+        return scale_metric(value, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale non-QSS geometry to follow the app zoom level."""
+        self._ui_scale = ui_scale
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 0)
+            if isinstance(combo, ClickSelectComboBox):
+                combo.apply_ui_scale(ui_scale)
+        self._sync_table_height()
+
     def _connect_signals(self) -> None:
         """Connect widget signals."""
         self.add_btn.clicked.connect(self._add_row)
@@ -126,6 +215,7 @@ class CompositionInputWidget(QWidget):
             self._add_component_row(comp_id, fraction)
         self.table.blockSignals(False)
 
+        self._sync_table_height()
         self._update_sum()
 
     def _add_row(self) -> None:
@@ -138,7 +228,7 @@ class CompositionInputWidget(QWidget):
         self.table.insertRow(row)
 
         # Component selector (combobox)
-        combo = QComboBox()
+        combo = ClickSelectComboBox(ui_scale=self._ui_scale)
         combo.setEditable(True)
         combo.addItems(STANDARD_COMPONENTS)
         if comp_id:
@@ -152,8 +242,10 @@ class CompositionInputWidget(QWidget):
 
         # Mole fraction
         item = QTableWidgetItem(f"{fraction:.6f}")
-        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 1, item)
+
+        self._sync_table_height()
 
     def _remove_selected(self) -> None:
         """Remove selected rows from the table."""
@@ -171,6 +263,7 @@ class CompositionInputWidget(QWidget):
         for row in sorted(rows, reverse=True):
             self.table.removeRow(row)
 
+        self._sync_table_height()
         self._update_sum()
         self.composition_edited.emit()
 
@@ -185,6 +278,7 @@ class CompositionInputWidget(QWidget):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.table.setRowCount(0)
+                self._sync_table_height()
                 self._update_sum()
                 self.composition_edited.emit()
 
@@ -211,6 +305,7 @@ class CompositionInputWidget(QWidget):
                     pass
         self.table.blockSignals(False)
 
+        self._sync_table_height()
         self._update_sum()
         self.composition_edited.emit()
 
@@ -218,6 +313,72 @@ class CompositionInputWidget(QWidget):
         """Handle cell value changes."""
         self._update_sum()
         self.composition_edited.emit()
+
+    def _preferred_row_height(self) -> int:
+        """Return a row height that tracks the current scaled UI font/widgets."""
+        font_height = self.table.fontMetrics().height()
+        combo_height = 0
+        if self.table.rowCount() > 0:
+            combo = self.table.cellWidget(0, 0)
+            if combo is not None:
+                combo_height = combo.sizeHint().height()
+
+        editor_padding = MoleFractionItemDelegate._horizontal_padding_for_font_height(font_height)
+        editor_height = font_height + max(4, editor_padding)
+        return max(self.table.verticalHeader().minimumSectionSize(), font_height + 10, editor_height, combo_height)
+
+    def _sync_column_widths(self) -> None:
+        """Keep the component column readable while letting mole fractions breathe."""
+        viewport_width = self.table.viewport().width()
+        if viewport_width <= 0:
+            viewport_width = self.table.sizeHint().width()
+        if viewport_width <= 0:
+            return
+
+        header_metrics = self.table.horizontalHeader().fontMetrics()
+        header_width = header_metrics.horizontalAdvance("Component")
+        component_width = max(
+            self._scaled_metric(COMPONENT_COLUMN_MIN_WIDTH),
+            min(
+                self._scaled_metric(COMPONENT_COLUMN_MAX_WIDTH),
+                max(
+                    header_width
+                    + self._scaled_metric(COMPONENT_DROPDOWN_BUTTON_WIDTH)
+                    + self._scaled_metric(COMPONENT_COLUMN_SIDE_MARGIN),
+                    int(round(viewport_width * 0.46)),
+                ),
+            ),
+        )
+
+        mole_fraction_min_width = self._scaled_metric(MOLE_FRACTION_COLUMN_MIN_WIDTH)
+        available_for_fraction = max(mole_fraction_min_width, viewport_width - component_width)
+        if viewport_width < component_width + mole_fraction_min_width:
+            component_width = max(self._scaled_metric(COMPONENT_COLUMN_MIN_WIDTH), viewport_width - mole_fraction_min_width)
+            available_for_fraction = max(mole_fraction_min_width, viewport_width - component_width)
+
+        self.table.setColumnWidth(0, component_width)
+        self.table.setColumnWidth(1, available_for_fraction)
+
+    def _sync_table_height(self) -> None:
+        """Resize the table to show all rows without internal scrolling."""
+        preferred_row_height = self._preferred_row_height()
+        self.table.verticalHeader().setDefaultSectionSize(preferred_row_height)
+        self.table.verticalHeader().setMinimumSectionSize(preferred_row_height)
+
+        for row in range(self.table.rowCount()):
+            self.table.setRowHeight(row, preferred_row_height)
+
+        self._sync_column_widths()
+
+        header_height = self.table.horizontalHeader().sizeHint().height()
+        frame_height = self.table.frameWidth() * 2
+        row_heights = preferred_row_height * max(self.table.rowCount(), 1)
+
+        table_height = frame_height + header_height + row_heights + 4
+        self.table.setMinimumHeight(table_height)
+        self.table.setMaximumHeight(table_height)
+        self.table.updateGeometry()
+        self.updateGeometry()
 
     def _get_sum(self) -> float:
         """Calculate sum of mole fractions."""
@@ -250,6 +411,11 @@ class CompositionInputWidget(QWidget):
             self.sum_status.setStyleSheet("color: red; font-weight: bold;")
             self.sum_label.setStyleSheet("color: red; font-weight: bold;")
 
+    def resizeEvent(self, event) -> None:
+        """Keep column widths sensible when the fixed sidebar geometry changes."""
+        super().resizeEvent(event)
+        self._sync_column_widths()
+
     def get_components(self) -> List[Tuple[str, float]]:
         """Get list of (component_id, mole_fraction) tuples.
 
@@ -277,13 +443,24 @@ class CompositionInputWidget(QWidget):
 
         return components
 
+    def _get_runtime_components(self) -> List[Tuple[str, float]]:
+        """Return components that should participate in runtime validation/execution.
+
+        Zero-fraction rows are treated as placeholders and ignored at runtime.
+        """
+        return [
+            (comp_id, fraction)
+            for comp_id, fraction in self.get_components()
+            if abs(fraction) > COMPOSITION_SUM_TOLERANCE
+        ]
+
     def validate(self) -> Tuple[bool, str]:
         """Validate the current composition.
 
         Returns:
             Tuple of (is_valid, error_message)
         """
-        components = self.get_components()
+        components = self._get_runtime_components()
 
         if not components:
             return False, "At least one component is required"
@@ -319,7 +496,7 @@ class CompositionInputWidget(QWidget):
             self.validation_error.emit(error)
             return None
 
-        components = self.get_components()
+        components = self._get_runtime_components()
         entries = [
             ComponentEntry(component_id=cid, mole_fraction=frac)
             for cid, frac in components
@@ -342,5 +519,6 @@ class CompositionInputWidget(QWidget):
             self._add_component_row(entry.component_id, entry.mole_fraction)
 
         self.table.blockSignals(False)
+        self._sync_table_height()
         self._update_sum()
         self.composition_edited.emit()

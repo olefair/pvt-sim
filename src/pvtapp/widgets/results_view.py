@@ -7,6 +7,7 @@ with export capabilities.
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -26,13 +27,21 @@ from pvtapp.schemas import (
     RunResult,
     RunStatus,
     PTFlashResult,
+    BubblePointResult,
+    DewPointResult,
     PhaseEnvelopeResult,
     CCEResult,
-    pressure_from_pa,
-    temperature_from_k,
-    PressureUnit,
-    TemperatureUnit,
+    DLResult,
+    CVDResult,
+    SeparatorResult,
 )
+
+
+PLOT_SURFACE_COLOR = "#0f1a2b"
+PLOT_CANVAS_COLOR = PLOT_SURFACE_COLOR
+PLOT_TEXT_COLOR = "#e5e7eb"
+PLOT_GRID_COLOR = "#223044"
+PLOT_LEGEND_FACE_COLOR = "#121f34"
 
 
 class ResultsTableWidget(QWidget):
@@ -133,10 +142,20 @@ class ResultsTableWidget(QWidget):
         # Display appropriate result type
         if result.pt_flash_result:
             self._display_pt_flash(result.pt_flash_result)
+        elif result.bubble_point_result:
+            self._display_bubble_point(result.bubble_point_result)
+        elif result.dew_point_result:
+            self._display_dew_point(result.dew_point_result)
         elif result.phase_envelope_result:
             self._display_phase_envelope(result.phase_envelope_result)
         elif result.cce_result:
             self._display_cce(result.cce_result)
+        elif result.dl_result:
+            self._display_dl(result.dl_result)
+        elif result.cvd_result:
+            self._display_cvd(result.cvd_result)
+        elif result.separator_result:
+            self._display_separator(result.separator_result)
         else:
             self._display_error(result)
 
@@ -207,6 +226,8 @@ class ResultsTableWidget(QWidget):
 
     def _display_phase_envelope(self, result: PhaseEnvelopeResult) -> None:
         """Display phase envelope results."""
+        self.details_table.setRowCount(0)
+
         # Summary
         summary_data = [
             ("Bubble Points", str(len(result.bubble_curve))),
@@ -264,8 +285,88 @@ class ResultsTableWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
 
+    def _display_saturation_result(
+        self,
+        result: BubblePointResult | DewPointResult,
+        *,
+        pressure_label: str,
+        stability_label: str,
+        stability_value: bool,
+    ) -> None:
+        """Display bubble-point or dew-point results."""
+        summary_data = [
+            ("Converged", "Yes" if result.converged else "No"),
+            (pressure_label, f"{result.pressure_pa / 1e5:.2f} bar"),
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            (stability_label, "Yes" if stability_value else "No"),
+            ("Iterations", str(result.iterations)),
+            ("Final Residual", f"{result.residual:.2e}"),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        components = sorted(
+            set(result.liquid_composition)
+            | set(result.vapor_composition)
+            | set(result.k_values)
+        )
+
+        self.composition_table.setColumnCount(3)
+        self.composition_table.setHorizontalHeaderLabels(
+            ["Component", "Liquid (x)", "Vapor (y)"]
+        )
+        self.composition_table.setRowCount(len(components))
+
+        self.details_table.setColumnCount(2)
+        self.details_table.setHorizontalHeaderLabels(["Component", "K-value"])
+        self.details_table.setRowCount(len(components))
+
+        for row, comp in enumerate(components):
+            self.composition_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.composition_table.setItem(
+                row, 1, QTableWidgetItem(f"{result.liquid_composition.get(comp, 0.0):.6f}")
+            )
+            self.composition_table.setItem(
+                row, 2, QTableWidgetItem(f"{result.vapor_composition.get(comp, 0.0):.6f}")
+            )
+
+            self.details_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.details_table.setItem(
+                row, 1, QTableWidgetItem(f"{result.k_values.get(comp, 0.0):.6f}")
+            )
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+    def _display_bubble_point(self, result: BubblePointResult) -> None:
+        """Display bubble-point results."""
+        self._display_saturation_result(
+            result,
+            pressure_label="Bubble Pressure",
+            stability_label="Stable Liquid",
+            stability_value=result.stable_liquid,
+        )
+
+    def _display_dew_point(self, result: DewPointResult) -> None:
+        """Display dew-point results."""
+        self._display_saturation_result(
+            result,
+            pressure_label="Dew Pressure",
+            stability_label="Stable Vapor",
+            stability_value=result.stable_vapor,
+        )
+
     def _display_cce(self, result: CCEResult) -> None:
         """Display CCE results."""
+        self.details_table.setRowCount(0)
+
         # Summary
         summary_data = [
             ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
@@ -310,6 +411,165 @@ class ResultsTableWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
 
+    def _display_dl(self, result: DLResult) -> None:
+        """Display DL results."""
+        summary_data = [
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            ("Bubble Pressure", f"{result.bubble_pressure_pa / 1e5:.2f} bar"),
+            ("Initial Rs", f"{result.rsi:.4f}"),
+            ("Initial Bo", f"{result.boi:.4f}"),
+            ("Converged", "Yes" if result.converged else "No"),
+            ("Steps", str(len(result.steps))),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        self.composition_table.setColumnCount(5)
+        self.composition_table.setHorizontalHeaderLabels(
+            ["Pressure (bar)", "Rs", "Bo", "Bt", "Vapor Frac."]
+        )
+        self.composition_table.setRowCount(len(result.steps))
+
+        self.details_table.setColumnCount(2)
+        self.details_table.setHorizontalHeaderLabels(["Step", "Liquid Moles Remaining"])
+        self.details_table.setRowCount(len(result.steps))
+
+        for row, step in enumerate(result.steps):
+            self.composition_table.setItem(
+                row, 0, QTableWidgetItem(f"{step.pressure_pa / 1e5:.2f}")
+            )
+            self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs:.4f}"))
+            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{step.bo:.4f}"))
+            self.composition_table.setItem(row, 3, QTableWidgetItem(f"{step.bt:.4f}"))
+            self.composition_table.setItem(
+                row, 4, QTableWidgetItem(f"{step.vapor_fraction:.4f}")
+            )
+
+            self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            liquid_moles = (
+                "-"
+                if step.liquid_moles_remaining is None
+                else f"{step.liquid_moles_remaining:.6f}"
+            )
+            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_moles))
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+    def _display_cvd(self, result: CVDResult) -> None:
+        """Display CVD results."""
+        summary_data = [
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            ("Dew Pressure", f"{result.dew_pressure_pa / 1e5:.2f} bar"),
+            ("Initial Z", f"{result.initial_z:.4f}"),
+            ("Steps", str(len(result.steps))),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        self.composition_table.setColumnCount(4)
+        self.composition_table.setHorizontalHeaderLabels([
+            "Pressure (bar)", "Liquid Dropout", "Cum. Gas", "Z (2-phase)"
+        ])
+        self.composition_table.setRowCount(len(result.steps))
+
+        for row, step in enumerate(result.steps):
+            self.composition_table.setItem(
+                row, 0, QTableWidgetItem(f"{step.pressure_pa / 1e5:.2f}")
+            )
+            self.composition_table.setItem(
+                row, 1, QTableWidgetItem(f"{step.liquid_dropout:.4f}")
+            )
+            self.composition_table.setItem(
+                row, 2, QTableWidgetItem(f"{step.cumulative_gas_produced:.4f}")
+            )
+            z_two_phase = "-" if step.z_two_phase is None else f"{step.z_two_phase:.4f}"
+            self.composition_table.setItem(row, 3, QTableWidgetItem(z_two_phase))
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+        self.details_table.setColumnCount(2)
+        self.details_table.setHorizontalHeaderLabels(["Step", "Moles Remaining"])
+        self.details_table.setRowCount(len(result.steps))
+        for row, step in enumerate(result.steps):
+            self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            moles_remaining = "-" if step.moles_remaining is None else f"{step.moles_remaining:.6f}"
+            self.details_table.setItem(row, 1, QTableWidgetItem(moles_remaining))
+
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+    def _display_separator(self, result: SeparatorResult) -> None:
+        """Display separator-train results."""
+        summary_data = [
+            ("Converged", "Yes" if result.converged else "No"),
+            ("Bo", f"{result.bo:.4f}"),
+            ("Rs", f"{result.rs:.4f}"),
+            ("Rs (scf/STB)", f"{result.rs_scf_stb:.4f}"),
+            ("Bg", f"{result.bg:.4f}"),
+            ("API Gravity", f"{result.api_gravity:.2f}"),
+            ("Oil Density", f"{result.stock_tank_oil_density:.4f}"),
+            ("Stages", str(len(result.stages))),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        self.composition_table.setColumnCount(4)
+        self.composition_table.setHorizontalHeaderLabels(
+            ["Stage", "Pressure (bar)", "Temperature (C)", "Vapor Frac."]
+        )
+        self.composition_table.setRowCount(len(result.stages))
+
+        self.details_table.setColumnCount(4)
+        self.details_table.setHorizontalHeaderLabels(
+            ["Stage", "Liquid Moles", "Vapor Moles", "Converged"]
+        )
+        self.details_table.setRowCount(len(result.stages))
+
+        for row, stage in enumerate(result.stages):
+            stage_label = stage.stage_name or f"Stage {stage.stage_number}"
+            self.composition_table.setItem(row, 0, QTableWidgetItem(stage_label))
+            self.composition_table.setItem(
+                row, 1, QTableWidgetItem(f"{stage.pressure_pa / 1e5:.2f}")
+            )
+            self.composition_table.setItem(
+                row, 2, QTableWidgetItem(f"{stage.temperature_k - 273.15:.2f}")
+            )
+            vapor_fraction = "-" if stage.vapor_fraction is None else f"{stage.vapor_fraction:.4f}"
+            self.composition_table.setItem(row, 3, QTableWidgetItem(vapor_fraction))
+
+            self.details_table.setItem(row, 0, QTableWidgetItem(stage_label))
+            liquid_moles = "-" if stage.liquid_moles is None else f"{stage.liquid_moles:.6f}"
+            vapor_moles = "-" if stage.vapor_moles is None else f"{stage.vapor_moles:.6f}"
+            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_moles))
+            self.details_table.setItem(row, 2, QTableWidgetItem(vapor_moles))
+            self.details_table.setItem(
+                row, 3, QTableWidgetItem("Yes" if stage.converged else "No")
+            )
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
     def _display_error(self, result: RunResult) -> None:
         """Display error result."""
         self.summary_table.setRowCount(1)
@@ -337,6 +597,7 @@ class ResultsPlotWidget(QWidget):
         """Create the widget UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        self._apply_background_color(self, PLOT_SURFACE_COLOR)
 
         # Import matplotlib with Qt backend
         try:
@@ -344,7 +605,9 @@ class ResultsPlotWidget(QWidget):
             from matplotlib.figure import Figure
 
             self.figure = Figure(figsize=(8, 6), dpi=100)
+            self._apply_figure_theme()
             self.canvas = FigureCanvasQTAgg(self.figure)
+            self._apply_background_color(self.canvas, PLOT_SURFACE_COLOR)
             layout.addWidget(self.canvas)
 
             self._matplotlib_available = True
@@ -367,11 +630,46 @@ class ResultsPlotWidget(QWidget):
         btn_layout.addWidget(self.export_btn)
         layout.addLayout(btn_layout)
 
+    @staticmethod
+    def _apply_background_color(widget: QWidget, color: str) -> None:
+        """Apply a solid Qt background color to a widget palette."""
+        widget.setAutoFillBackground(True)
+        palette = widget.palette()
+        palette.setColor(widget.backgroundRole(), QColor(color))
+        widget.setPalette(palette)
+
+    def _apply_figure_theme(self) -> None:
+        """Keep the matplotlib figure on the same dark surface as the UI."""
+        self.figure.set_facecolor(PLOT_CANVAS_COLOR)
+
+    def _apply_axes_theme(self, ax) -> None:
+        """Apply dark-theme styling to a matplotlib axes object."""
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        ax.xaxis.label.set_color(PLOT_TEXT_COLOR)
+        ax.yaxis.label.set_color(PLOT_TEXT_COLOR)
+        ax.title.set_color(PLOT_TEXT_COLOR)
+        ax.tick_params(colors=PLOT_TEXT_COLOR)
+
+        for spine in ax.spines.values():
+            spine.set_color(PLOT_GRID_COLOR)
+
+        ax.grid(True, color=PLOT_GRID_COLOR, alpha=0.6)
+
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.get_frame().set_facecolor(PLOT_LEGEND_FACE_COLOR)
+            legend.get_frame().set_edgecolor(PLOT_GRID_COLOR)
+            for text in legend.get_texts():
+                text.set_color(PLOT_TEXT_COLOR)
+            if legend.get_title() is not None:
+                legend.get_title().set_color(PLOT_TEXT_COLOR)
+
     def clear(self) -> None:
         """Clear the plot."""
         self._current_result = None
         if self._matplotlib_available:
             self.figure.clear()
+            self._apply_figure_theme()
             self.canvas.draw()
 
     def display_result(self, result: RunResult) -> None:
@@ -385,19 +683,31 @@ class ResultsPlotWidget(QWidget):
 
         self._current_result = result
         self.figure.clear()
+        self._apply_figure_theme()
 
         if result.pt_flash_result:
             self._plot_pt_flash(result.pt_flash_result)
+        elif result.bubble_point_result:
+            self._plot_bubble_point(result.bubble_point_result)
+        elif result.dew_point_result:
+            self._plot_dew_point(result.dew_point_result)
         elif result.phase_envelope_result:
             self._plot_phase_envelope(result.phase_envelope_result)
         elif result.cce_result:
             self._plot_cce(result.cce_result)
+        elif result.dl_result:
+            self._plot_dl(result.dl_result)
+        elif result.cvd_result:
+            self._plot_cvd(result.cvd_result)
+        elif result.separator_result:
+            self._plot_separator(result.separator_result)
 
         self.canvas.draw()
 
     def _plot_pt_flash(self, result: PTFlashResult) -> None:
         """Plot PT flash results (composition bar chart)."""
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
 
         components = sorted(result.liquid_composition.keys())
         x = list(range(len(components)))
@@ -415,13 +725,14 @@ class ResultsPlotWidget(QWidget):
         ax.set_xticks(x)
         ax.set_xticklabels(components, rotation=45, ha='right')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        self._apply_axes_theme(ax)
 
         self.figure.tight_layout()
 
     def _plot_phase_envelope(self, result: PhaseEnvelopeResult) -> None:
         """Plot phase envelope."""
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
 
         # Bubble curve
         if result.bubble_curve:
@@ -447,13 +758,69 @@ class ResultsPlotWidget(QWidget):
         ax.set_ylabel('Pressure (bar)')
         ax.set_title('Phase Envelope')
         ax.legend()
-        ax.grid(True, alpha=0.3)
+        self._apply_axes_theme(ax)
 
         self.figure.tight_layout()
+
+    def _plot_saturation_result(
+        self,
+        result: BubblePointResult | DewPointResult,
+        *,
+        title: str,
+    ) -> None:
+        """Plot saturation-point liquid/vapor compositions."""
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+
+        components = sorted(
+            set(result.liquid_composition)
+            | set(result.vapor_composition)
+        )
+        x = list(range(len(components)))
+        width = 0.35
+
+        liquid_vals = [result.liquid_composition.get(c, 0.0) for c in components]
+        vapor_vals = [result.vapor_composition.get(c, 0.0) for c in components]
+
+        ax.bar(
+            [i - width / 2 for i in x],
+            liquid_vals,
+            width,
+            label="Liquid",
+            color="blue",
+            alpha=0.7,
+        )
+        ax.bar(
+            [i + width / 2 for i in x],
+            vapor_vals,
+            width,
+            label="Vapor",
+            color="red",
+            alpha=0.7,
+        )
+
+        ax.set_xlabel("Component")
+        ax.set_ylabel("Mole Fraction")
+        ax.set_title(f"{title} at {result.pressure_pa / 1e5:.2f} bar")
+        ax.set_xticks(x)
+        ax.set_xticklabels(components, rotation=45, ha="right")
+        ax.legend()
+        self._apply_axes_theme(ax)
+
+        self.figure.tight_layout()
+
+    def _plot_bubble_point(self, result: BubblePointResult) -> None:
+        """Plot bubble-point results."""
+        self._plot_saturation_result(result, title="Bubble Point")
+
+    def _plot_dew_point(self, result: DewPointResult) -> None:
+        """Plot dew-point results."""
+        self._plot_saturation_result(result, title="Dew Point")
 
     def _plot_cce(self, result: CCEResult) -> None:
         """Plot CCE results."""
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
 
         pressures = [s.pressure_pa / 1e5 for s in result.steps]
         rel_volumes = [s.relative_volume for s in result.steps]
@@ -472,8 +839,102 @@ class ResultsPlotWidget(QWidget):
         ax.set_xlabel('Pressure (bar)')
         ax.set_ylabel('Relative Volume')
         ax.set_title(f'CCE at {result.temperature_k - 273.15:.1f} C')
-        ax.grid(True, alpha=0.3)
         ax.invert_xaxis()  # Pressure decreases during CCE
+        self._apply_axes_theme(ax)
+
+        self.figure.tight_layout()
+
+    def _plot_dl(self, result: DLResult) -> None:
+        """Plot DL pressure trends."""
+        ax_rs = self.figure.add_subplot(211)
+        ax_fvf = self.figure.add_subplot(212)
+        ax_rs.set_facecolor(PLOT_CANVAS_COLOR)
+        ax_fvf.set_facecolor(PLOT_CANVAS_COLOR)
+
+        pressures = [s.pressure_pa / 1e5 for s in result.steps]
+        rs = [s.rs for s in result.steps]
+        bo = [s.bo for s in result.steps]
+        bt = [s.bt for s in result.steps]
+
+        ax_rs.plot(pressures, rs, "g-o", linewidth=2, markersize=4, label="Rs")
+        ax_rs.set_xlabel("Pressure (bar)")
+        ax_rs.set_ylabel("Rs")
+        ax_rs.set_title(f"Differential Liberation at {result.temperature_k - 273.15:.1f} C")
+        ax_rs.invert_xaxis()
+        ax_rs.legend()
+        self._apply_axes_theme(ax_rs)
+
+        ax_fvf.plot(pressures, bo, "y-o", linewidth=2, markersize=4, label="Bo")
+        ax_fvf.plot(pressures, bt, "m--o", linewidth=1.5, markersize=3, label="Bt")
+        ax_fvf.set_xlabel("Pressure (bar)")
+        ax_fvf.set_ylabel("Formation Volume Factor")
+        ax_fvf.invert_xaxis()
+        ax_fvf.legend()
+        self._apply_axes_theme(ax_fvf)
+
+        self.figure.tight_layout()
+
+    def _plot_cvd(self, result: CVDResult) -> None:
+        """Plot CVD liquid dropout versus pressure."""
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+
+        pressures = [s.pressure_pa / 1e5 for s in result.steps]
+        liquid_dropout = [s.liquid_dropout for s in result.steps]
+
+        ax.plot(pressures, liquid_dropout, 'c-o', linewidth=2, markersize=4, label='Liquid Dropout')
+        ax.set_xlabel('Pressure (bar)')
+        ax.set_ylabel('Liquid Dropout')
+        ax.set_title(f'CVD at {result.temperature_k - 273.15:.1f} C')
+        ax.invert_xaxis()
+        ax.legend()
+        self._apply_axes_theme(ax)
+
+        self.figure.tight_layout()
+
+    def _plot_separator(self, result: SeparatorResult) -> None:
+        """Plot separator stage pressure and vapor fraction."""
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        ax2 = ax.twinx()
+        ax2.set_facecolor(PLOT_CANVAS_COLOR)
+
+        labels = [
+            stage.stage_name or f"Stage {stage.stage_number}"
+            for stage in result.stages
+        ]
+        x = list(range(len(result.stages)))
+        pressures = [stage.pressure_pa / 1e5 for stage in result.stages]
+
+        ax.plot(x, pressures, "b-o", linewidth=2, markersize=4, label="Pressure (bar)")
+        ax.set_xlabel("Stage")
+        ax.set_ylabel("Pressure (bar)")
+        ax.set_title("Separator Train")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=30, ha="right")
+
+        vapor_fraction = [
+            0.0 if stage.vapor_fraction is None else stage.vapor_fraction
+            for stage in result.stages
+        ]
+        if any(stage.vapor_fraction is not None for stage in result.stages):
+            ax2.bar(x, vapor_fraction, alpha=0.35, color="orange", label="Vapor Fraction")
+            ax2.set_ylabel("Vapor Fraction")
+        else:
+            ax2.set_ylabel("")
+
+        self._apply_axes_theme(ax)
+        self._apply_axes_theme(ax2)
+        ax2.grid(False)
+
+        handles1, labels1 = ax.get_legend_handles_labels()
+        handles2, labels2 = ax2.get_legend_handles_labels()
+        if handles1 or handles2:
+            legend = ax.legend(handles1 + handles2, labels1 + labels2, loc="best")
+            legend.get_frame().set_facecolor(PLOT_LEGEND_FACE_COLOR)
+            legend.get_frame().set_edgecolor(PLOT_GRID_COLOR)
+            for text in legend.get_texts():
+                text.set_color(PLOT_TEXT_COLOR)
 
         self.figure.tight_layout()
 

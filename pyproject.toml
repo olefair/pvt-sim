@@ -19,16 +19,22 @@ dependencies = [
 
 [project.optional-dependencies]
 # Install with: pip install -e '.[gui]'
+# GUI-only desktop runtime (no SciPy-backed extras).
 gui = [
   "PySide6>=6.5.0",
   "matplotlib>=3.4",
   "pyqtgraph>=0.13.0",
 ]
 # Install with: pip install -e '.[full]'
+# Full desktop/runtime surface: GUI + SciPy-backed features.
 full = [
+  "PySide6>=6.5.0",
+  "matplotlib>=3.4",
+  "pyqtgraph>=0.13.0",
   "scipy>=1.10",
 ]
 # Install with: pip install -e '.[dev]'
+# Headless developer tooling; pair with `.[gui]` for GUI development/tests.
 dev = [
   "pytest>=7.0",
   "pytest-cov>=3.0",
