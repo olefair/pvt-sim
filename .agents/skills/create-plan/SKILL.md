@@ -8,7 +8,7 @@ description: >
   for "write a plan", "create a parent plan", "roadmap this work", "decompose
   this into child blueprints", "turn this into a plan document", "make the
   orchestration note", or any request for a canonical plan artifact under
-  docs/plans/<project_name>/plans_<slug>.md. Do NOT trigger for single bounded implementation
+  docs/plans/<project_name>/plan_<slug>.md. Do NOT trigger for single bounded implementation
   units that should stay blueprints (use blueprint-architect), migration-only
   transformations (use migration-planner), refactor-only prescriptions (use
   refactor-advisor), or the conversational style-plan mode.
@@ -53,10 +53,10 @@ unless the user explicitly wants historical context.
 
 ## Output Contract
 
-- Canonical path: `docs/plans/<project_name>/plans_<slug>.md`
-- Workspace path: `docs/plans/workspace/plans_<slug>.md`
+- Canonical path: `docs/plans/<project_name>/plan_<slug>.md`
+- Workspace path: `docs/plans/workspace/plan_<slug>.md`
 - The project directory is the only routing subfolder under `docs/plans/`
-- `plans_` is the canonical filename prefix for all plan notes
+- `plan_` is the canonical filename prefix for all plan notes
 - `<slug>` is the filename stem for the plan note, not a subdirectory name
 - If revising an existing plan, preserve the current filename unless there is a
   real canonicalization reason to rename it

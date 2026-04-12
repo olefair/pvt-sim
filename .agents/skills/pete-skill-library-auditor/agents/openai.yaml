@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pete Skill Library Auditor"
+  short_description: "Run the Pete workspace skill-library audit wrappers for tools/SKILLS and packaged skill parity."
+  default_prompt: "Use $pete-skill-library-auditor to run the repo-local Pete skill library audit wrapper and summarize the findings."
+
+policy:
+  allow_implicit_invocation: false

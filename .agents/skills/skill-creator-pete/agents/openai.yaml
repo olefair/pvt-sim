@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Creator Pete"
+  short_description: "Creates, updates, and packages Claude Desktop skills following Ole's workspace conventions."
+  default_prompt: "Use $skill-creator-pete to create or update a workspace skill and package it correctly."
+
+policy:
+  allow_implicit_invocation: false

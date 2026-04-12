@@ -1,0 +1,59 @@
+{
+  "anchor_type": "pure_component_saturation",
+  "case_id": "nist_c4_saturation_batch",
+  "component_id": "C4",
+  "source": {
+    "kind": "nist_webbook",
+    "citation": "NIST Chemistry WebBook fluid interface n-butane saturation properties",
+    "url": "https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C106978&Type=SatP&Digits=12&TLow=255.0&THigh=382.5&TInc=42.5&TUnit=K&PUnit=bar&DUnit=mol%2Fl&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa%2As&STUnit=N%2Fm&RefState=DEF",
+    "notes": [
+      "Direct saturation-curve pressures downloaded from the public NIST fluid interface."
+    ]
+  },
+  "points": [
+    {
+      "temperature": {
+        "value": 255.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 0.491061128571,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 297.5,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 2.38412250355,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 340.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 7.52005915498,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 382.5,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 18.2338513732,
+        "unit": "bar"
+      }
+    }
+  ],
+  "notes": [
+    "Promoted from the external acquisition manifest on 2026-04-12.",
+    "These values are the external physical-accuracy anchors for pure-component saturation in the repo validation lane."
+  ]
+}

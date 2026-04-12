@@ -42,6 +42,16 @@ server is unavailable.
 
 ---
 
+## Workspace Docs Vault
+
+When this skill reads from or writes to `docs/`, treat that directory as the
+shared Obsidian vault rooted at `C:\Users\olefa\dev\pete-workspace\docs`, not
+as a repo-local `docs/` folder inside an individual project repo or uploaded
+snapshot. Treat YAML frontmatter, `[[wikilinks]]`, and backlink-oriented body
+linking as part of the operating contract, not optional formatting.
+
+---
+
 ## Vault Output Contract
 
 Full fidelity progress checks are evaluative artifacts. When persisted as

@@ -15,11 +15,11 @@ def _write_config(tmp_path: Path, data: dict) -> Path:
     return config_path
 
 
-def test_validate_rejects_unknown_component_ids(tmp_path, capsys) -> None:
+def test_validate_accepts_component_alias_ids(tmp_path, capsys) -> None:
     config_path = _write_config(
         tmp_path,
         {
-            "run_name": "Bad PT Flash",
+            "run_name": "Alias PT Flash",
             "composition": {
                 "components": [
                     {"component_id": "C1", "mole_fraction": 0.5},
@@ -38,9 +38,36 @@ def test_validate_rejects_unknown_component_ids(tmp_path, capsys) -> None:
     exit_code = _cmd_validate(Namespace(config=config_path))
     captured = capsys.readouterr()
 
+    assert exit_code == 0
+    assert "Configuration valid" in captured.out
+
+
+def test_validate_rejects_unknown_component_ids(tmp_path, capsys) -> None:
+    config_path = _write_config(
+        tmp_path,
+        {
+            "run_name": "Bad PT Flash",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.5},
+                    {"component_id": "NOT_A_REAL_COMPONENT", "mole_fraction": 0.5},
+                ]
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5_000_000,
+                "temperature_k": 350.0,
+            },
+        },
+    )
+
+    exit_code = _cmd_validate(Namespace(config=config_path))
+    captured = capsys.readouterr()
+
     assert exit_code == 1
     assert "Unknown component(s)" in captured.err
-    assert "nC4" in captured.err
+    assert "NOT_A_REAL_COMPONENT" in captured.err
 
 
 def test_validate_accepts_shipped_phase_envelope_example(capsys) -> None:

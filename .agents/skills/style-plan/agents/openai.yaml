@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Plan"
+  short_description: "Stage 3 of the cognitive style chain: strategic planning. Takes the synthesized briefing produced by Reflec..."
+  default_prompt: "Use $style-plan to turn the current understanding into a concrete action plan."
+
+policy:
+  allow_implicit_invocation: false

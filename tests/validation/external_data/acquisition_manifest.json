@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "This manifest tracks external physical-accuracy anchors that still need to be collected and entered as ready case files.",
+    "The priorities and targets here come from the dew-point validation authority reset handoff on 2026-04-12.",
+    "The pure-component NIST saturation batches for C1-C6 and CO2 were promoted into ready case files on 2026-04-12 and are no longer listed here.",
+    "The first ThermoML literature tie-line from DOI 10.1021/acs.jced.5b00610 was promoted into a ready case file on 2026-04-12 and is no longer listed here."
+  ],
+  "entries": [
+    {
+      "planned_case_id": "jced_2000_c1_co2_c3_vle",
+      "anchor_type": "literature_vle_tieline",
+      "priority": "next",
+      "source": {
+        "kind": "journal",
+        "citation": "JCED methane-carbon dioxide-propane systems",
+        "url": "https://pubs.acs.org/doi/10.1021/je000307d"
+      },
+      "target_regime": "acid-gas and CO2-rich mixture tie lines",
+      "target_components": [
+        "C1",
+        "CO2",
+        "C3"
+      ],
+      "requested_observables": [
+        "temperature",
+        "pressure",
+        "liquid_composition",
+        "vapor_composition"
+      ]
+    },
+    {
+      "planned_case_id": "jced_c1_c2_co2_vle",
+      "anchor_type": "literature_vle_tieline",
+      "priority": "next",
+      "source": {
+        "kind": "journal",
+        "citation": "JCED methane-ethane-carbon dioxide systems",
+        "url": "https://pubs.acs.org/doi/10.1021/je00020a002"
+      },
+      "target_regime": "light-gas ternary VLE tie lines",
+      "target_components": [
+        "C1",
+        "C2",
+        "CO2"
+      ],
+      "requested_observables": [
+        "temperature",
+        "pressure",
+        "liquid_composition",
+        "vapor_composition"
+      ]
+    },
+    {
+      "planned_case_id": "jced_2023_propane_ndecane_surrogate",
+      "anchor_type": "literature_vle_tieline",
+      "priority": "later",
+      "source": {
+        "kind": "journal",
+        "citation": "JCED 2023 propane plus n-decane surrogate-heavy data",
+        "url": "https://pubs.acs.org/doi/10.1021/acs.jced.3c00486"
+      },
+      "target_regime": "surrogate-heavy bubble/dew tie lines for richer fluids",
+      "target_components": [
+        "C3",
+        "C10"
+      ],
+      "requested_observables": [
+        "temperature",
+        "pressure",
+        "liquid_composition",
+        "vapor_composition"
+      ]
+    },
+    {
+      "planned_case_id": "lab_gas_condensate_c7plus_dew_anchor",
+      "anchor_type": "lab_c7plus_saturation",
+      "priority": "now",
+      "source": {
+        "kind": "lab_report",
+        "citation": "Real gas-condensate PVT lab report with dew point and C7+ properties",
+        "notes": [
+          "Highest-value external anchor requested in the handoff."
+        ]
+      },
+      "target_regime": "rich gas condensate with lab-style C1-C6 + C7+ characterization",
+      "target_components": [
+        "N2",
+        "CO2",
+        "H2S",
+        "C1",
+        "C2",
+        "C3",
+        "iC4",
+        "C4",
+        "iC5",
+        "C5",
+        "C6",
+        "C7+"
+      ],
+      "expected_workflow": "dew_point",
+      "requested_observables": [
+        "temperature",
+        "dew_pressure",
+        "light_end_composition",
+        "plus_fraction_properties",
+        "supporting_lab_context"
+      ]
+    }
+  ]
+}

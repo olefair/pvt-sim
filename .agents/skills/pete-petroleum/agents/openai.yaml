@@ -1,0 +1,7 @@
+interface:
+  display_name: "Pete Petroleum"
+  short_description: "Repo skill for Pete: dual response, web research, memory lifecycle, and LLM/TTS config upgrades."
+  default_prompt: "Use this skill to implement one of the eight Codex-priority items. Ask which item number (1–8) first, then follow the module workflow."
+
+policy:
+  allow_implicit_invocation: false

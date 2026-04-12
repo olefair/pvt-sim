@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Explain"
+  short_description: "Lateral mode in the cognitive style chain: deep instructional explanation. Not a pipeline stage — a support..."
+  default_prompt: "Use $style-explain to explain the current topic clearly and directly."
+
+policy:
+  allow_implicit_invocation: false

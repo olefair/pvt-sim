@@ -1,0 +1,7 @@
+interface:
+  display_name: "Self Improving Agent"
+  short_description: "Capture non-obvious repo-local learnings, failures, and recurring workflow improvements into .learnings logs."
+  default_prompt: "Use $self-improving-agent to review existing .learnings entries or capture a non-obvious learning, failure, correction, or recurring workflow pattern."
+
+policy:
+  allow_implicit_invocation: false

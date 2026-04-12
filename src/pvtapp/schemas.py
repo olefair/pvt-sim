@@ -13,7 +13,7 @@ Design principles:
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 import platform
 import sys
 
@@ -35,7 +35,7 @@ TEMPERATURE_MAX_K = 800.0    # Above this, thermal cracking dominates
 # Composition bounds
 COMPOSITION_MIN = 0.0
 COMPOSITION_MAX = 1.0
-COMPOSITION_SUM_TOLERANCE = 1e-6
+COMPOSITION_SUM_TOLERANCE = 1e-4
 
 
 # ==============================================================================
@@ -61,6 +61,12 @@ class CalculationType(str, Enum):
     SEPARATOR = "separator"
 
 
+class PhaseEnvelopeTracingMethod(str, Enum):
+    """Execution path for phase-envelope tracing."""
+    CONTINUATION = "continuation"
+    FIXED_GRID = "fixed_grid"
+
+
 class PressureUnit(str, Enum):
     """Pressure unit for display/input."""
     PA = "Pa"
@@ -78,6 +84,19 @@ class TemperatureUnit(str, Enum):
     C = "C"
     F = "F"
     R = "R"
+
+
+class PlusFractionCharacterizationPreset(str, Enum):
+    """Requested plus-fraction characterization policy/profile."""
+
+    AUTO = "auto"
+    MANUAL = "manual"
+    DRY_GAS = "dry_gas"
+    CO2_RICH_GAS = "co2_rich_gas"
+    GAS_CONDENSATE = "gas_condensate"
+    VOLATILE_OIL = "volatile_oil"
+    BLACK_OIL = "black_oil"
+    SOUR_OIL = "sour_oil"
 
 
 class RunStatus(str, Enum):
@@ -157,6 +176,33 @@ def temperature_from_k(value: float, unit: TemperatureUnit) -> float:
     raise ValueError(f"Unknown temperature unit: {unit}")
 
 
+def _validate_descending_pressure_points(
+    values: Optional[List[float]],
+    *,
+    label: str,
+    min_points: int,
+) -> Optional[List[float]]:
+    """Validate an explicit descending pressure schedule in Pa."""
+    if values is None:
+        return None
+
+    normalized = [float(value) for value in values]
+    if len(normalized) < min_points:
+        noun = "point" if min_points == 1 else "points"
+        raise ValueError(
+            f"{label} pressure_points_pa must contain at least {min_points} {noun}"
+        )
+    for pressure in normalized:
+        if pressure < PRESSURE_MIN_PA or pressure > PRESSURE_MAX_PA:
+            raise ValueError(
+                f"{label} pressure point {pressure} Pa is outside the allowed bounds "
+                f"[{PRESSURE_MIN_PA}, {PRESSURE_MAX_PA}]"
+            )
+    if any(normalized[i] <= normalized[i + 1] for i in range(len(normalized) - 1)):
+        raise ValueError(f"{label} pressure_points_pa must be strictly descending")
+    return normalized
+
+
 # ==============================================================================
 # Component Configuration
 # ==============================================================================
@@ -187,6 +233,144 @@ class ComponentEntry(BaseModel):
         return v
 
 
+class PlusFractionEntry(BaseModel):
+    """Aggregate plus-fraction input for characterization."""
+
+    label: str = Field(
+        default="C7+",
+        min_length=1,
+        max_length=50,
+        description="User-facing plus-fraction label (for example, 'C7+')",
+    )
+    cut_start: int = Field(
+        default=7,
+        ge=1,
+        le=200,
+        description="First carbon number included in the plus fraction",
+    )
+    z_plus: float = Field(
+        ...,
+        gt=0.0,
+        le=COMPOSITION_MAX,
+        description="Plus-fraction mole fraction",
+    )
+    mw_plus_g_per_mol: float = Field(
+        ...,
+        gt=0.0,
+        description="Average molecular weight of the plus fraction in g/mol",
+    )
+    sg_plus_60f: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional plus-fraction specific gravity at 60F/60F",
+    )
+    characterization_preset: PlusFractionCharacterizationPreset = Field(
+        default=PlusFractionCharacterizationPreset.AUTO,
+        description=(
+            "Requested characterization policy. 'auto' infers a validated family "
+            "profile from the feed and calculation type; 'manual' uses the "
+            "explicit split/lumping fields as entered."
+        ),
+    )
+    resolved_characterization_preset: Optional[PlusFractionCharacterizationPreset] = Field(
+        default=None,
+        description="Resolved family preset actually applied after auto/preset policy resolution",
+    )
+    max_carbon_number: int = Field(
+        default=45,
+        ge=1,
+        le=200,
+        description="Maximum SCN carbon number to include when splitting the plus fraction",
+    )
+    split_mw_model: Literal["paraffin", "table"] = Field(
+        default="paraffin",
+        description="Pedersen SCN molecular-weight model",
+    )
+    lumping_enabled: bool = Field(
+        default=False,
+        description="Whether to lump the detailed SCN split into a smaller pseudo set",
+    )
+    lumping_n_groups: int = Field(
+        default=8,
+        ge=1,
+        le=200,
+        description="Target number of pseudo groups if lumping is enabled",
+    )
+
+    @model_validator(mode='after')
+    def validate_bounds(self) -> 'PlusFractionEntry':
+        if self.resolved_characterization_preset in {
+            PlusFractionCharacterizationPreset.AUTO,
+            PlusFractionCharacterizationPreset.MANUAL,
+        }:
+            raise ValueError("resolved_characterization_preset must be a concrete family preset when provided")
+        if self.max_carbon_number < self.cut_start:
+            raise ValueError("max_carbon_number must be >= cut_start")
+        if self.lumping_enabled and self.lumping_n_groups > (self.max_carbon_number - self.cut_start + 1):
+            raise ValueError("lumping_n_groups cannot exceed the number of SCNs in the split range")
+        return self
+
+
+class InlineComponentSpec(BaseModel):
+    """Explicit user-supplied pseudo-component properties."""
+
+    component_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        description="Identifier used in the composition table for this inline pseudo-component",
+    )
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Display name for the inline pseudo-component",
+    )
+    formula: str = Field(
+        default="",
+        max_length=100,
+        description="Optional formula/label for the inline pseudo-component",
+    )
+    molecular_weight_g_per_mol: float = Field(
+        ...,
+        gt=0.0,
+        description="Molecular weight in g/mol",
+    )
+    critical_temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Critical temperature in Kelvin",
+    )
+    critical_pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Critical pressure in Pa",
+    )
+    omega: float = Field(
+        ...,
+        ge=-5.0,
+        le=10.0,
+        description="Acentric factor",
+    )
+
+    @field_validator('component_id', 'name', 'formula')
+    @classmethod
+    def strip_text(cls, v: str) -> str:
+        return v.strip()
+
+    @model_validator(mode='after')
+    def validate_formula(self) -> 'InlineComponentSpec':
+        if not self.component_id:
+            raise ValueError("Inline component ID cannot be empty")
+        if not self.name:
+            raise ValueError("Inline component name cannot be empty")
+        if not self.formula:
+            self.formula = self.name
+        return self
+
+
 class FluidComposition(BaseModel):
     """Complete fluid composition specification."""
 
@@ -195,12 +379,20 @@ class FluidComposition(BaseModel):
         min_length=1,
         description="List of components with mole fractions"
     )
+    plus_fraction: Optional[PlusFractionEntry] = Field(
+        default=None,
+        description="Optional aggregate plus-fraction characterization input",
+    )
+    inline_components: List[InlineComponentSpec] = Field(
+        default_factory=list,
+        description="Optional inline pseudo-components not present in the component database",
+    )
 
     @model_validator(mode='after')
     def validate_composition(self) -> 'FluidComposition':
         """Validate that composition sums to 1.0 and has no duplicate IDs."""
-        if not self.components:
-            raise ValueError("At least one component is required")
+        if not self.components and self.plus_fraction is None:
+            raise ValueError("At least one component or a plus fraction is required")
 
         # Check for duplicates
         ids = [c.component_id for c in self.components]
@@ -208,8 +400,30 @@ class FluidComposition(BaseModel):
             duplicates = [id_ for id_ in ids if ids.count(id_) > 1]
             raise ValueError(f"Duplicate component IDs: {set(duplicates)}")
 
+        if self.plus_fraction is not None and self.inline_components:
+            raise ValueError("plus_fraction and inline_components are mutually exclusive in the current app contract")
+
+        inline_ids = [spec.component_id for spec in self.inline_components]
+        if len(inline_ids) != len(set(inline_ids)):
+            duplicates = [id_ for id_ in inline_ids if inline_ids.count(id_) > 1]
+            raise ValueError(f"Duplicate inline component IDs: {set(duplicates)}")
+
+        missing_inline_rows = sorted(set(inline_ids) - set(ids))
+        if missing_inline_rows:
+            raise ValueError(
+                "Each inline component must also appear in components with its mole fraction. "
+                f"Missing rows: {missing_inline_rows}"
+            )
+
+        if self.plus_fraction is not None and self.plus_fraction.label in ids:
+            raise ValueError(
+                f"Plus-fraction label '{self.plus_fraction.label}' must not also appear as a component row"
+            )
+
         # Check sum
         total = sum(c.mole_fraction for c in self.components)
+        if self.plus_fraction is not None:
+            total += self.plus_fraction.z_plus
         if abs(total - 1.0) > COMPOSITION_SUM_TOLERANCE:
             raise ValueError(
                 f"Mole fractions must sum to 1.0 (got {total:.8f}). "
@@ -267,6 +481,14 @@ class PTFlashConfig(BaseModel):
         le=TEMPERATURE_MAX_K,
         description="Temperature in Kelvin"
     )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output"
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output"
+    )
 
 
 class PhaseEnvelopeConfig(BaseModel):
@@ -290,6 +512,17 @@ class PhaseEnvelopeConfig(BaseModel):
         le=500,
         description="Number of points on each branch"
     )
+    tracing_method: PhaseEnvelopeTracingMethod = Field(
+        default=PhaseEnvelopeTracingMethod.CONTINUATION,
+        description="Tracing implementation to use for phase-envelope execution",
+    )
+
+    @field_validator('tracing_method', mode='before')
+    @classmethod
+    def validate_tracing_method(cls, v):
+        if isinstance(v, str) and v.strip().lower() == "continuation_dev":
+            return PhaseEnvelopeTracingMethod.CONTINUATION
+        return v
 
     @model_validator(mode='after')
     def validate_temperature_range(self) -> 'PhaseEnvelopeConfig':
@@ -311,28 +544,55 @@ class CCEConfig(BaseModel):
         le=TEMPERATURE_MAX_K,
         description="Test temperature (K)"
     )
-    pressure_start_pa: float = Field(
-        ...,
+    pressure_start_pa: Optional[float] = Field(
+        default=None,
         ge=PRESSURE_MIN_PA,
         le=PRESSURE_MAX_PA,
         description="Starting pressure (Pa)"
     )
-    pressure_end_pa: float = Field(
-        ...,
+    pressure_end_pa: Optional[float] = Field(
+        default=None,
         ge=PRESSURE_MIN_PA,
         le=PRESSURE_MAX_PA,
         description="Ending pressure (Pa)"
     )
-    n_steps: int = Field(
+    n_steps: Optional[int] = Field(
         default=20,
-        ge=5,
+        ge=2,
         le=200,
         description="Number of pressure steps"
     )
+    pressure_points_pa: Optional[List[float]] = Field(
+        default=None,
+        description=(
+            "Optional explicit descending pressure schedule in Pa. "
+            "When provided, it overrides pressure_start_pa/pressure_end_pa/n_steps."
+        ),
+    )
+
+    @field_validator('pressure_points_pa')
+    @classmethod
+    def validate_pressure_points(cls, values: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_descending_pressure_points(values, label="CCE", min_points=2)
 
     @model_validator(mode='after')
     def validate_pressure_range(self) -> 'CCEConfig':
-        """Ensure start > end pressure for depletion."""
+        """Ensure a valid depletion schedule is provided."""
+        if self.pressure_points_pa:
+            self.pressure_start_pa = self.pressure_points_pa[0]
+            self.pressure_end_pa = self.pressure_points_pa[-1]
+            self.n_steps = len(self.pressure_points_pa)
+            return self
+
+        if (
+            self.pressure_start_pa is None
+            or self.pressure_end_pa is None
+            or self.n_steps is None
+        ):
+            raise ValueError(
+                "CCE requires either pressure_points_pa or "
+                "pressure_start_pa/pressure_end_pa/n_steps"
+            )
         if self.pressure_start_pa <= self.pressure_end_pa:
             raise ValueError(
                 f"pressure_start_pa ({self.pressure_start_pa}) must be greater than "
@@ -356,6 +616,14 @@ class SaturationPointConfig(BaseModel):
         le=PRESSURE_MAX_PA,
         description="Optional initial pressure guess (Pa)"
     )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output"
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output"
+    )
 
 
 class DLConfig(BaseModel):
@@ -373,22 +641,47 @@ class DLConfig(BaseModel):
         le=PRESSURE_MAX_PA,
         description="Bubble-point pressure (Pa)"
     )
-    pressure_end_pa: float = Field(
-        ...,
+    pressure_end_pa: Optional[float] = Field(
+        default=None,
         ge=PRESSURE_MIN_PA,
         le=PRESSURE_MAX_PA,
         description="Final depletion pressure (Pa)"
     )
-    n_steps: int = Field(
+    n_steps: Optional[int] = Field(
         default=15,
-        ge=5,
+        ge=2,
         le=200,
-        description="Number of pressure steps"
+        description="Total number of DL steps, including the bubble-point row"
     )
+    pressure_points_pa: Optional[List[float]] = Field(
+        default=None,
+        description=(
+            "Optional explicit descending pressure schedule below the bubble point in Pa. "
+            "When provided, it overrides pressure_end_pa/n_steps."
+        ),
+    )
+
+    @field_validator('pressure_points_pa')
+    @classmethod
+    def validate_pressure_points(cls, values: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_descending_pressure_points(values, label="DL", min_points=1)
 
     @model_validator(mode='after')
     def validate_pressure_range(self) -> 'DLConfig':
-        """Ensure bubble pressure is greater than final pressure."""
+        """Ensure a valid DL schedule is provided."""
+        if self.pressure_points_pa:
+            if any(pressure >= self.bubble_pressure_pa for pressure in self.pressure_points_pa):
+                raise ValueError(
+                    "DL pressure_points_pa must stay strictly below bubble_pressure_pa"
+                )
+            self.pressure_end_pa = self.pressure_points_pa[-1]
+            self.n_steps = len(self.pressure_points_pa) + 1
+            return self
+
+        if self.pressure_end_pa is None or self.n_steps is None:
+            raise ValueError(
+                "DL requires either pressure_points_pa or pressure_end_pa/n_steps"
+            )
         if self.bubble_pressure_pa <= self.pressure_end_pa:
             raise ValueError(
                 f"bubble_pressure_pa ({self.bubble_pressure_pa}) must be greater than "
@@ -670,6 +963,18 @@ class PhaseEnvelopeResult(BaseModel):
     critical_point: Optional[PhaseEnvelopePoint] = None
     cricondenbar: Optional[PhaseEnvelopePoint] = None
     cricondentherm: Optional[PhaseEnvelopePoint] = None
+    tracing_method: PhaseEnvelopeTracingMethod = PhaseEnvelopeTracingMethod.CONTINUATION
+    continuation_switched: Optional[bool] = None
+    critical_source: Optional[str] = None
+    bubble_termination_reason: Optional[str] = None
+    dew_termination_reason: Optional[str] = None
+
+    @field_validator('tracing_method', mode='before')
+    @classmethod
+    def validate_result_tracing_method(cls, v):
+        if isinstance(v, str) and v.strip().lower() == "continuation_dev":
+            return PhaseEnvelopeTracingMethod.CONTINUATION
+        return v
 
 
 class CCEStepResult(BaseModel):
@@ -702,6 +1007,8 @@ class BubblePointResult(BaseModel):
     liquid_composition: Dict[str, float]
     vapor_composition: Dict[str, float]
     k_values: Dict[str, float]
+    diagnostics: Optional[SolverDiagnostics] = None
+    certificate: Optional[SolverCertificate] = None
 
 
 class DewPointResult(BaseModel):
@@ -716,6 +1023,8 @@ class DewPointResult(BaseModel):
     liquid_composition: Dict[str, float]
     vapor_composition: Dict[str, float]
     k_values: Dict[str, float]
+    diagnostics: Optional[SolverDiagnostics] = None
+    certificate: Optional[SolverCertificate] = None
 
 
 class DLStepResult(BaseModel):

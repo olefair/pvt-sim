@@ -1,4 +1,4 @@
-"""Validation helpers for solver invariant checks."""
+"""Validation helpers for solver invariant checks and external corpus loading."""
 
 from .invariants import (
     InvariantCheck,
@@ -6,10 +6,76 @@ from .invariants import (
     build_flash_certificate,
     build_saturation_certificate,
 )
+from .external_corpus import (
+    ExternalAcquisitionManifest,
+    ExternalAnchorType,
+    LabC7PlusSaturationAnchor,
+    LiteratureVLETieLineAnchor,
+    PureComponentSaturationAnchor,
+    load_external_acquisition_manifest,
+    load_external_anchor_case,
+)
+from .prode_bridge import (
+    EnvelopePoint,
+    NormalizedEnvelopeResult,
+    NormalizedFlashResult,
+    NormalizedSaturationResult,
+    ProdeBridgeAvailability,
+    ProdeBridgeError,
+    ProdeValidationBackend,
+    detect_prode_validation_backend,
+    load_prode_validation_backend,
+)
+from .thermopack_bridge import (
+    ThermoPackBridgeAvailability,
+    ThermoPackBridgeError,
+    ThermoPackValidationBackend,
+    detect_thermopack_validation_backend,
+    load_thermopack_validation_backend,
+)
+from .backend_registry import (
+    CodeReusePolicy,
+    ValidationBackendAdoptionStatus,
+    ValidationBackendRole,
+    ValidationBackendSpec,
+    approved_validation_backends,
+    get_validation_backend,
+    iter_validation_backends,
+    recommended_coursework_backends,
+)
 
 __all__ = [
     "InvariantCheck",
     "SolverCertificate",
     "build_flash_certificate",
     "build_saturation_certificate",
+    "ExternalAcquisitionManifest",
+    "ExternalAnchorType",
+    "PureComponentSaturationAnchor",
+    "LiteratureVLETieLineAnchor",
+    "LabC7PlusSaturationAnchor",
+    "load_external_anchor_case",
+    "load_external_acquisition_manifest",
+    "EnvelopePoint",
+    "NormalizedFlashResult",
+    "NormalizedSaturationResult",
+    "NormalizedEnvelopeResult",
+    "ProdeValidationBackend",
+    "ProdeBridgeAvailability",
+    "ProdeBridgeError",
+    "detect_prode_validation_backend",
+    "load_prode_validation_backend",
+    "ThermoPackValidationBackend",
+    "ThermoPackBridgeAvailability",
+    "ThermoPackBridgeError",
+    "detect_thermopack_validation_backend",
+    "load_thermopack_validation_backend",
+    "ValidationBackendRole",
+    "CodeReusePolicy",
+    "ValidationBackendAdoptionStatus",
+    "ValidationBackendSpec",
+    "iter_validation_backends",
+    "approved_validation_backends",
+    "get_validation_backend",
+    "recommended_coursework_backends",
 ]

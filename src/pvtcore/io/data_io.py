@@ -33,7 +33,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..core.errors import ValidationError
-from ..models.component import Component, load_components
+from ..models.component import Component, get_component, load_components
 
 
 # Unit conversion factors (multiply to convert TO SI)
@@ -535,49 +535,11 @@ def match_components(
     if database is None:
         database = load_components()
 
-    # Common name mappings
-    name_map = {
-        'methane': 'C1', 'ch4': 'C1',
-        'ethane': 'C2', 'c2h6': 'C2',
-        'propane': 'C3', 'c3h8': 'C3',
-        'n-butane': 'nC4', 'butane': 'nC4', 'nc4': 'nC4',
-        'i-butane': 'iC4', 'isobutane': 'iC4', 'ic4': 'iC4',
-        'n-pentane': 'nC5', 'pentane': 'nC5', 'nc5': 'nC5',
-        'i-pentane': 'iC5', 'isopentane': 'iC5', 'ic5': 'iC5',
-        'hexane': 'C6', 'n-hexane': 'C6',
-        'heptane': 'C7', 'n-heptane': 'C7',
-        'octane': 'C8', 'n-octane': 'C8',
-        'nonane': 'C9', 'n-nonane': 'C9',
-        'decane': 'C10', 'n-decane': 'C10',
-        'nitrogen': 'N2', 'n2': 'N2',
-        'carbon dioxide': 'CO2', 'co2': 'CO2',
-        'hydrogen sulfide': 'H2S', 'h2s': 'H2S',
-    }
-
     matched = []
     for name in names:
-        # Try exact match first
-        if name in database:
-            matched.append(database[name])
-            continue
-
-        # Try lowercase mapping
-        name_lower = name.lower().strip()
-        if name_lower in name_map:
-            db_name = name_map[name_lower]
-            if db_name in database:
-                matched.append(database[db_name])
-                continue
-
-        # Try uppercase
-        name_upper = name.upper()
-        if name_upper in database:
-            matched.append(database[name_upper])
-            continue
-
-        raise ValidationError(
-            f"Component '{name}' not found in database",
-            parameter="names"
-        )
+        try:
+            matched.append(get_component(name, database))
+        except KeyError as exc:
+            raise ValidationError(str(exc), parameter="names") from exc
 
     return matched

@@ -22,10 +22,22 @@ import warnings
 import numpy as np
 from numpy.typing import NDArray
 
-from ..core.errors import ValidationError, PhaseError, ConvergenceStatus, IterationHistory
+from ..core.errors import (
+    ValidationError,
+    PhaseError,
+    ConvergenceError,
+    ConvergenceStatus,
+    IterationHistory,
+)
 from ..eos.base import CubicEOS
 from ..models.component import Component
-from ..stability.michelsen import michelsen_stability_test
+from ..stability.analysis import (
+    StabilityOptions,
+    _build_seed_list,
+    _run_single_seed,
+    _safe_log,
+)
+from ..stability.wilson import wilson_k_values
 from ..flash.rachford_rice import brent_method
 from ..validation.invariants import build_saturation_certificate
 
@@ -37,6 +49,9 @@ MAX_BUBBLE_ITERATIONS: int = 80  # max bracketing expansions + Brent iterations
 # Physical bounds (guardrails for numerical bracketing)
 PRESSURE_MIN: float = 1e3  # Pa
 PRESSURE_MAX: float = 1e8  # Pa
+
+_NONTRIVIAL_TRIAL_TOL: float = 1e-8
+_BUBBLE_BRACKET_EXPANSION: float = 1.1
 
 
 @dataclass
@@ -73,6 +88,46 @@ class BubblePointResult:
         return self.status == ConvergenceStatus.CONVERGED
 
 
+def _is_degenerate_trivial_trial(
+    feed_composition: NDArray[np.float64],
+    trial_composition: NDArray[np.float64],
+    *,
+    composition_tol: float = 1e-10,
+    active_tol: float = 1e-12,
+) -> bool:
+    """Return True when a multicomponent trial collapses to the feed state.
+
+    A bubble point requires a non-trivial incipient vapor phase. When the TPD
+    minimization returns `y == z` for a multicomponent mixture, the solver has
+    found the trivial stationary point instead of a certifiable saturation
+    boundary.
+    """
+    z = np.asarray(feed_composition, dtype=np.float64)
+    w = np.asarray(trial_composition, dtype=np.float64)
+
+    active = z > active_tol
+    if np.count_nonzero(active) <= 1:
+        return False
+
+    return float(np.max(np.abs(w[active] - z[active]))) <= composition_tol
+
+
+def _raise_degenerate_boundary_error(*, pressure: float, temperature: float) -> None:
+    """Raise a transparent error for trivial bubble-point boundary candidates."""
+    raise PhaseError(
+        "Bubble point search encountered a degenerate trivial stability solution. "
+        "The incipient vapor trial collapsed to the feed composition (y=z, K~1), "
+        "so the solver cannot certify a non-trivial bubble-point boundary at this "
+        "temperature. This usually means no bubble point exists here, the state is "
+        "near the critical locus, or the requested liquid reference state is not "
+        "physically realizable.",
+        phase="liquid",
+        pressure=float(pressure),
+        temperature=float(temperature),
+        reason="degenerate_trivial_boundary",
+    )
+
+
 def _tpd_class(tpd: float, tol: float) -> int:
     """Classify TPD robustly with tolerance: -1 (neg), 0 (near zero), +1 (pos)."""
     if tpd > tol:
@@ -80,6 +135,39 @@ def _tpd_class(tpd: float, tol: float) -> int:
     if tpd < -tol:
         return -1
     return 0
+
+
+def _normalize_trial_composition(trial_composition: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Normalize a trial composition when it is finite and has positive total."""
+    trial = np.asarray(trial_composition, dtype=np.float64)
+    if not np.all(np.isfinite(trial)):
+        return trial
+    total = float(np.sum(trial))
+    if total <= 0.0:
+        return trial
+    return trial / total
+
+
+def _pressure_scan_grid(
+    *,
+    pressure_focus: Optional[float],
+    n_points: int = 61,
+) -> NDArray[np.float64]:
+    """Build a generic log-space pressure scan with extra density around a focus."""
+    base_grid = np.geomspace(PRESSURE_MIN, PRESSURE_MAX, int(n_points), dtype=np.float64)
+    if pressure_focus is None or not np.isfinite(pressure_focus) or pressure_focus <= 0.0:
+        return np.unique(base_grid)
+
+    focus_points = [float(pressure_focus)]
+    for exponent in range(-16, 17):
+        focus_points.append(float(pressure_focus) * (1.4 ** exponent))
+
+    combined = np.concatenate(
+        [base_grid, np.asarray(focus_points, dtype=np.float64)],
+        dtype=np.float64,
+    )
+    combined = np.clip(combined, PRESSURE_MIN, PRESSURE_MAX)
+    return np.unique(combined)
 
 
 def calculate_bubble_point(
@@ -180,6 +268,34 @@ def calculate_bubble_point(
         )
         return result
 
+    def _build_max_iters_result(
+        pressure: float,
+        iterations_used: int,
+        history_obj: IterationHistory,
+    ) -> BubblePointResult:
+        """Return the best available partial result when the iteration budget is exhausted."""
+        tpd_value, y = _tpd_vapor_trial(pressure, temperature, z, eos, binary_interaction)
+        y = np.asarray(y, dtype=np.float64)
+        if np.all(np.isfinite(y)) and y.sum() > 0.0:
+            y = y / y.sum()
+            K = y / np.maximum(z, 1e-300)
+        else:
+            y = np.zeros_like(z)
+            K = np.ones_like(z)
+
+        return _finalize(BubblePointResult(
+            status=ConvergenceStatus.MAX_ITERS,
+            pressure=float(pressure),
+            temperature=float(temperature),
+            liquid_composition=z.copy(),
+            vapor_composition=y.astype(np.float64),
+            K_values=K.astype(np.float64),
+            iterations=int(iterations_used),
+            residual=float(abs(tpd_value)),
+            stable_liquid=bool(f0 >= -tolerance),
+            history=history_obj,
+        ))
+
     # Validate initial pressure if provided
     if pressure_initial is not None:
         if not np.isfinite(pressure_initial) or pressure_initial <= 0:
@@ -229,25 +345,27 @@ def calculate_bubble_point(
     #   low P: unstable => f(P) < 0
     f0, _ = _tpd_vapor_trial(P0, temperature, z, eos, binary_interaction)
 
-    # If the initial guess is already on the stability boundary (|TPD| <= tol),
-    # accept it directly.
-    #
-    # Without this, a near-zero TPD at P0 can prevent *both* bracketing
-    # expansions from running (since neither "definitely stable" nor
-    # "definitely unstable" is detected), leading to P_lo == P_hi and a
-    # spurious "failed to form a pressure interval" error.
-    if _tpd_class(float(f0), tolerance) == 0:
-        P_star = float(P0)
-        brent_iters = 0
-        iterations = 0
-
+    def _build_converged_result(
+        pressure_star: float,
+        *,
+        iterations_used: int,
+        history_obj: IterationHistory,
+    ) -> BubblePointResult:
+        """Construct a converged bubble-point result from a resolved boundary."""
+        P_star = float(pressure_star)
         tpd_star, y = _tpd_vapor_trial(P_star, temperature, z, eos, binary_interaction)
-        y = y / y.sum()
+        y = _normalize_trial_composition(y)
+
+        if _is_degenerate_trivial_trial(
+            z,
+            y,
+            composition_tol=_NONTRIVIAL_TRIAL_TOL,
+        ):
+            _raise_degenerate_boundary_error(pressure=P_star, temperature=temperature)
 
         eps = 1e-300
         K = y / np.maximum(z, eps)
 
-        # Optional diagnostic check: ensure stability flips across P*.
         if post_check_stability_flip:
             if post_check_action not in {"raise", "warn"}:
                 raise ValidationError(
@@ -272,8 +390,8 @@ def calculate_bubble_point(
             c_above = _tpd_class(float(tpd_above), tolerance)
             c_below = _tpd_class(float(tpd_below), tolerance)
 
-            bad = (c_above == -1) or (c_below == 1)
-            if bad:
+            good = (c_above == 1) and (c_below == -1)
+            if not good:
                 msg = (
                     "Bubble point post-check failed: stability did not flip across the reported boundary. "
                     f"TPD(P*+dP)={tpd_above:.3e}, TPD(P*-dP)={tpd_below:.3e}. "
@@ -291,6 +409,8 @@ def calculate_bubble_point(
                         reason="post_check_failed",
                     )
 
+        history_obj.record_iteration(residual=abs(tpd_star))
+
         return _finalize(BubblePointResult(
             status=ConvergenceStatus.CONVERGED,
             pressure=float(P_star),
@@ -298,11 +418,116 @@ def calculate_bubble_point(
             liquid_composition=z.copy(),
             vapor_composition=y.astype(np.float64),
             K_values=K.astype(np.float64),
-            iterations=int(iterations),
+            iterations=int(iterations_used),
             residual=float(abs(tpd_star)),
             stable_liquid=bool(f0 >= -tolerance),
-            history=IterationHistory(),  # Early convergence - minimal history
+            history=history_obj,
         ))
+
+    def _resolve_scan_fallback(
+        *,
+        pressure_focus: float,
+        iterations_used: int,
+        history_obj: IterationHistory,
+        error_reason: str,
+        error_message: str,
+    ) -> BubblePointResult:
+        """Resolve a bubble boundary from a broad pressure scan fallback."""
+        fallback = _scan_nontrivial_bubble_boundary(
+            temperature=temperature,
+            composition=z,
+            eos=eos,
+            binary_interaction=binary_interaction,
+            tolerance=tolerance,
+            pressure_focus=pressure_focus,
+        )
+        if fallback is None:
+            raise PhaseError(
+                error_message,
+                phase="liquid",
+                pressure=float(pressure_focus),
+                temperature=float(temperature),
+                reason=error_reason,
+            )
+
+        if fallback[0] == "candidate":
+            return _build_converged_result(
+                float(fallback[1]),
+                iterations_used=iterations_used,
+                history_obj=history_obj,
+            )
+
+        assert fallback[2] is not None
+        P_lo = float(fallback[1])
+        P_hi = float(fallback[2])
+        remaining_iterations = max_iterations - iterations_used
+        if remaining_iterations <= 0:
+            midpoint = float(0.5 * (P_lo + P_hi))
+            return _build_max_iters_result(midpoint, iterations_used, history_obj)
+
+        try:
+            P_star, brent_iters = brent_method(
+                _tpd_vapor_trial_scalar,
+                P_lo,
+                P_hi,
+                args=(temperature, z, eos, binary_interaction),
+                tol=tolerance,
+                max_iter=remaining_iterations,
+            )
+        except ConvergenceError:
+            midpoint = float(0.5 * (P_lo + P_hi))
+            return _build_max_iters_result(midpoint, max_iterations, history_obj)
+
+        return _build_converged_result(
+            P_star,
+            iterations_used=iterations_used + brent_iters,
+            history_obj=history_obj,
+        )
+
+    # If the initial guess is already on the stability boundary (|TPD| <= tol),
+    # accept it directly.
+    #
+    # Without this, a near-zero TPD at P0 can prevent *both* bracketing
+    # expansions from running (since neither "definitely stable" nor
+    # "definitely unstable" is detected), leading to P_lo == P_hi and a
+    # spurious "failed to form a pressure interval" error.
+    if _tpd_class(float(f0), tolerance) == 0:
+        if _is_degenerate_trivial_trial(
+            z,
+            y := _tpd_vapor_trial(P0, temperature, z, eos, binary_interaction)[1],
+            composition_tol=_NONTRIVIAL_TRIAL_TOL,
+        ):
+            informative = _seek_informative_bubble_metric(
+                P0,
+                temperature,
+                z,
+                eos,
+                binary_interaction,
+                tolerance=tolerance,
+                direction="down",
+                factor=1.0 / _BUBBLE_BRACKET_EXPANSION,
+                max_steps=max_iterations,
+            )
+            if informative is not None:
+                P0, f0, _ = informative
+            else:
+                return _resolve_scan_fallback(
+                    pressure_focus=float(P0),
+                    iterations_used=0,
+                    history_obj=IterationHistory(),
+                    error_reason="degenerate_trivial_boundary",
+                    error_message=(
+                        "Bubble point search encountered a degenerate trivial stability solution and "
+                        "no non-trivial boundary could be recovered from a broad pressure scan."
+                    ),
+                )
+
+        else:
+            return _build_converged_result(
+                float(P0),
+                iterations_used=0,
+                history_obj=IterationHistory(),
+            )
 
     P_hi, f_hi = P0, f0
     P_lo, f_lo = P0, f0
@@ -312,7 +537,7 @@ def calculate_bubble_point(
 
     # Expand upward until stable (f >= 0), using tolerance-aware classification.
     while _tpd_class(f_hi, tolerance) == -1 and P_hi < PRESSURE_MAX:
-        P_hi = min(P_hi * 1.6, PRESSURE_MAX)
+        P_hi = min(P_hi * _BUBBLE_BRACKET_EXPANSION, PRESSURE_MAX)
         f_hi, _ = _tpd_vapor_trial(P_hi, temperature, z, eos, binary_interaction)
         iterations += 1
         history.record_iteration(residual=abs(f_hi))
@@ -322,7 +547,7 @@ def calculate_bubble_point(
 
     # Expand downward until unstable (f < 0)
     while _tpd_class(f_lo, tolerance) == 1 and P_lo > PRESSURE_MIN:
-        P_lo = max(P_lo / 1.6, PRESSURE_MIN)
+        P_lo = max(P_lo / _BUBBLE_BRACKET_EXPANSION, PRESSURE_MIN)
         f_lo, _ = _tpd_vapor_trial(P_lo, temperature, z, eos, binary_interaction)
         iterations += 1
         history.record_iteration(residual=abs(f_lo))
@@ -332,132 +557,146 @@ def calculate_bubble_point(
 
     # If bracketing exhausted max_iterations, return MAX_ITERS status
     if bracketing_exhausted and P_lo == P_hi:
-        return _finalize(BubblePointResult(
-            status=ConvergenceStatus.MAX_ITERS,
-            pressure=float(P0),
-            temperature=float(temperature),
-            liquid_composition=z.copy(),
-            vapor_composition=np.zeros_like(z),
-            K_values=np.ones_like(z),
-            iterations=int(iterations),
-            residual=float(abs(f0)),
-            stable_liquid=bool(f0 >= -tolerance),
-            history=history,
-        ))
+        return _build_max_iters_result(float(P0), iterations, history)
 
     # Require a bracket: low endpoint not definitely positive, high endpoint not definitely negative.
     if P_lo == P_hi:
-        raise PhaseError(
-            "No bubble point exists at this temperature (failed to form a pressure interval).",
-            phase="liquid",
-            pressure=P0,
-            temperature=temperature,
-            reason="no_saturation",
+        return _resolve_scan_fallback(
+            pressure_focus=float(P0),
+            iterations_used=iterations,
+            history_obj=history,
+            error_reason="no_saturation",
+            error_message="No bubble point exists at this temperature (failed to form a pressure interval).",
         )
 
     c_lo = _tpd_class(f_lo, tolerance)
     c_hi = _tpd_class(f_hi, tolerance)
 
-    # Accept endpoint if it's already at the boundary.
+    y_lo = y_hi = None
+    lo_trivial_zero = hi_trivial_zero = False
+
     if c_lo == 0:
+        _, y_lo = _tpd_vapor_trial(P_lo, temperature, z, eos, binary_interaction)
+        lo_trivial_zero = _is_degenerate_trivial_trial(
+            z,
+            y_lo,
+            composition_tol=_NONTRIVIAL_TRIAL_TOL,
+        )
+    if c_hi == 0:
+        _, y_hi = _tpd_vapor_trial(P_hi, temperature, z, eos, binary_interaction)
+        hi_trivial_zero = _is_degenerate_trivial_trial(
+            z,
+            y_hi,
+            composition_tol=_NONTRIVIAL_TRIAL_TOL,
+        )
+
+    if c_lo == -1 and hi_trivial_zero:
+        refined = _refine_bubble_endpoint_from_trivial(
+            P_lo,
+            P_hi,
+            temperature,
+            z,
+            eos,
+            binary_interaction,
+            tolerance=tolerance,
+            target="high",
+        )
+        if refined is not None:
+            P_hi, f_hi, _ = refined
+            c_hi = _tpd_class(f_hi, tolerance)
+            hi_trivial_zero = False
+
+    if c_hi == 1 and lo_trivial_zero:
+        refined = _refine_bubble_endpoint_from_trivial(
+            P_lo,
+            P_hi,
+            temperature,
+            z,
+            eos,
+            binary_interaction,
+            tolerance=tolerance,
+            target="low",
+        )
+        if refined is not None:
+            P_lo, f_lo, _ = refined
+            c_lo = _tpd_class(f_lo, tolerance)
+            lo_trivial_zero = False
+
+    if bracketing_exhausted:
+        has_certified_endpoint = (c_lo == 0 and not lo_trivial_zero) or (c_hi == 0 and not hi_trivial_zero)
+        has_sign_change = c_lo == -1 and c_hi == 1
+        if not (has_certified_endpoint or has_sign_change):
+            return _resolve_scan_fallback(
+                pressure_focus=float(P0),
+                iterations_used=iterations,
+                history_obj=history,
+                error_reason="no_saturation",
+                error_message=(
+                    "Bubble point search exhausted the bracketing budget before certifying a "
+                    "non-trivial boundary, and the current interval does not contain a valid bubble point."
+                ),
+            )
+
+    # Accept endpoint if it's already at the boundary.
+    if c_lo == 0 and not lo_trivial_zero:
         P_star = P_lo
         brent_iters = 0
-    elif c_hi == 0:
+    elif c_hi == 0 and not hi_trivial_zero:
         P_star = P_hi
         brent_iters = 0
     else:
         # Otherwise we need a true sign change: f_lo < 0 and f_hi > 0
         if not (c_lo == -1 and c_hi == 1):
-            raise PhaseError(
-                "No bubble point exists at this temperature (no stability boundary found within pressure bounds).",
-                phase="liquid",
-                pressure=P0,
-                temperature=temperature,
-                reason="no_saturation",
+            return _resolve_scan_fallback(
+                pressure_focus=float(P0),
+                iterations_used=iterations,
+                history_obj=history,
+                error_reason="no_saturation",
+                error_message=(
+                    "No bubble point exists at this temperature (no stability boundary found within pressure bounds)."
+                ),
             )
 
-        P_star, brent_iters = brent_method(
-            _tpd_vapor_trial_scalar,
-            P_lo,
-            P_hi,
-            args=(temperature, z, eos, binary_interaction),
-            tol=tolerance,
-            max_iter=max(20, max_iterations - iterations),
-        )
+        remaining_iterations = max_iterations - iterations
+        if remaining_iterations <= 0:
+            candidate_pressure = P_lo if abs(f_lo) <= abs(f_hi) else P_hi
+            return _build_max_iters_result(float(candidate_pressure), iterations, history)
+
+        try:
+            P_star, brent_iters = brent_method(
+                _tpd_vapor_trial_scalar,
+                P_lo,
+                P_hi,
+                args=(temperature, z, eos, binary_interaction),
+                tol=tolerance,
+                max_iter=remaining_iterations,
+            )
+        except ConvergenceError:
+            midpoint = float(0.5 * (P_lo + P_hi))
+            return _build_max_iters_result(midpoint, max_iterations, history)
 
     iterations += brent_iters
 
     tpd_star, y = _tpd_vapor_trial(P_star, temperature, z, eos, binary_interaction)
     y = y / y.sum()
 
-    eps = 1e-300
-    K = y / np.maximum(z, eps)
+    if brent_iters == 0 and _is_degenerate_trivial_trial(z, y):
+        return _resolve_scan_fallback(
+            pressure_focus=float(P_star),
+            iterations_used=iterations,
+            history_obj=history,
+            error_reason="degenerate_trivial_boundary",
+            error_message=(
+                "Bubble point search encountered a degenerate trivial stability solution and "
+                "no non-trivial boundary could be recovered from a broad pressure scan."
+            ),
+        )
 
-
-
-    # POST-CHECK (optional): verify the stability metric flips sign across P*.
-    # This guards against "flat" or non-physical roots where TPD ≈ 0 but does not
-    # actually separate stable/unstable regions (common above cricondentherm).
-    if post_check_stability_flip:
-        if post_check_action not in {"raise", "warn"}:
-            raise ValidationError(
-                "post_check_action must be 'raise' or 'warn'",
-                parameter="post_check_action",
-                value=post_check_action,
-            )
-        if not (0.0 < float(post_check_rel_step) < 0.5):
-            raise ValidationError(
-                "post_check_rel_step must be in (0, 0.5)",
-                parameter="post_check_rel_step",
-                value=post_check_rel_step,
-            )
-
-        dP = max(1e3, float(post_check_rel_step) * float(P_star))
-        P_above = float(min(float(P_star) + dP, PRESSURE_MAX))
-        P_below = float(max(float(P_star) - dP, PRESSURE_MIN))
-
-        tpd_above, _ = _tpd_vapor_trial(P_above, temperature, z, eos, binary_interaction)
-        tpd_below, _ = _tpd_vapor_trial(P_below, temperature, z, eos, binary_interaction)
-
-        c_above = _tpd_class(float(tpd_above), tolerance)
-        c_below = _tpd_class(float(tpd_below), tolerance)
-
-        # For a bubble point boundary (liquid feed):
-        #   above P*: stable liquid => TPD >= 0
-        #   below P*: unstable      => TPD < 0
-        bad = (c_above == -1) or (c_below == 1)
-        if bad:
-            msg = (
-                "Bubble point post-check failed: stability did not flip across the reported boundary. "
-                f"TPD(P*+dP)={tpd_above:.3e}, TPD(P*-dP)={tpd_below:.3e}. "
-                "This usually indicates no bubble point exists at this temperature (above cricondentherm) "
-                "or the stability tolerance is too tight near critical." 
-            )
-            if post_check_action == "warn":
-                warnings.warn(msg, RuntimeWarning)
-            else:
-                raise PhaseError(
-                    msg,
-                    phase="liquid",
-                    pressure=float(P_star),
-                    temperature=float(temperature),
-                    reason="post_check_failed",
-                )
-    # Record final residual in history
-    history.record_iteration(residual=abs(tpd_star))
-
-    return _finalize(BubblePointResult(
-        status=ConvergenceStatus.CONVERGED,
-        pressure=float(P_star),
-        temperature=float(temperature),
-        liquid_composition=z.copy(),
-        vapor_composition=y.astype(np.float64),
-        K_values=K.astype(np.float64),
-        iterations=int(iterations),
-        residual=float(abs(tpd_star)),
-        stable_liquid=bool(f0 >= -tolerance),
-        history=history,
-    ))
+    return _build_converged_result(
+        P_star,
+        iterations_used=iterations,
+        history_obj=history,
+    )
 
 
 def _tpd_vapor_trial(
@@ -467,18 +706,70 @@ def _tpd_vapor_trial(
     eos: CubicEOS,
     binary_interaction: Optional[NDArray[np.float64]],
 ) -> Tuple[float, NDArray[np.float64]]:
-    """Return (TPD_vapor_trial, vapor_trial_composition) for a liquid feed."""
-    res = michelsen_stability_test(
-        composition,
+    """Return a vapor-like TPD metric for a liquid feed.
+
+    For saturation work we need the *non-trivial* incipient vapor branch when it
+    exists. The generic Michelsen driver minimizes TPD over all vapor-like seeds,
+    which can prefer the trivial stationary point (y=z, TPD≈0) above the bubble
+    point. That destroys the sign structure required to bracket the real bubble
+    boundary near the critical region.
+
+    Here we evaluate the standard vapor-like seeds and prefer the best
+    non-trivial trial. If every seed collapses to the feed state, we fall back
+    to the trivial result so callers can still classify the state accordingly.
+    """
+    z = np.asarray(composition, dtype=np.float64)
+    opts = StabilityOptions(n_random_trials=0)
+
+    phi_feed = eos.fugacity_coefficient(
         float(pressure),
         float(temperature),
-        eos,
-        feed_phase="liquid",
-        binary_interaction=binary_interaction,
+        z,
+        "liquid",
+        binary_interaction,
     )
-    tpd_v = float(res.tpd_values[0])
-    y = np.asarray(res.trial_compositions[0], dtype=np.float64)
-    return tpd_v, y
+    d_terms = _safe_log(z, opts.epsilon) + np.log(phi_feed)
+    K_w = wilson_k_values(float(pressure), float(temperature), eos.components)
+    seeds = _build_seed_list(kind="vapor_like", z=z, K_wilson=K_w, options=opts)
+
+    best_any = None
+    best_nontrivial = None
+
+    for seed in seeds:
+        res = _run_single_seed(
+            kind="vapor_like",
+            trial_phase="vapor",
+            seed_w=seed,
+            z=z,
+            d_terms=d_terms,
+            eos=eos,
+            pressure=float(pressure),
+            temperature=float(temperature),
+            binary_interaction=binary_interaction,
+            options=opts,
+        )
+
+        if best_any is None or res.tpd < best_any.tpd:
+            best_any = res
+
+        if not _is_degenerate_trivial_trial(
+            z,
+            res.w,
+            composition_tol=_NONTRIVIAL_TRIAL_TOL,
+        ):
+            if best_nontrivial is None or res.tpd < best_nontrivial.tpd:
+                best_nontrivial = res
+
+    chosen = best_nontrivial if best_nontrivial is not None else best_any
+    if chosen is None:
+        raise ConvergenceError(
+            "Bubble-point stability trial generation produced no vapor-like candidates.",
+            status=ConvergenceStatus.FAILURE,
+            pressure=float(pressure),
+            temperature=float(temperature),
+        )
+
+    return float(chosen.tpd), np.asarray(chosen.w, dtype=np.float64)
 
 
 def _tpd_vapor_trial_scalar(
@@ -490,6 +781,157 @@ def _tpd_vapor_trial_scalar(
 ) -> float:
     tpd, _ = _tpd_vapor_trial(pressure, temperature, composition, eos, binary_interaction)
     return tpd
+
+
+def _seek_informative_bubble_metric(
+    pressure_start: float,
+    temperature: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    *,
+    tolerance: float,
+    direction: str = "down",
+    factor: float = 0.95,
+    max_steps: int = 24,
+) -> Optional[Tuple[float, float, NDArray[np.float64]]]:
+    """Walk away from a trivial zero-TPD point until the metric becomes informative."""
+    if direction not in {"down", "up"}:
+        raise ValidationError(
+            "direction must be 'down' or 'up'",
+            parameter="direction",
+            value=direction,
+        )
+    if not (0.0 < factor < 1.0):
+        raise ValidationError(
+            "factor must be in (0, 1)",
+            parameter="factor",
+            value=factor,
+        )
+
+    P = float(pressure_start)
+    for _ in range(int(max_steps)):
+        P_next = P * factor if direction == "down" else P / factor
+        P_next = float(np.clip(P_next, PRESSURE_MIN, PRESSURE_MAX))
+        if P_next == P:
+            break
+
+        tpd, y = _tpd_vapor_trial(P_next, temperature, composition, eos, binary_interaction)
+        is_trivial_zero = (
+            _tpd_class(float(tpd), tolerance) == 0
+            and _is_degenerate_trivial_trial(
+                composition,
+                y,
+                composition_tol=_NONTRIVIAL_TRIAL_TOL,
+            )
+        )
+        if not is_trivial_zero:
+            return P_next, float(tpd), np.asarray(y, dtype=np.float64)
+
+        P = P_next
+
+    return None
+
+
+def _scan_nontrivial_bubble_boundary(
+    *,
+    temperature: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    tolerance: float,
+    pressure_focus: Optional[float],
+) -> Optional[tuple[str, float, Optional[float]]]:
+    """Find the highest non-trivial bubble boundary on a generic pressure scan."""
+    prev_stable_pressure: Optional[float] = None
+
+    for pressure in np.flip(_pressure_scan_grid(pressure_focus=pressure_focus)):
+        tpd_value, trial = _tpd_vapor_trial(
+            float(pressure),
+            temperature,
+            composition,
+            eos,
+            binary_interaction,
+        )
+        trial = _normalize_trial_composition(trial)
+        cls = _tpd_class(float(tpd_value), tolerance)
+
+        if cls == 0:
+            if not _is_degenerate_trivial_trial(
+                composition,
+                trial,
+                composition_tol=_NONTRIVIAL_TRIAL_TOL,
+            ):
+                return ("candidate", float(pressure), None)
+            continue
+
+        if cls == 1:
+            prev_stable_pressure = float(pressure)
+            continue
+
+        if cls == -1 and prev_stable_pressure is not None:
+            return ("bracket", float(pressure), prev_stable_pressure)
+
+    return None
+
+
+def _refine_bubble_endpoint_from_trivial(
+    pressure_low: float,
+    pressure_high: float,
+    temperature: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    *,
+    tolerance: float,
+    target: str,
+    max_steps: int = 24,
+) -> Optional[Tuple[float, float, NDArray[np.float64]]]:
+    """Refine a bracket when one side collapsed to a trivial zero-TPD point."""
+    if target not in {"low", "high"}:
+        raise ValidationError(
+            "target must be 'low' or 'high'",
+            parameter="target",
+            value=target,
+        )
+
+    P_lo = float(min(pressure_low, pressure_high))
+    P_hi = float(max(pressure_low, pressure_high))
+
+    for _ in range(int(max_steps)):
+        P_mid = float(np.sqrt(P_lo * P_hi))
+        if not (P_lo < P_mid < P_hi):
+            break
+
+        f_mid, y_mid = _tpd_vapor_trial(P_mid, temperature, composition, eos, binary_interaction)
+        c_mid = _tpd_class(float(f_mid), tolerance)
+        trivial_zero = (
+            c_mid == 0
+            and _is_degenerate_trivial_trial(
+                composition,
+                y_mid,
+                composition_tol=_NONTRIVIAL_TRIAL_TOL,
+            )
+        )
+
+        if target == "high":
+            if trivial_zero:
+                P_hi = P_mid
+                continue
+            if c_mid == -1:
+                P_lo = P_mid
+                continue
+            return P_mid, float(f_mid), np.asarray(y_mid, dtype=np.float64)
+
+        if trivial_zero:
+            P_lo = P_mid
+            continue
+        if c_mid == 1:
+            P_hi = P_mid
+            continue
+        return P_mid, float(f_mid), np.asarray(y_mid, dtype=np.float64)
+
+    return None
 
 
 def _estimate_bubble_pressure_wilson(

@@ -36,6 +36,12 @@ CRITICAL_POINT_TOLERANCE: float = 1e5  # Pressure tolerance for critical point (
 CONVERGENCE_FAILURE_LIMIT: int = 10  # Max consecutive failures before stopping
 T_SAFETY_FACTOR: float = 1.5  # Max temperature = max(Tc_i) * this factor
 
+_TERMINATING_SATURATION_REASONS = {
+    "no_saturation",
+    "degenerate_trivial_boundary",
+    "post_check_failed",
+}
+
 
 def _get_temperature_bound(
     composition: NDArray[np.float64],
@@ -238,7 +244,7 @@ def _trace_bubble_curve(
 
         except PhaseError as e:
             # Normal termination: beyond cricondentherm (no saturation exists)
-            if e.details.get("reason") == "no_saturation":
+            if e.details.get("reason") in _TERMINATING_SATURATION_REASONS:
                 break
 
             # Any other PhaseError indicates an unexpected state (e.g. inside envelope).
@@ -317,7 +323,7 @@ def _find_first_dew_point(
             )
             return float(T), float(res.pressure), res
         except PhaseError as e:
-            if e.details.get("reason") != "no_saturation":
+            if e.details.get("reason") not in _TERMINATING_SATURATION_REASONS:
                 # Unexpected: dew calculation indicates we are already inside the envelope or other issue
                 raise
             T += dT
@@ -416,7 +422,7 @@ def _trace_dew_curve(
             consecutive_failures = 0
 
         except PhaseError as e:
-            if e.details.get("reason") == "no_saturation":
+            if e.details.get("reason") in _TERMINATING_SATURATION_REASONS:
                 break
             if envelope_failure_mode == "raise":
                 raise

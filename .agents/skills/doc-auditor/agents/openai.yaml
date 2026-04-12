@@ -1,0 +1,7 @@
+interface:
+  display_name: "Doc Auditor"
+  short_description: "Audit, inventory, classify, and produce a canonical documentation-audit note for documentation in a workspace or..."
+  default_prompt: "Use $doc-auditor to inventory and assess the documentation in this workspace."
+
+policy:
+  allow_implicit_invocation: false

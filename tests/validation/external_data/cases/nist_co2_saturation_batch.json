@@ -1,0 +1,59 @@
+{
+  "anchor_type": "pure_component_saturation",
+  "case_id": "nist_co2_saturation_batch",
+  "component_id": "CO2",
+  "source": {
+    "kind": "nist_webbook",
+    "citation": "NIST Chemistry WebBook fluid interface carbon dioxide saturation properties",
+    "url": "https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C124389&Type=SatP&Digits=12&TLow=220.0&THigh=280.0&TInc=20.0&TUnit=K&PUnit=bar&DUnit=mol%2Fl&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa%2As&STUnit=N%2Fm&RefState=DEF",
+    "notes": [
+      "Direct saturation-curve pressures downloaded from the public NIST fluid interface."
+    ]
+  },
+  "points": [
+    {
+      "temperature": {
+        "value": 220.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 5.99130449034,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 240.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 12.8248349845,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 260.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 24.1879251004,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 280.0,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 41.6073911901,
+        "unit": "bar"
+      }
+    }
+  ],
+  "notes": [
+    "Promoted from the external acquisition manifest on 2026-04-12.",
+    "These values are the external physical-accuracy anchors for pure-component saturation in the repo validation lane."
+  ]
+}

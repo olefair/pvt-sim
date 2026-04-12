@@ -62,6 +62,27 @@ def test_cce_workflow_happy_path() -> None:
         assert cce.saturation_pressure_pa > 0
 
 
+def test_cce_workflow_supports_explicit_pressure_list() -> None:
+    """CCE should honor an explicit non-linear pressure schedule."""
+    config = RunConfig.model_validate(
+        {
+            **_cce_config(),
+            "cce_config": {
+                "temperature_k": 350.0,
+                "pressure_points_pa": [30e6, 18e6, 11e6, 5e6],
+            },
+        }
+    )
+
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.cce_result is not None
+    assert [step.pressure_pa for step in result.cce_result.steps] == pytest.approx(
+        [30e6, 18e6, 11e6, 5e6]
+    )
+
+
 def test_cce_invalid_pressure_range_fails_schema_validation() -> None:
     """CCE config must use descending pressures from start to end."""
     config_data = _cce_config()

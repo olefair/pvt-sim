@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Reflect"
+  short_description: "Stage 2 of the cognitive style chain: convergent synthesis. Takes the wide-open problem space produced by E..."
+  default_prompt: "Use $style-reflect to synthesize what has been learned and tighten the direction."
+
+policy:
+  allow_implicit_invocation: false

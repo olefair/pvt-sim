@@ -27,6 +27,12 @@ Produce a focused, well-sourced markdown artifact in the 500–1000 word range. 
 
 ## Workspace Vault Contract
 
+For this workspace, `docs/` means the shared Obsidian vault rooted at
+`C:\Users\olefa\dev\pete-workspace\docs`, not a repo-local `docs/` folder
+inside an individual project repo or uploaded snapshot. Treat YAML
+frontmatter, `[[wikilinks]]`, and backlink-oriented body linking as part of
+the operating contract whenever reading or writing notes there.
+
 When the current workspace uses the Pete docs vault, read and follow:
 
 - `docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`
@@ -57,7 +63,7 @@ brief-specific rules below are deltas, not substitutes.
   - `## Interpretation`
   - `## Implications / Suggested Follow-up`
   - `## Change Notes`
-- If the current surface cannot write directly into the vault, create a downloadable markdown file using the canonical filename and tell the user the intended vault path
+- Write the brief directly to the vault at the canonical path using `repo-engineer:repo_create_file`, and also present via `present_files` for convenient access
 - After rendering, provide a one-sentence summary in chat — nothing more
 - If the topic genuinely requires 2,000+ words to do justice, say so and offer to use the full create-artifact approach instead
 

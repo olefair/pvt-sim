@@ -1,0 +1,7 @@
+interface:
+  display_name: "Style Show Working"
+  short_description: "Stage 3.5 of the cognitive style chain: pre-implementation verification. Sits between Plan and Build as an..."
+  default_prompt: "Use $style-show-working to expose the reasoning and verify the plan before building."
+
+policy:
+  allow_implicit_invocation: false

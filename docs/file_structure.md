@@ -5,14 +5,15 @@ This is the target file structure for the complete PVT-SIM project. Files and fo
 ```
 pvt-sim/
 ├── README.md                          # Project overview, quick start
+├── AGENTS.md                          # Repo-local execution notes for coding agents
 ├── LICENSE                            # MIT or similar
 ├── pyproject.toml                     # Project config, dependencies
 ├── .gitignore                         # Python, IDE, OS ignores
 ├── .pre-commit-config.yaml            # Linting, type checking hooks
-├── CLAUDE.md                          # Context file for Claude Code
 │
 ├── docs/
 │   ├── architecture.md                # System design, data flow
+│   ├── development.md                 # Stack, coding standards, verification contract
 │   ├── numerical_methods.md           # Algorithm specifications
 │   ├── validation_plan.md             # Testing strategy
 │   ├── references.md                  # Primary literature sources

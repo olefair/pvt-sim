@@ -28,6 +28,12 @@ Produce a thorough, well-sourced, standalone markdown document rendered as an ar
 
 ## Workspace Vault Contract
 
+For this workspace, `docs/` means the shared Obsidian vault rooted at
+`C:\Users\olefa\dev\pete-workspace\docs`, not a repo-local `docs/` folder
+inside an individual project repo or uploaded snapshot. Treat YAML
+frontmatter, `[[wikilinks]]`, and backlink-oriented body linking as part of
+the operating contract whenever reading or writing notes there.
+
 When the current workspace uses the Pete docs vault, read and follow:
 
 - `docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`
@@ -59,7 +65,7 @@ report-specific rules below are deltas, not substitutes.
   - `## Implications / Suggested Follow-up`
   - `## Change Notes`
 - Never dump 3000+ words of markdown inline in chat
-- If the current surface cannot write directly into the vault, create a downloadable markdown file using the canonical filename and tell the user the intended vault path
+- Write the artifact directly to the vault at the canonical path using `repo-engineer:repo_create_file`, and also present via `present_files` for convenient access
 - After rendering the artifact, provide a brief (2-3 sentence) summary in chat — do not rehash the document
 
 ## Research Protocol

@@ -35,6 +35,12 @@ You are a peer reviewer, not a line counter.
 
 ## Workspace Vault Contract
 
+For this workspace, `docs/` means the shared Obsidian vault rooted at
+`C:\Users\olefa\dev\pete-workspace\docs`, not a repo-local `docs/` folder
+inside an individual project repo or uploaded snapshot. Treat YAML
+frontmatter, `[[wikilinks]]`, and backlink-oriented body linking as part of
+the operating contract whenever reading or writing notes there.
+
 When the current workspace uses the Pete docs vault, read and follow:
 
 - `docs/reference/workspace/reference_frontmatter-contract-canonical_v1_2026-03-17.md`

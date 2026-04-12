@@ -108,39 +108,60 @@ For each active slice, include:
 - last structural update
 
 ### Current active slices
-- directive / task name: canonical pvtapp shell + desktop contract baseline
-  owner / lane: Ole + Codex on `main`
+- directive / task name: gui runtime follow-on lane
+  owner / lane: Ole + Codex on planned `codex/gui`
   touched repo surfaces:
-  - `.github/workflows/smoke.yml`
-  - `.gitignore`
-  - `src/pvtapp/capabilities.py`
-  - `src/pvtapp/job_runner.py`
-  - `src/pvtapp/main.py`
-  - `src/pvtapp/style.py`
-  - `src/pvtapp/workers.py`
-  - `src/pvtapp/widgets/`
+  - `src/pvtapp/`
   - `tests/unit/test_pvtapp_*`
   - `tests/unit/test_cli_validate.py`
   - `README.md`
-  - `docs/packaging.md`
-  - `docs/tbp.md`
-  - `docs/tuning.md`
-  - `pyproject.toml`
-  - `data/pure_components/components.json`
-  - `AGENTS.md`
-  - `PVTSIM_DEPENDENCY_MAP.md`
+  - `docs/development.md`
+  - `docs/runtime_surface_standard.md`
+  - `examples/pete665_assignment_case.json`
+  - `scripts/run_pete665_assignment.py`
+  - `scripts/validate_modules.py`
   upstream dependencies:
-  - keep `src/pvtcore/` thermodynamics untouched while the app shell is still settling
-  - align the desktop contract before promoting more calculation types or EOS choices into the GUI
-  - shared-surface caution applies because `pyproject.toml` is already in flight in this slice
+  - starts from the 2026-04-12 merged mainline baseline prepared from `codex/handoff-external-validation`
+  - phase-envelope solver work must be consumed through the stable runtime contract, not by parallel edits inside `src/pvtcore/envelope/`
   blocked_by / blockers:
   - none currently recorded
   status:
-  - validated checkpoint baseline on the canonical branch
+  - declared for immediate dedicated worktree creation from updated `main`
   coordination rule:
-  - do not spawn overlapping app-shell, desktop-contract, or packaging work until new issue-scoped follow-on slices are declared from this baseline
+  - keep this lane out of `src/pvtcore/envelope/`, `tests/validation/test_phase_envelope_*`, and `tests/validation/test_vs_*` unless a controller records an explicit shared-surface serialization rule
   last structural update:
-  - 2026-04-11
+  - 2026-04-12
+
+- directive / task name: phase-envelope continuation correction + external comparison lane
+  owner / lane: Ole + Codex on `codex/phase-envelope`
+  touched repo surfaces:
+  - `src/pvtcore/envelope/`
+  - `tests/unit/test_envelope_*`
+  - `tests/unit/test_pvtapp_phase_envelope_workflow.py`
+  - `tests/validation/test_phase_envelope_*`
+  - `tests/validation/test_vs_mi_pvt.py`
+  - `tests/validation/test_vs_prode.py`
+  - `tests/validation/test_vs_thermopack.py`
+  - `tests/validation/mi_pvt/`
+  - `tests/validation/prode/`
+  - `tests/validation/thermopack/`
+  - `scripts/debug_phase_envelope_roots.py`
+  - `docs/validation/phase_envelope_validation_matrix.md`
+  - `docs/validation/mi_pvt_phase_envelope_roster.md`
+  upstream dependencies:
+  - starts from the same 2026-04-12 merged mainline baseline
+  - owns the carried local continuation checkpoint preserved on `codex/phase-envelope`
+  - saturation authority and external-corpus ingestion remain upstream references, but critical-point alignment and release-gate/runtime-matrix certification are owned here
+  blocked_by / blockers:
+  - the continuation/ThermoPack critical-point mismatch remains unresolved
+  - release-gate and runtime-matrix certification still need a fresh pass after follow-on solver changes
+  status:
+  - active on dedicated branch; worktree creation pending
+  coordination rule:
+  - do not run overlapping GUI edits in `src/pvtapp/` while this lane changes runtime-exposed solver semantics unless the controller records file-level serialization first
+  - if solver semantics require GUI/runtime disclosure changes, land them back through `main` after both lanes agree on the contract
+  last structural update:
+  - 2026-04-12
 
 ## Dependency refresh protocol
 
@@ -176,3 +197,6 @@ Do not run concurrent delegated work against the same repo surface unless the co
 - 2026-04-09: Recorded the active local pvtapp + packaging slice and flagged shared-surface coordination.
 - 2026-04-11: Expanded the active local slice to include `job_runner.py`, `capabilities.py`, and desktop contract alignment work.
 - 2026-04-11: Promoted the validated desktop-contract slice to the canonical baseline on `main`.
+- 2026-04-12: Added the unified saturation-validation lane so bubble-point and dew-point authority, robustness, and GUI honesty stay in one controlled surface.
+- 2026-04-12: Added the runtime-surface consolidation + assignment validation expansion slice to capture the current branch scope while the dirty worktree is being cleaned for commit.
+- 2026-04-12: Retired the mixed cleanup slice after preserving the local continuation checkpoint on `codex/phase-envelope` and declaring dedicated `gui` and `phase-envelope` follow-on lanes.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Docs Contract Workflow"
+  short_description: "Run the Pete workspace docs contract wrapper for schema drift, docs family routing, and custodian passes."
+  default_prompt: "Use $docs-contract-workflow to run the appropriate repo-local docs contract workflow and return the wrapper report."
+
+policy:
+  allow_implicit_invocation: false

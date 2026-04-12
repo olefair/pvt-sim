@@ -24,6 +24,7 @@ from pvtapp.schemas import (
     RunResult,
     RunStatus,
     SolverDiagnostics,
+    SolverCertificate,
     ConvergenceStatusEnum,
 )
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
@@ -189,12 +190,20 @@ class DiagnosticsWidget(QWidget):
 
         # Get diagnostics from the appropriate result type
         diagnostics = None
+        certificate = None
         if result.pt_flash_result:
             diagnostics = result.pt_flash_result.diagnostics
-        # Add other result types as needed
+            certificate = result.pt_flash_result.certificate
+        elif result.bubble_point_result:
+            diagnostics = result.bubble_point_result.diagnostics
+            certificate = result.bubble_point_result.certificate
+        elif result.dew_point_result:
+            diagnostics = result.dew_point_result.diagnostics
+            certificate = result.dew_point_result.certificate
 
         if diagnostics:
             self._display_diagnostics(diagnostics)
+            self._append_certificate_summary(certificate)
         else:
             self.log_text.append("No solver diagnostics available")
 
@@ -275,6 +284,27 @@ class DiagnosticsWidget(QWidget):
         self.log_text.append(
             f"Jacobian evaluations: {diag.n_jac_evals}"
         )
+
+    def _append_certificate_summary(self, certificate: Optional[SolverCertificate]) -> None:
+        """Append invariant-certificate status to the diagnostics log when available."""
+        if certificate is None:
+            return
+
+        self.log_text.append("")
+        self.log_text.append(
+            f"Invariant certificate: {'PASS' if certificate.passed else 'FAIL'}"
+        )
+        self.log_text.append(
+            f"Certificate status: {certificate.status.value.replace('_', ' ').title()}"
+        )
+
+        failed_checks = [
+            check.name
+            for check in certificate.checks
+            if check.applicable and not check.passed
+        ]
+        if failed_checks:
+            self.log_text.append(f"Failed checks: {', '.join(failed_checks)}")
 
     def _plot_convergence(self, history) -> None:
         """Plot convergence history."""

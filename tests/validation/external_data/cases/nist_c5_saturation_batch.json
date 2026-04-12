@@ -1,0 +1,59 @@
+{
+  "anchor_type": "pure_component_saturation",
+  "case_id": "nist_c5_saturation_batch",
+  "component_id": "C5",
+  "source": {
+    "kind": "nist_webbook",
+    "citation": "NIST Chemistry WebBook fluid interface n-pentane saturation properties",
+    "url": "https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C109660&Type=SatP&Digits=12&TLow=281.88&THigh=422.82&TInc=46.98&TUnit=K&PUnit=bar&DUnit=mol%2Fl&HUnit=kJ%2Fmol&WUnit=m%2Fs&VisUnit=uPa%2As&STUnit=N%2Fm&RefState=DEF",
+    "notes": [
+      "Direct saturation-curve pressures downloaded from the public NIST fluid interface."
+    ]
+  },
+  "points": [
+    {
+      "temperature": {
+        "value": 281.88,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 0.358734868087,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 328.86,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 1.89312760954,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 375.84,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 6.29693307594,
+        "unit": "bar"
+      }
+    },
+    {
+      "temperature": {
+        "value": 422.82,
+        "unit": "K"
+      },
+      "pressure": {
+        "value": 15.8284700162,
+        "unit": "bar"
+      }
+    }
+  ],
+  "notes": [
+    "Promoted from the external acquisition manifest on 2026-04-12.",
+    "These values are the external physical-accuracy anchors for pure-component saturation in the repo validation lane."
+  ]
+}

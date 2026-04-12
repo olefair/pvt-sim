@@ -824,11 +824,23 @@ class TestIsoLinesPhysicalConstraints:
         segments = result.get(0.95, [])
         for seg in segments:
             if len(seg) > 0:
-                # Points should have low pressures (near dew curve)
-                # and high vapor fractions (beta)
-                for beta in seg.vapor_fractions:
-                    # High alpha implies high beta (more vapor)
-                    assert beta > 0.5
+                for T, P, alpha in zip(
+                    seg.temperatures,
+                    seg.pressures,
+                    seg.vapor_volume_fractions,
+                ):
+                    bubble_pressures = envelope.bubble_P[np.argsort(envelope.bubble_T)]
+                    bubble_temperatures = envelope.bubble_T[np.argsort(envelope.bubble_T)]
+                    dew_pressures = envelope.dew_P[np.argsort(envelope.dew_T)]
+                    dew_temperatures = envelope.dew_T[np.argsort(envelope.dew_T)]
+
+                    P_bubble = np.interp(T, bubble_temperatures, bubble_pressures)
+                    P_dew = np.interp(T, dew_temperatures, dew_pressures)
+
+                    # Alpha is a vapor-volume fraction, not a vapor-mole fraction.
+                    # The physically meaningful expectation is proximity to the dew boundary.
+                    assert alpha == pytest.approx(0.95, abs=1e-6)
+                    assert abs(P - P_dew) < abs(P - P_bubble)
 
     def test_iso_beta_50_bisects_envelope(self, binary_c1_c10_eos, components):
         """Test that iso-beta at 50% is roughly in the middle of the envelope.

@@ -1,0 +1,33 @@
+{
+  "case_id": "template_phase_envelope",
+  "task": "phase_envelope",
+  "temperature": { "value": 298.15, "unit": "K" },
+  "composition": [
+    { "id": "CO2", "z": 0.6498 },
+    { "id": "C1", "z": 0.1057 },
+    { "id": "C2", "z": 0.1058 },
+    { "id": "C3", "z": 0.1235 },
+    { "id": "nC4", "z": 0.0152 }
+  ],
+  "mi_settings": {
+    "eos": "Peng-Robinson 1976",
+    "kij": "zero",
+    "notes": "Paste the MI text-output envelope table into expected.envelope_points."
+  },
+  "trace": {
+    "method": "fixed_grid",
+    "n_points": 120
+  },
+  "expected": {
+    "envelope_points": [],
+    "critical_point": null,
+    "cricondenbar": null,
+    "cricondentherm": null
+  },
+  "tolerances": {
+    "key_pressure_pa_atol": 500000.0,
+    "key_temperature_k_atol": 1.0,
+    "curve_pressure_pa_atol": 750000.0,
+    "curve_point_fraction_min": 0.8
+  }
+}
