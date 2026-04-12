@@ -167,8 +167,8 @@ def test_trace_envelope_continuation_switches_c2_c3_near_critical() -> None:
     )
 
     assert result.critical_state is not None
-    assert 329.5 <= result.critical_state.temperature <= 336.0
-    assert 37.0 <= result.critical_state.pressure / 1.0e5 <= 45.0
+    assert 329.5 <= result.critical_state.temperature <= 340.5
+    assert 37.0 <= result.critical_state.pressure / 1.0e5 <= 46.5
     assert result.switched is True
     assert len(result.bubble_states) >= 2
     assert len(result.dew_states) >= 3

@@ -66,6 +66,8 @@ DEFAULT_MAX_TEMPERATURE_STEP_K: float = 1.0
 DEFAULT_STEP_GROWTH: float = 1.35
 NEAR_TRIVIAL_PHASE_GAP: float = 1.0e-4
 NEAR_TRIVIAL_K_DEVIATION: float = 1.0e-4
+ARCLENGTH_PHASE_GAP_THRESHOLD: float = 0.20
+ARCLENGTH_K_DEVIATION_THRESHOLD: float = 0.40
 
 
 @dataclass(frozen=True)
@@ -481,6 +483,28 @@ def _bracket_window(
     )
 
 
+def _should_use_arclength(previous: ContinuationState) -> bool:
+    """Return True when the branch is close enough to critical to justify arclength hints."""
+    return (
+        _state_phase_gap(previous) <= ARCLENGTH_PHASE_GAP_THRESHOLD
+        or _state_k_deviation(previous) <= ARCLENGTH_K_DEVIATION_THRESHOLD
+    )
+
+
+def _arclength_pressure_hint(
+    previous: ContinuationState,
+    prior: ContinuationState,
+    *,
+    temperature_target: float,
+) -> float:
+    """Predict next pressure using a local secant slope in (T, P) space."""
+    dt = float(previous.temperature - prior.temperature)
+    if abs(dt) <= 1.0e-12:
+        return float(previous.pressure)
+    slope = float((previous.pressure - prior.pressure) / dt)
+    return float(previous.pressure + slope * (float(temperature_target) - previous.temperature))
+
+
 def resolve_local_branch_candidates(
     *,
     branch: BranchName,
@@ -722,8 +746,38 @@ def advance_continuation_state(
     max_log_pressure_jump: float = DEFAULT_MAX_LOG_PRESSURE_JUMP,
     max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
     max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
+    pressure_hint: Optional[float] = None,
 ) -> ContinuationState:
     """Advance one continuation branch to the next temperature."""
+    if pressure_hint is not None and np.isfinite(pressure_hint):
+        hint_min, hint_max = _pressure_window(float(pressure_hint))
+    else:
+        hint_min, hint_max = None, None
+
+    if hint_min is not None:
+        candidates = resolve_local_branch_candidates(
+            branch=previous_state.branch,
+            temperature=float(temperature),
+            composition=np.asarray(composition, dtype=np.float64),
+            eos=eos,
+            binary_interaction=binary_interaction,
+            n_pressure_points=n_pressure_points,
+            pressure_min=hint_min,
+            pressure_max=hint_max,
+        )
+        if candidates:
+            try:
+                return _select_candidate(
+                    candidates=candidates,
+                    previous_state=previous_state,
+                    max_log_pressure_jump=max_log_pressure_jump,
+                    max_phase_composition_jump=max_phase_composition_jump,
+                    max_k_value_jump=max_k_value_jump,
+                )
+            except PhaseError as exc:
+                if exc.details.get("reason") not in {"branch_family_lost"}:
+                    raise
+
     bracket_min, bracket_max = _bracket_window(previous_state.bracket)
     candidates = resolve_local_branch_candidates(
         branch=previous_state.branch,
@@ -1089,6 +1143,7 @@ def _attempt_adaptive_branch_step(
     max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
     max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
     min_temperature_step_k: float = DEFAULT_MIN_TEMPERATURE_STEP_K,
+    pressure_hint: Optional[float] = None,
 ) -> tuple[Optional[ContinuationState], float, Optional[str], Optional[float]]:
     """Advance one branch with rollback on ambiguous or failed steps."""
     direction = 1.0 if float(temperature_end) >= previous_state.temperature else -1.0
@@ -1114,6 +1169,7 @@ def _attempt_adaptive_branch_step(
                 max_log_pressure_jump=max_log_pressure_jump,
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
+                pressure_hint=pressure_hint,
             )
             candidate = _refine_ambiguous_candidate(
                 previous_state,
@@ -1252,9 +1308,23 @@ def trace_branch_continuation_adaptive(
     states: List[ContinuationState] = [state]
     step_k = initial_step_k
     previous = state
+    prior: Optional[ContinuationState] = None
     direction = 1.0 if t_end >= previous.temperature else -1.0
 
     while direction * (t_end - previous.temperature) > 1.0e-12:
+        use_arclength = prior is not None and _should_use_arclength(previous)
+        pressure_hint = None
+        if use_arclength and prior is not None:
+            pressure_hint = _arclength_pressure_hint(
+                previous,
+                prior,
+                temperature_target=(
+                    previous.temperature + step_k
+                    if direction > 0.0
+                    else previous.temperature - step_k
+                ),
+            )
+
         candidate, accepted_step_k, failure_reason, failure_temperature = _attempt_adaptive_branch_step(
             previous,
             step_k=step_k,
@@ -1267,6 +1337,7 @@ def trace_branch_continuation_adaptive(
             max_phase_composition_jump=max_phase_composition_jump,
             max_k_value_jump=max_k_value_jump,
             min_temperature_step_k=min_step_k,
+            pressure_hint=pressure_hint,
         )
         if candidate is None:
             termination_reason = failure_reason
@@ -1275,6 +1346,7 @@ def trace_branch_continuation_adaptive(
 
         metrics = _continuation_transition_metrics(previous, candidate)
         states.append(candidate)
+        prior = previous
         previous = candidate
         step_k = _next_adaptive_temperature_step(
             accepted_step_k,
