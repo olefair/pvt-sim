@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 
 
 class ComponentFamily(Enum):
@@ -295,11 +295,137 @@ def load_components(json_path: Optional[Path] = None) -> Dict[str, Component]:
     return components
 
 
+def _normalize_component_token(token: str) -> str:
+    """Normalize a component token for alias lookup."""
+    return token.strip().casefold()
+
+
+def _build_component_alias_index(
+    components: Mapping[str, Component],
+) -> Dict[str, str]:
+    """Build a case-insensitive lookup of accepted component tokens."""
+    alias_index: Dict[str, str] = {}
+    formula_candidates: Dict[str, Optional[str]] = {}
+
+    for canonical_id, component in components.items():
+        candidate_tokens = [
+            canonical_id,
+            component.id,
+            component.name,
+            *(component.aliases or []),
+        ]
+
+        for token in candidate_tokens:
+            if not token:
+                continue
+
+            normalized = _normalize_component_token(token)
+            if not normalized:
+                continue
+
+            existing = alias_index.get(normalized)
+            if existing is not None and existing != canonical_id:
+                raise ValueError(
+                    f"Component token '{token}' is ambiguous between "
+                    f"'{existing}' and '{canonical_id}'."
+                )
+            alias_index[normalized] = canonical_id
+
+        if component.formula:
+            formula_key = _normalize_component_token(component.formula)
+            existing_formula = formula_candidates.get(formula_key)
+            if existing_formula is None and formula_key not in formula_candidates:
+                formula_candidates[formula_key] = canonical_id
+            elif existing_formula != canonical_id:
+                formula_candidates[formula_key] = None
+
+    for formula_key, canonical_id in formula_candidates.items():
+        if canonical_id is None:
+            continue
+        existing = alias_index.get(formula_key)
+        if existing is not None and existing != canonical_id:
+            raise ValueError(
+                f"Component token '{formula_key}' is ambiguous between "
+                f"'{existing}' and '{canonical_id}'."
+            )
+        alias_index[formula_key] = canonical_id
+
+    return alias_index
+
+
+def build_component_alias_index(
+    components: Optional[Mapping[str, Component]] = None,
+) -> Dict[str, str]:
+    """Return the accepted component token lookup for the current database.
+
+    The returned dictionary maps normalized tokens to canonical component IDs.
+    Accepted tokens include canonical IDs, component IDs, names, formulas,
+    and explicit aliases from the component database.
+    """
+    global _COMPONENT_LOOKUP_CACHE
+
+    if components is None:
+        if _COMPONENTS_CACHE is None:
+            get_components_cached()
+        if _COMPONENT_LOOKUP_CACHE is None:
+            _COMPONENT_LOOKUP_CACHE = _build_component_alias_index(_COMPONENTS_CACHE or {})
+        return dict(_COMPONENT_LOOKUP_CACHE)
+
+    return _build_component_alias_index(components)
+
+
+def resolve_component_id(
+    component_id: str,
+    components: Optional[Mapping[str, Component]] = None,
+) -> str:
+    """Resolve a user-facing component token to the canonical component ID.
+
+    Parameters
+    ----------
+    component_id : str
+        Canonical ID, alias, name, or formula for a component.
+    components : mapping, optional
+        Component database to resolve against. If omitted, uses the cached DB.
+
+    Returns
+    -------
+    str
+        Canonical component ID used internally by the component database.
+
+    Raises
+    ------
+    KeyError
+        If the token does not resolve to a known component.
+    """
+    token = component_id.strip()
+    if not token:
+        raise KeyError("Component ID cannot be empty")
+
+    if components is None:
+        components = get_components_cached()
+        alias_index = build_component_alias_index()
+    else:
+        alias_index = build_component_alias_index(components)
+
+    if token in components:
+        return token
+
+    canonical_id = alias_index.get(_normalize_component_token(token))
+    if canonical_id is None:
+        available = ", ".join(sorted(components.keys()))
+        raise KeyError(
+            f"Component '{component_id}' not found in database. "
+            f"Available canonical IDs: {available}"
+        )
+
+    return canonical_id
+
+
 def get_component(component_id: str, components: Optional[Dict[str, Component]] = None) -> Component:
     """Get a component by its ID.
 
     Args:
-        component_id: Component identifier (e.g., 'C1', 'N2', 'CO2')
+        component_id: Component identifier, alias, name, or formula
         components: Pre-loaded components dictionary. If None, loads from default path.
 
     Returns:
@@ -317,18 +443,13 @@ def get_component(component_id: str, components: Optional[Dict[str, Component]] 
     if components is None:
         components = load_components()
 
-    if component_id not in components:
-        available = ', '.join(sorted(components.keys()))
-        raise KeyError(
-            f"Component '{component_id}' not found in database. "
-            f"Available components: {available}"
-        )
-
-    return components[component_id]
+    canonical_id = resolve_component_id(component_id, components)
+    return components[canonical_id]
 
 
 # Module-level cache for lazy loading
 _COMPONENTS_CACHE: Optional[Dict[str, Component]] = None
+_COMPONENT_LOOKUP_CACHE: Optional[Dict[str, str]] = None
 
 
 def get_components_cached() -> Dict[str, Component]:

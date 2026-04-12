@@ -4,6 +4,7 @@ Provides input fields for pressure, temperature, and calculation type
 with explicit unit handling and strict validation.
 """
 
+import re
 from typing import Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 from pvtapp.schemas import (
     CalculationType,
     EOSType,
+    PhaseEnvelopeTracingMethod,
     PressureUnit,
     TemperatureUnit,
     RunConfig,
@@ -243,6 +245,17 @@ class ConditionsInputWidget(QWidget):
         self.env_n_points.setValue(50)
         layout.addRow("Number of Points:", self.env_n_points)
 
+        self.env_tracing_method = QComboBox()
+        self.env_tracing_method.addItem(
+            "Continuation (Default)",
+            PhaseEnvelopeTracingMethod.CONTINUATION,
+        )
+        self.env_tracing_method.addItem(
+            "Legacy (Fixed Grid)",
+            PhaseEnvelopeTracingMethod.FIXED_GRID,
+        )
+        layout.addRow("Tracer:", self.env_tracing_method)
+
         return widget
 
     def _create_saturation_point_widget(
@@ -258,13 +271,18 @@ class ConditionsInputWidget(QWidget):
         layout = QFormLayout(widget)
 
         t_layout = QHBoxLayout()
-        temperature = QDoubleSpinBox()
-        temperature.setRange(-200, 500)
-        temperature.setValue(100)
-        temperature.setDecimals(2)
+        temperature = ValidatedLineEdit()
+        temperature.setPlaceholderText("Enter temperature")
+        temperature.setText("100")
         setattr(self, temperature_attr, temperature)
         t_layout.addWidget(temperature)
-        t_layout.addWidget(QLabel("C"))
+
+        temperature_unit = QComboBox()
+        for unit in TemperatureUnit:
+            temperature_unit.addItem(unit.value, unit)
+        temperature_unit.setCurrentIndex(1)  # C
+        setattr(self, f"{temperature_attr}_unit", temperature_unit)
+        t_layout.addWidget(temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
         guess_layout = QHBoxLayout()
@@ -274,17 +292,24 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Pressure Guess:", guess_layout)
 
         guess_spin_layout = QHBoxLayout()
-        guess_spin = QDoubleSpinBox()
-        guess_spin.setRange(0.01, 10000)
-        guess_spin.setValue(100)
-        guess_spin.setDecimals(2)
+        guess_spin = ValidatedLineEdit()
+        guess_spin.setPlaceholderText("Enter pressure guess")
+        guess_spin.setText("100")
         guess_spin.setEnabled(False)
         setattr(self, guess_spin_attr, guess_spin)
         guess_spin_layout.addWidget(guess_spin)
-        guess_spin_layout.addWidget(QLabel("bar"))
+
+        guess_unit = QComboBox()
+        for unit in PressureUnit:
+            guess_unit.addItem(unit.value, unit)
+        guess_unit.setCurrentIndex(3)  # bar
+        guess_unit.setEnabled(False)
+        setattr(self, f"{guess_spin_attr}_unit", guess_unit)
+        guess_spin_layout.addWidget(guess_unit)
         layout.addRow("", guess_spin_layout)
 
         guess_enabled.toggled.connect(guess_spin.setEnabled)
+        guess_enabled.toggled.connect(guess_unit.setEnabled)
         return widget
 
     def _create_bubble_point_widget(self) -> QWidget:
@@ -342,9 +367,15 @@ class ConditionsInputWidget(QWidget):
 
         # Number of steps
         self.cce_n_steps = QSpinBox()
-        self.cce_n_steps.setRange(5, 200)
+        self.cce_n_steps.setRange(2, 200)
         self.cce_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.cce_n_steps)
+
+        self.cce_pressure_points = QLineEdit()
+        self.cce_pressure_points.setPlaceholderText(
+            "Optional exact pressures in bar, e.g. 200, 150, 100"
+        )
+        layout.addRow("Exact Pressures:", self.cce_pressure_points)
 
         return widget
 
@@ -381,9 +412,15 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("End Pressure:", end_layout)
 
         self.dl_n_steps = QSpinBox()
-        self.dl_n_steps.setRange(5, 200)
+        self.dl_n_steps.setRange(2, 200)
         self.dl_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.dl_n_steps)
+
+        self.dl_pressure_points = QLineEdit()
+        self.dl_pressure_points.setPlaceholderText(
+            "Optional exact pressures below bubble in bar, e.g. 60, 40, 20"
+        )
+        layout.addRow("Exact Pressures:", self.dl_pressure_points)
 
         return widget
 
@@ -524,6 +561,22 @@ class ConditionsInputWidget(QWidget):
         self.calc_type_combo.currentIndexChanged.connect(self._on_calc_type_changed)
         self.pressure_edit.textChanged.connect(self._validate_pressure)
         self.temperature_edit.textChanged.connect(self._validate_temperature)
+        self.bubble_temperature.textChanged.connect(self._emit_conditions_changed)
+        self.dew_temperature.textChanged.connect(self._emit_conditions_changed)
+        self.bubble_pressure_guess.textChanged.connect(self._emit_conditions_changed)
+        self.dew_pressure_guess.textChanged.connect(self._emit_conditions_changed)
+        self.cce_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.dl_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.bubble_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.dew_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.bubble_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.dew_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.bubble_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
+        self.dew_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
+
+    def _emit_conditions_changed(self, *_args) -> None:
+        """Re-emit input changes from Qt signals that may carry extra arguments."""
+        self.conditions_changed.emit()
 
     def _on_calc_type_changed(self) -> None:
         """Update visible configuration based on calculation type."""
@@ -591,6 +644,22 @@ class ConditionsInputWidget(QWidget):
             return value
         return enum_type(value)
 
+    @staticmethod
+    def _parse_pressure_points_bar(text: str) -> Optional[list[float]]:
+        """Parse an optional comma/whitespace-delimited pressure list in bar."""
+        stripped = text.strip()
+        if not stripped:
+            return None
+        tokens = [token for token in re.split(r"[,\s;]+", stripped) if token]
+        return [float(token) * 1e5 for token in tokens]
+
+    @staticmethod
+    def _format_pressure_points_bar(values_pa: Optional[list[float]]) -> str:
+        """Format an optional pressure list in bar for the widget."""
+        if not values_pa:
+            return ""
+        return ", ".join(f"{value / 1e5:.12g}" for value in values_pa)
+
     def get_calculation_type(self) -> CalculationType:
         """Get selected calculation type."""
         return self._coerce_combo_enum(self.calc_type_combo.currentData(), CalculationType)
@@ -634,8 +703,8 @@ class ConditionsInputWidget(QWidget):
 
     def set_pt_flash_config(self, config: PTFlashConfig) -> None:
         """Load PT flash config into widget controls."""
-        pressure_unit = PressureUnit.BAR
-        temperature_unit = TemperatureUnit.C
+        pressure_unit = config.pressure_unit
+        temperature_unit = config.temperature_unit
 
         p_index = self.pressure_unit.findData(pressure_unit)
         if p_index >= 0:
@@ -654,22 +723,57 @@ class ConditionsInputWidget(QWidget):
         self.env_t_min.setValue(config.temperature_min_k - 273.15)
         self.env_t_max.setValue(config.temperature_max_k - 273.15)
         self.env_n_points.setValue(config.n_points)
+        method_index = self.env_tracing_method.findData(config.tracing_method)
+        if method_index >= 0:
+            self.env_tracing_method.setCurrentIndex(method_index)
 
     def set_bubble_point_config(self, config: SaturationPointConfig) -> None:
         """Load bubble-point config into widget controls."""
-        self.bubble_temperature.setValue(config.temperature_k - 273.15)
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.bubble_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.bubble_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.bubble_pressure_guess_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.bubble_pressure_guess_unit.setCurrentIndex(p_index)
+
+        self.bubble_temperature.setText(
+            f"{temperature_from_k(config.temperature_k, temperature_unit):.6g}"
+        )
         has_guess = config.pressure_initial_pa is not None
         self.bubble_pressure_guess_enabled.setChecked(has_guess)
         if config.pressure_initial_pa is not None:
-            self.bubble_pressure_guess.setValue(config.pressure_initial_pa / 1e5)
+            self.bubble_pressure_guess.setText(
+                f"{pressure_from_pa(config.pressure_initial_pa, pressure_unit):.6g}"
+            )
+        else:
+            self.bubble_pressure_guess.setText("100")
 
     def set_dew_point_config(self, config: SaturationPointConfig) -> None:
         """Load dew-point config into widget controls."""
-        self.dew_temperature.setValue(config.temperature_k - 273.15)
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.dew_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.dew_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.dew_pressure_guess_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.dew_pressure_guess_unit.setCurrentIndex(p_index)
+
+        self.dew_temperature.setText(
+            f"{temperature_from_k(config.temperature_k, temperature_unit):.6g}"
+        )
         has_guess = config.pressure_initial_pa is not None
         self.dew_pressure_guess_enabled.setChecked(has_guess)
         if config.pressure_initial_pa is not None:
-            self.dew_pressure_guess.setValue(config.pressure_initial_pa / 1e5)
+            self.dew_pressure_guess.setText(
+                f"{pressure_from_pa(config.pressure_initial_pa, pressure_unit):.6g}"
+            )
+        else:
+            self.dew_pressure_guess.setText("100")
 
     def set_cce_config(self, config: CCEConfig) -> None:
         """Load CCE config into widget controls."""
@@ -677,6 +781,9 @@ class ConditionsInputWidget(QWidget):
         self.cce_p_start.setValue(config.pressure_start_pa / 1e5)
         self.cce_p_end.setValue(config.pressure_end_pa / 1e5)
         self.cce_n_steps.setValue(config.n_steps)
+        self.cce_pressure_points.setText(
+            self._format_pressure_points_bar(config.pressure_points_pa)
+        )
 
     def set_dl_config(self, config: DLConfig) -> None:
         """Load DL config into widget controls."""
@@ -684,6 +791,9 @@ class ConditionsInputWidget(QWidget):
         self.dl_bubble_pressure.setValue(config.bubble_pressure_pa / 1e5)
         self.dl_p_end.setValue(config.pressure_end_pa / 1e5)
         self.dl_n_steps.setValue(config.n_steps)
+        self.dl_pressure_points.setText(
+            self._format_pressure_points_bar(config.pressure_points_pa)
+        )
 
     def set_cvd_config(self, config: CVDConfig) -> None:
         """Load CVD config into widget controls."""
@@ -778,7 +888,12 @@ class ConditionsInputWidget(QWidget):
             p_pa = pressure_to_pa(p_value, p_unit)
             t_k = temperature_to_k(t_value, t_unit)
 
-            return PTFlashConfig(pressure_pa=p_pa, temperature_k=t_k)
+            return PTFlashConfig(
+                pressure_pa=p_pa,
+                temperature_k=t_k,
+                pressure_unit=p_unit,
+                temperature_unit=t_unit,
+            )
         except Exception as e:
             self.validation_error.emit(str(e))
             return None
@@ -800,6 +915,10 @@ class ConditionsInputWidget(QWidget):
                 temperature_min_k=t_min_k,
                 temperature_max_k=t_max_k,
                 n_points=self.env_n_points.value(),
+                tracing_method=self._coerce_combo_enum(
+                    self.env_tracing_method.currentData(),
+                    PhaseEnvelopeTracingMethod,
+                ),
             )
         except Exception as e:
             self.validation_error.emit(str(e))
@@ -808,22 +927,49 @@ class ConditionsInputWidget(QWidget):
     def _get_optional_pressure_guess(
         self,
         enabled_widget: QCheckBox,
-        spin_widget: QDoubleSpinBox,
+        spin_widget: QLineEdit,
+        unit_widget: QComboBox,
     ) -> Optional[float]:
         """Return an optional initial pressure guess in Pa."""
         if not enabled_widget.isChecked():
             return None
-        return spin_widget.value() * 1e5
+        value = float(spin_widget.text())
+        unit = self._coerce_combo_enum(unit_widget.currentData(), PressureUnit)
+        return pressure_to_pa(value, unit)
+
+    def _get_saturation_temperature_k(
+        self,
+        temperature_widget: QLineEdit,
+        unit_widget: QComboBox,
+    ) -> float:
+        """Return a saturation temperature in Kelvin."""
+        value = float(temperature_widget.text())
+        unit = self._coerce_combo_enum(unit_widget.currentData(), TemperatureUnit)
+        return temperature_to_k(value, unit)
 
     def get_bubble_point_config(self) -> Optional[SaturationPointConfig]:
         """Get bubble-point configuration if valid."""
         try:
+            pressure_unit = self._coerce_combo_enum(
+                self.bubble_pressure_guess_unit.currentData(),
+                PressureUnit,
+            )
+            temperature_unit = self._coerce_combo_enum(
+                self.bubble_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
             return SaturationPointConfig(
-                temperature_k=self.bubble_temperature.value() + 273.15,
+                temperature_k=self._get_saturation_temperature_k(
+                    self.bubble_temperature,
+                    self.bubble_temperature_unit,
+                ),
                 pressure_initial_pa=self._get_optional_pressure_guess(
                     self.bubble_pressure_guess_enabled,
                     self.bubble_pressure_guess,
+                    self.bubble_pressure_guess_unit,
                 ),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
             )
         except Exception as e:
             self.validation_error.emit(str(e))
@@ -832,12 +978,26 @@ class ConditionsInputWidget(QWidget):
     def get_dew_point_config(self) -> Optional[SaturationPointConfig]:
         """Get dew-point configuration if valid."""
         try:
+            pressure_unit = self._coerce_combo_enum(
+                self.dew_pressure_guess_unit.currentData(),
+                PressureUnit,
+            )
+            temperature_unit = self._coerce_combo_enum(
+                self.dew_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
             return SaturationPointConfig(
-                temperature_k=self.dew_temperature.value() + 273.15,
+                temperature_k=self._get_saturation_temperature_k(
+                    self.dew_temperature,
+                    self.dew_temperature_unit,
+                ),
                 pressure_initial_pa=self._get_optional_pressure_guess(
                     self.dew_pressure_guess_enabled,
                     self.dew_pressure_guess,
+                    self.dew_pressure_guess_unit,
                 ),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
             )
         except Exception as e:
             self.validation_error.emit(str(e))
@@ -847,6 +1007,15 @@ class ConditionsInputWidget(QWidget):
         """Get CCE configuration if valid."""
         try:
             t_k = self.cce_temperature.value() + 273.15
+            pressure_points_pa = self._parse_pressure_points_bar(
+                self.cce_pressure_points.text()
+            )
+            if pressure_points_pa is not None:
+                return CCEConfig(
+                    temperature_k=t_k,
+                    pressure_points_pa=pressure_points_pa,
+                )
+
             p_start_pa = self.cce_p_start.value() * 1e5  # bar to Pa
             p_end_pa = self.cce_p_end.value() * 1e5
 
@@ -871,6 +1040,16 @@ class ConditionsInputWidget(QWidget):
         try:
             t_k = self.dl_temperature.value() + 273.15
             bubble_pressure_pa = self.dl_bubble_pressure.value() * 1e5
+            pressure_points_pa = self._parse_pressure_points_bar(
+                self.dl_pressure_points.text()
+            )
+            if pressure_points_pa is not None:
+                return DLConfig(
+                    temperature_k=t_k,
+                    bubble_pressure_pa=bubble_pressure_pa,
+                    pressure_points_pa=pressure_points_pa,
+                )
+
             p_end_pa = self.dl_p_end.value() * 1e5
 
             if bubble_pressure_pa <= p_end_pa:

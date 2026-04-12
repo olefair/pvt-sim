@@ -23,7 +23,7 @@ from pvtcore.experiments import (
     SeparatorStageResult,
     SeparatorTrainResult,
 )
-from pvtcore.models.component import load_components
+from pvtcore.models.component import get_component, load_components
 from pvtcore.eos.peng_robinson import PengRobinsonEOS
 from pvtcore.core.constants import R
 from pvtcore.core.errors import ValidationError
@@ -51,7 +51,7 @@ def pure_methane(components):
 @pytest.fixture
 def methane_butane(components):
     """Binary C1-nC4 mixture components."""
-    return [components['C1'], components['nC4']]
+    return [components['C1'], get_component('nC4', components)]
 
 
 @pytest.fixture

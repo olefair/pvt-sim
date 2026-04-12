@@ -24,7 +24,7 @@ import numpy as np
 
 from pvtapp.schemas import (
     RunConfig, RunResult, RunManifest, RunStatus,
-    CalculationType, EOSType,
+    CalculationType, EOSType, PhaseEnvelopeTracingMethod,
     PTFlashResult, PhaseEnvelopeResult, PhaseEnvelopePoint,
     CCEResult, CCEStepResult,
     BubblePointResult, DewPointResult,
@@ -36,6 +36,7 @@ from pvtapp.schemas import (
 )
 from pvtapp import __version__
 from pvtapp.capabilities import RUNTIME_UNSUPPORTED_EOS_MESSAGES
+from pvtapp.plus_fraction_policy import resolve_plus_fraction_entry
 
 
 # ==============================================================================
@@ -192,28 +193,28 @@ def _convert_convergence_status(status) -> ConvergenceStatusEnum:
     return mapping.get(status, ConvergenceStatusEnum.NUMERIC_ERROR)
 
 
-def _build_solver_diagnostics(flash_result) -> SolverDiagnostics:
-    """Build SolverDiagnostics from flash result."""
+def _build_solver_diagnostics(solver_result) -> SolverDiagnostics:
+    """Build SolverDiagnostics from a pvtcore result with optional iteration history."""
     history_records = []
-    if flash_result.history is not None:
-        for i, residual in enumerate(flash_result.history.residuals):
+    if solver_result.history is not None:
+        for i, residual in enumerate(solver_result.history.residuals):
             record = IterationRecord(
                 iteration=i + 1,
                 residual=residual,
-                step_norm=flash_result.history.step_norms[i] if i < len(flash_result.history.step_norms) else None,
-                damping=flash_result.history.damping_factors[i] if i < len(flash_result.history.damping_factors) else None,
-                accepted=flash_result.history.accepted[i] if i < len(flash_result.history.accepted) else True,
-                timing_ms=flash_result.history.timings_ms[i] if i < len(flash_result.history.timings_ms) else None,
+                step_norm=solver_result.history.step_norms[i] if i < len(solver_result.history.step_norms) else None,
+                damping=solver_result.history.damping_factors[i] if i < len(solver_result.history.damping_factors) else None,
+                accepted=solver_result.history.accepted[i] if i < len(solver_result.history.accepted) else True,
+                timing_ms=solver_result.history.timings_ms[i] if i < len(solver_result.history.timings_ms) else None,
             )
             history_records.append(record)
 
     return SolverDiagnostics(
-        status=_convert_convergence_status(flash_result.status),
-        iterations=flash_result.iterations,
-        final_residual=flash_result.residual,
-        initial_residual=flash_result.history.initial_residual if flash_result.history else None,
-        n_func_evals=flash_result.history.n_func_evals if flash_result.history else 0,
-        n_jac_evals=flash_result.history.n_jac_evals if flash_result.history else 0,
+        status=_convert_convergence_status(solver_result.status),
+        iterations=solver_result.iterations,
+        final_residual=solver_result.residual,
+        initial_residual=solver_result.history.initial_residual if solver_result.history else None,
+        n_func_evals=solver_result.history.n_func_evals if solver_result.history else 0,
+        n_jac_evals=solver_result.history.n_jac_evals if solver_result.history else 0,
         iteration_history=history_records,
     )
 
@@ -337,8 +338,6 @@ def execute_phase_envelope(
         ValueError: If configuration is invalid
         RuntimeError: If pvtcore raises an error
     """
-    from pvtcore.envelope import trace_phase_envelope
-
     if callback:
         callback.on_progress(config.run_id or '', 0.1, "Loading components...")
 
@@ -347,10 +346,105 @@ def execute_phase_envelope(
 
     _component_ids, components, z, eos, binary_interaction = _prepare_fluid_inputs(config)
 
-    if callback:
-        callback.on_progress(config.run_id or '', 0.3, "Tracing phase envelope...")
-
     env_config = config.phase_envelope_config
+    tracing_method = env_config.tracing_method
+
+    if callback:
+        if tracing_method is PhaseEnvelopeTracingMethod.FIXED_GRID:
+            callback.on_progress(config.run_id or '', 0.3, "Tracing phase envelope...")
+        else:
+            callback.on_progress(config.run_id or '', 0.3, "Tracing phase envelope (continuation)...")
+
+    if tracing_method is not PhaseEnvelopeTracingMethod.FIXED_GRID:
+        from pvtcore.envelope import trace_envelope_continuation
+
+        temperatures = np.linspace(
+            env_config.temperature_min_k,
+            env_config.temperature_max_k,
+            env_config.n_points,
+            dtype=float,
+        ).tolist()
+        envelope = trace_envelope_continuation(
+            temperatures=temperatures,
+            composition=z,
+            components=components,
+            eos=eos,
+            binary_interaction=binary_interaction,
+            # Keep the continuation pressure scan above the coarse-grid regime
+            # that can misclassify upper-branch local roots near the critical region.
+            n_pressure_points=max(160, env_config.n_points * 4),
+        )
+        if not envelope.converged:
+            raise RuntimeError(
+                "Phase envelope failed: no saturation points found in the requested temperature range. "
+                "Suggestions: widen the temperature range; lower temperature_min_k; verify inputs are in K/Pa; "
+                "confirm composition sums to 1.0 and components are valid."
+            )
+
+        bubble_points = [
+            PhaseEnvelopePoint(
+                temperature_k=float(state.temperature),
+                pressure_pa=float(state.pressure),
+                point_type='bubble',
+            )
+            for state in envelope.bubble_states
+        ]
+        dew_points = [
+            PhaseEnvelopePoint(
+                temperature_k=float(state.temperature),
+                pressure_pa=float(state.pressure),
+                point_type='dew',
+            )
+            for state in envelope.dew_states
+        ]
+
+        if len(bubble_points) == 0 or len(dew_points) == 0:
+            raise RuntimeError(
+                "Phase envelope failed: could not trace both bubble and dew branches in the requested range. "
+                "Suggestions: widen the temperature range; adjust the mixture to include both light/heavy components; "
+                "verify EOS and binary interaction parameters."
+            )
+
+        critical = None
+        if envelope.critical_state is not None:
+            critical = PhaseEnvelopePoint(
+                temperature_k=float(envelope.critical_state.temperature),
+                pressure_pa=float(envelope.critical_state.pressure),
+                point_type='critical',
+            )
+
+        all_points = bubble_points + dew_points + ([critical] if critical is not None else [])
+        cricondenbar = None
+        cricondentherm = None
+        if all_points:
+            max_pressure_point = max(all_points, key=lambda point: point.pressure_pa)
+            cricondenbar = PhaseEnvelopePoint(
+                temperature_k=float(max_pressure_point.temperature_k),
+                pressure_pa=float(max_pressure_point.pressure_pa),
+                point_type='cricondenbar',
+            )
+            max_temperature_point = max(all_points, key=lambda point: point.temperature_k)
+            cricondentherm = PhaseEnvelopePoint(
+                temperature_k=float(max_temperature_point.temperature_k),
+                pressure_pa=float(max_temperature_point.pressure_pa),
+                point_type='cricondentherm',
+            )
+
+        return PhaseEnvelopeResult(
+            bubble_curve=bubble_points,
+            dew_curve=dew_points,
+            critical_point=critical,
+            cricondenbar=cricondenbar,
+            cricondentherm=cricondentherm,
+            tracing_method=tracing_method,
+            continuation_switched=bool(envelope.switched),
+            critical_source=envelope.critical_state.source if envelope.critical_state is not None else None,
+            bubble_termination_reason=envelope.bubble_termination_reason,
+            dew_termination_reason=envelope.dew_termination_reason,
+        )
+
+    from pvtcore.envelope import trace_phase_envelope
+
     envelope = trace_phase_envelope(
         composition=z,
         components=components,
@@ -413,6 +507,7 @@ def execute_phase_envelope(
         critical_point=critical,
         cricondenbar=cricondenbar,
         cricondentherm=cricondentherm,
+        tracing_method=tracing_method,
     )
 
 
@@ -422,24 +517,204 @@ def _finite_or_none(value: float) -> Optional[float]:
     return as_float if np.isfinite(as_float) else None
 
 
+_INLINE_COMPONENT_ZC = 0.27
+_ATMOSPHERIC_PRESSURE_PA = 101325.0
+
+
+def _inverse_edmister_tb(
+    critical_temperature_k: float,
+    critical_pressure_pa: float,
+    omega: float,
+) -> float:
+    """Recover Tb from Tc, Pc, and omega for an inline pseudo-component."""
+    a = (3.0 / 7.0) * np.log10(float(critical_pressure_pa) / _ATMOSPHERIC_PRESSURE_PA)
+    denominator = 1.0 + a / (float(omega) + 1.0)
+    if denominator <= 1.0:
+        raise ValueError("Cannot derive Tb from the supplied Tc/Pc/omega triple.")
+    tb = float(critical_temperature_k) / denominator
+    if tb <= 0.0 or tb >= float(critical_temperature_k):
+        raise ValueError("Derived Tb is not physically valid for the supplied Tc/Pc/omega triple.")
+    return tb
+
+
+def _estimate_vc_from_tc_pc(
+    critical_temperature_k: float,
+    critical_pressure_pa: float,
+    *,
+    zc: float = _INLINE_COMPONENT_ZC,
+) -> float:
+    """Estimate Vc from Tc and Pc using a nominal critical compressibility."""
+    from pvtcore.core.constants import R
+
+    return float(zc) * R.Pa_m3_per_mol_K * float(critical_temperature_k) / float(critical_pressure_pa)
+
+
+def _build_inline_component(spec):
+    """Construct a runtime Component from an explicit inline pseudo-component spec."""
+    from pvtcore.models import Component
+
+    tb_k = _inverse_edmister_tb(
+        critical_temperature_k=spec.critical_temperature_k,
+        critical_pressure_pa=spec.critical_pressure_pa,
+        omega=spec.omega,
+    )
+    vc_m3_per_mol = _estimate_vc_from_tc_pc(
+        critical_temperature_k=spec.critical_temperature_k,
+        critical_pressure_pa=spec.critical_pressure_pa,
+    )
+
+    return Component(
+        name=spec.name,
+        formula=spec.formula or spec.name,
+        Tc=spec.critical_temperature_k,
+        Pc=spec.critical_pressure_pa,
+        Vc=vc_m3_per_mol,
+        omega=spec.omega,
+        MW=spec.molecular_weight_g_per_mol,
+        Tb=tb_k,
+        note=(
+            "Inline pseudo-component. Tb back-calculated from Tc/Pc/omega using inverse "
+            "Edmister; Vc estimated with Zc=0.27."
+        ),
+        id=spec.component_id,
+        aliases=[spec.name, spec.component_id],
+        is_pseudo=True,
+    )
+
+
+def _resolve_config_characterization(config: RunConfig) -> RunConfig:
+    """Resolve plus-fraction characterization policy into concrete runtime settings."""
+    plus_fraction = config.composition.plus_fraction
+    if plus_fraction is None:
+        return config
+
+    resolved_plus = resolve_plus_fraction_entry(
+        config.composition.components,
+        plus_fraction,
+        config.calculation_type,
+    )
+    if resolved_plus == plus_fraction:
+        return config
+
+    resolved_composition = config.composition.model_copy(update={"plus_fraction": resolved_plus})
+    return config.model_copy(update={"composition": resolved_composition})
+
+
 def _load_component_inputs(config: RunConfig):
     """Load component IDs, component models, and feed composition."""
-    from pvtcore.models import load_components
+    from pvtcore.characterization import (
+        BinaryInteractionOverride,
+        CharacterizationConfig,
+        PlusFractionSpec,
+        characterize_fluid,
+    )
+    from pvtcore.models import load_components, resolve_component_id
+
+    config = _resolve_config_characterization(config)
 
     all_components = load_components()
-    component_ids = [entry.component_id for entry in config.composition.components]
+    inline_components = {
+        spec.component_id: spec
+        for spec in config.composition.inline_components
+    }
+    if config.composition.plus_fraction is not None and inline_components:
+        raise ValueError("plus_fraction and inline_components cannot be used together in the current runtime path")
+
+    if inline_components:
+        for inline_id in inline_components:
+            try:
+                resolve_component_id(inline_id, all_components)
+            except KeyError:
+                continue
+            raise ValueError(
+                f"Inline pseudo component ID '{inline_id}' conflicts with a database component or alias"
+            )
+
+    raw_component_ids = [entry.component_id for entry in config.composition.components]
     mole_fractions = [entry.mole_fraction for entry in config.composition.components]
 
-    missing = [cid for cid in component_ids if cid not in all_components]
+    component_ids = []
+    missing = []
+    for cid in raw_component_ids:
+        if cid in inline_components:
+            component_ids.append(cid)
+            continue
+        try:
+            component_ids.append(resolve_component_id(cid, all_components))
+        except KeyError:
+            missing.append(cid)
+
     if missing:
         raise ValueError(
             f"Unknown component(s): {missing}. "
             f"Available: {sorted(all_components.keys())}"
         )
 
-    components = [all_components[cid] for cid in component_ids]
+    duplicate_sources: Dict[str, List[str]] = {}
+    for raw_id, canonical_id in zip(raw_component_ids, component_ids):
+        duplicate_sources.setdefault(canonical_id, []).append(raw_id)
+    duplicates = {
+        canonical_id: raw_ids
+        for canonical_id, raw_ids in duplicate_sources.items()
+        if len(raw_ids) > 1
+    }
+    if duplicates:
+        raise ValueError(
+            f"Duplicate component IDs after alias resolution: {duplicates}"
+        )
+
+    if config.composition.plus_fraction is not None:
+        resolved_feed = [
+            (canonical_id, z)
+            for raw_id, canonical_id, z in zip(raw_component_ids, component_ids, mole_fractions)
+            if raw_id not in inline_components
+        ]
+        override_entries = None
+        if config.binary_interaction:
+            for pair_key in config.binary_interaction:
+                if pair_key.count("-") != 1:
+                    raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
+            override_entries = tuple(
+                BinaryInteractionOverride(
+                    component_i=pair_key.split("-")[0],
+                    component_j=pair_key.split("-")[1],
+                    kij=float(kij),
+                )
+                for pair_key, kij in config.binary_interaction.items()
+            )
+
+        plus_fraction = config.composition.plus_fraction
+        characterized = characterize_fluid(
+            resolved_feed,
+            plus_fraction=PlusFractionSpec(
+                z_plus=plus_fraction.z_plus,
+                mw_plus=plus_fraction.mw_plus_g_per_mol,
+                sg_plus=plus_fraction.sg_plus_60f,
+                label=plus_fraction.label,
+                n_start=plus_fraction.cut_start,
+            ),
+            config=CharacterizationConfig(
+                n_end=plus_fraction.max_carbon_number,
+                split_mw_model=plus_fraction.split_mw_model,
+                kij_default=0.0,
+                kij_overrides=override_entries,
+                lumping_enabled=plus_fraction.lumping_enabled,
+                lumping_n_groups=plus_fraction.lumping_n_groups,
+            ),
+        )
+        return (
+            characterized.component_ids,
+            characterized.components,
+            np.asarray(characterized.composition, dtype=np.float64),
+            np.asarray(characterized.binary_interaction, dtype=np.float64),
+        )
+
+    components = [
+        _build_inline_component(inline_components[cid]) if cid in inline_components else all_components[cid]
+        for cid in component_ids
+    ]
     z = np.array(mole_fractions, dtype=np.float64)
-    return component_ids, components, z
+    return component_ids, components, z, None
 
 
 def _build_runtime_eos(config: RunConfig, components):
@@ -461,8 +736,12 @@ def _build_binary_interaction_matrix(
     config: RunConfig,
 ):
     """Build the symmetric binary interaction matrix if one was supplied."""
+    from pvtcore.models import load_components, resolve_component_id
+
     binary_interaction = None
     if config.binary_interaction:
+        all_components = load_components()
+        component_positions = {component_id: i for i, component_id in enumerate(component_ids)}
         n = len(components)
         binary_interaction = np.zeros((n, n))
         for pair_key, kij in config.binary_interaction.items():
@@ -470,25 +749,36 @@ def _build_binary_interaction_matrix(
             if len(parts) != 2:
                 raise ValueError(f"Invalid BIP pair key: {pair_key}. Expected 'comp1-comp2'")
             try:
-                i = component_ids.index(parts[0])
-                j = component_ids.index(parts[1])
-                binary_interaction[i, j] = kij
-                binary_interaction[j, i] = kij
-            except ValueError:
+                resolved_parts = []
+                for part in parts:
+                    if part in component_positions:
+                        resolved_parts.append(part)
+                    else:
+                        resolved_parts.append(resolve_component_id(part, all_components))
+                i = component_positions[resolved_parts[0]]
+                j = component_positions[resolved_parts[1]]
+            except KeyError:
                 raise ValueError(f"BIP pair key contains unknown component: {pair_key}")
+            binary_interaction[i, j] = kij
+            binary_interaction[j, i] = kij
     return binary_interaction
 
 
 def _prepare_fluid_inputs(config: RunConfig):
     """Build component IDs, objects, composition, EOS, and optional BIP matrix."""
-    component_ids, components, z = _load_component_inputs(config)
+    component_ids, components, z, precomputed_binary_interaction = _load_component_inputs(config)
     eos = _build_runtime_eos(config, components)
-    binary_interaction = _build_binary_interaction_matrix(component_ids, components, config)
+    binary_interaction = (
+        precomputed_binary_interaction
+        if precomputed_binary_interaction is not None
+        else _build_binary_interaction_matrix(component_ids, components, config)
+    )
     return component_ids, components, z, eos, binary_interaction
 
 
 def validate_runtime_config(config: RunConfig) -> None:
     """Validate runtime prerequisites without executing a calculation."""
+    config = _resolve_config_characterization(config)
     _prepare_fluid_inputs(config)
 
 
@@ -514,6 +804,10 @@ def execute_cce(
     if callback:
         callback.on_progress(config.run_id or "", 0.3, "Running CCE calculation...")
 
+    cce_pressure_steps = None
+    if cce_config.pressure_points_pa is not None:
+        cce_pressure_steps = np.asarray(cce_config.pressure_points_pa, dtype=np.float64)
+
     result = simulate_cce(
         composition=z,
         temperature=cce_config.temperature_k,
@@ -522,6 +816,7 @@ def execute_cce(
         pressure_start=cce_config.pressure_start_pa,
         pressure_end=cce_config.pressure_end_pa,
         n_steps=cce_config.n_steps,
+        pressure_steps=cce_pressure_steps,
         binary_interaction=binary_interaction,
     )
 
@@ -579,6 +874,9 @@ def execute_bubble_point(
     if callback:
         callback.on_progress(config.run_id or "", 0.9, "Processing results...")
 
+    diagnostics = _build_solver_diagnostics(result)
+    certificate = _build_solver_certificate(result)
+
     return BubblePointResult(
         converged=bool(result.converged),
         pressure_pa=float(result.pressure),
@@ -589,6 +887,8 @@ def execute_bubble_point(
         liquid_composition={cid: float(result.liquid_composition[i]) for i, cid in enumerate(component_ids)},
         vapor_composition={cid: float(result.vapor_composition[i]) for i, cid in enumerate(component_ids)},
         k_values={cid: float(result.K_values[i]) for i, cid in enumerate(component_ids)},
+        diagnostics=diagnostics,
+        certificate=certificate,
     )
 
 
@@ -625,6 +925,9 @@ def execute_dew_point(
     if callback:
         callback.on_progress(config.run_id or "", 0.9, "Processing results...")
 
+    diagnostics = _build_solver_diagnostics(result)
+    certificate = _build_solver_certificate(result)
+
     return DewPointResult(
         converged=bool(result.converged),
         pressure_pa=float(result.pressure),
@@ -635,6 +938,8 @@ def execute_dew_point(
         liquid_composition={cid: float(result.liquid_composition[i]) for i, cid in enumerate(component_ids)},
         vapor_composition={cid: float(result.vapor_composition[i]) for i, cid in enumerate(component_ids)},
         k_values={cid: float(result.K_values[i]) for i, cid in enumerate(component_ids)},
+        diagnostics=diagnostics,
+        certificate=certificate,
     )
 
 
@@ -655,12 +960,15 @@ def execute_dl(
     if dl_config is None:
         raise ValueError("dl_config is required for DL calculation")
 
-    pressure_steps = np.linspace(
-        dl_config.bubble_pressure_pa,
-        dl_config.pressure_end_pa,
-        dl_config.n_steps,
-        dtype=np.float64,
-    )
+    if dl_config.pressure_points_pa is not None:
+        pressure_steps = np.asarray(dl_config.pressure_points_pa, dtype=np.float64)
+    else:
+        pressure_steps = np.linspace(
+            dl_config.bubble_pressure_pa,
+            dl_config.pressure_end_pa,
+            dl_config.n_steps,
+            dtype=np.float64,
+        )
 
     if callback:
         callback.on_progress(config.run_id or "", 0.3, "Running DL calculation...")
@@ -856,6 +1164,8 @@ def run_calculation(
         ValueError: If configuration is invalid (hard failure)
         RuntimeError: If calculation fails unexpectedly
     """
+    config = _resolve_config_characterization(config)
+
     # Generate run ID if not provided
     run_id = config.run_id or str(uuid4())[:8]
     started_at = datetime.now()
@@ -938,8 +1248,16 @@ def run_calculation(
             results_path = write_results_artifact(result, run_dir)
 
             # Write solver stats if available
+            solver_diagnostics = None
             if pt_flash_result and pt_flash_result.diagnostics:
-                write_solver_stats_artifact(pt_flash_result.diagnostics, run_dir)
+                solver_diagnostics = pt_flash_result.diagnostics
+            elif bubble_point_result and bubble_point_result.diagnostics:
+                solver_diagnostics = bubble_point_result.diagnostics
+            elif dew_point_result and dew_point_result.diagnostics:
+                solver_diagnostics = dew_point_result.diagnostics
+
+            if solver_diagnostics is not None:
+                write_solver_stats_artifact(solver_diagnostics, run_dir)
 
             # Create and write manifest
             config_path = run_dir / 'config.json'

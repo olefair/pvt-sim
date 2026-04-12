@@ -286,6 +286,13 @@ class TestMatchComponents:
         matched = match_components(['METHANE', 'PROPANE'], components)
         assert len(matched) == 2
 
+    def test_alias_ids_and_common_aliases(self, components):
+        """Test alias-aware matching from the component database."""
+        matched = match_components(['nC4', 'n-pentane'], components)
+        assert len(matched) == 2
+        assert matched[0].id == 'C4'
+        assert matched[1].id == 'C5'
+
     def test_unknown_component(self, components):
         """Test error on unknown component."""
         with pytest.raises(ValidationError):

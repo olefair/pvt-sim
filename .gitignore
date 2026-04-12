@@ -49,3 +49,6 @@ ehthumbs.db
 # Patches 
 *.patch
 *.changes
+
+# Generated validation / assignment outputs
+assignment_run_*.json

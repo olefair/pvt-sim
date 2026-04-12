@@ -107,6 +107,7 @@ def simulate_cce(
     pressure_start: float,
     pressure_end: float,
     n_steps: int = 20,
+    pressure_steps: Optional[NDArray[np.float64]] = None,
     binary_interaction: Optional[NDArray[np.float64]] = None,
     saturation_pressure: Optional[float] = None,
 ) -> CCEResult:
@@ -134,6 +135,9 @@ def simulate_cce(
         Ending pressure in Pa (typically well below saturation).
     n_steps : int
         Number of pressure steps.
+    pressure_steps : ndarray, optional
+        Explicit descending pressure schedule in Pa. When provided, it
+        overrides the linear pressure_start/pressure_end/n_steps grid.
     binary_interaction : ndarray, optional
         Binary interaction parameters.
     saturation_pressure : float, optional
@@ -183,10 +187,15 @@ def simulate_cce(
     z = z / z.sum()
     T = float(temperature)
 
-    _validate_cce_inputs(z, T, pressure_start, pressure_end, components)
-
-    # Generate pressure array
-    pressures = np.linspace(pressure_start, pressure_end, n_steps)
+    pressures = _build_cce_pressure_schedule(
+        pressure_start=pressure_start,
+        pressure_end=pressure_end,
+        n_steps=n_steps,
+        pressure_steps=pressure_steps,
+    )
+    _validate_cce_inputs(z, T, pressures, components)
+    pressure_start = float(pressures[0])
+    pressure_end = float(pressures[-1])
 
     # Determine saturation pressure if not provided
     if saturation_pressure is None:
@@ -487,18 +496,22 @@ def _calculate_molar_volume(
 def _validate_cce_inputs(
     composition: NDArray[np.float64],
     temperature: float,
-    pressure_start: float,
-    pressure_end: float,
+    pressure_steps: NDArray[np.float64],
     components: List[Component],
 ) -> None:
     """Validate CCE inputs."""
     if temperature <= 0:
         raise ValidationError("Temperature must be positive", parameter="temperature")
-    if pressure_start <= 0 or pressure_end <= 0:
-        raise ValidationError("Pressures must be positive", parameter="pressure")
-    if pressure_start <= pressure_end:
+    if len(pressure_steps) < 2:
         raise ValidationError(
-            "Start pressure must be greater than end pressure for CCE",
+            "CCE requires at least two pressure points",
+            parameter="pressure_steps",
+        )
+    if np.any(pressure_steps <= 0):
+        raise ValidationError("Pressures must be positive", parameter="pressure")
+    if np.any(pressure_steps[:-1] <= pressure_steps[1:]):
+        raise ValidationError(
+            "CCE pressure schedule must be strictly descending",
             parameter="pressure"
         )
     if len(composition) != len(components):
@@ -506,3 +519,22 @@ def _validate_cce_inputs(
             "Composition length must match number of components",
             parameter="composition"
         )
+
+
+def _build_cce_pressure_schedule(
+    *,
+    pressure_start: float,
+    pressure_end: float,
+    n_steps: int,
+    pressure_steps: Optional[NDArray[np.float64]],
+) -> NDArray[np.float64]:
+    """Build the CCE pressure schedule from either an explicit list or a linear grid."""
+    if pressure_steps is not None:
+        pressures = np.asarray(pressure_steps, dtype=np.float64)
+        if pressures.ndim != 1:
+            raise ValidationError(
+                "pressure_steps must be a one-dimensional array",
+                parameter="pressure_steps",
+            )
+        return pressures
+    return np.linspace(pressure_start, pressure_end, n_steps, dtype=np.float64)

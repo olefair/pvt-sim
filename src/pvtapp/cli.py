@@ -81,8 +81,11 @@ def print_result_summary(result: RunResult) -> None:
     elif result.phase_envelope_result:
         res = result.phase_envelope_result
         print(f"\nPhase Envelope Results:")
+        print(f"  Tracer: {res.tracing_method.value}")
         print(f"  Bubble Points: {len(res.bubble_curve)}")
         print(f"  Dew Points: {len(res.dew_curve)}")
+        if res.continuation_switched is not None:
+            print(f"  Switched: {'yes' if res.continuation_switched else 'no'}")
         if res.critical_point:
             print(f"  Critical Point: "
                   f"{res.critical_point.temperature_k - 273.15:.2f} C, "

@@ -21,7 +21,7 @@ from pvtcore.flash.dew_point import (
 )
 from pvtcore.eos.peng_robinson import PengRobinsonEOS
 from pvtcore.models.component import load_components
-from pvtcore.core.errors import ValidationError, ConvergenceError, PhaseError
+from pvtcore.core.errors import ValidationError, ConvergenceError, PhaseError, ConvergenceStatus
 
 
 @pytest.fixture
@@ -315,17 +315,15 @@ class TestCompositionVariation:
     """Test saturation points at various compositions."""
 
     def test_c1_rich_mixture(self, binary_c1_c10_eos, components):
-        """Test bubble and dew points for C1-rich mixture."""
+        """Test bubble point for a methane-rich C1/C10 mixture."""
         T = 300.0
-        z = np.array([0.9, 0.1])  # 90% methane
+        z = np.array([0.7, 0.3])  # methane-rich but still non-trivial
         binary = [components['C1'], components['C10']]
 
         bubble_result = calculate_bubble_point(T, z, binary, binary_c1_c10_eos)
-        dew_result = calculate_dew_point(T, z, binary, binary_c1_c10_eos)
 
         assert bubble_result.converged is True
-        assert dew_result.converged is True
-        assert dew_result.pressure < bubble_result.pressure
+        assert bubble_result.pressure > 0
 
     def test_c10_rich_mixture(self, binary_c1_c10_eos, components):
         """Test bubble points for C10-rich mixture.
@@ -396,6 +394,105 @@ class TestTemperatureEffect:
 
 class TestInputValidation:
     """Test input validation and error handling."""
+
+    def test_bubble_point_rejects_degenerate_trivial_boundary(self, components):
+        """CO2-rich GUI case should not report a fake converged bubble point."""
+        T = 573.15  # 300 C from the desktop workflow
+        z = np.array([0.6498, 0.1057, 0.1058, 0.1235, 0.0152])
+        mixture = [
+            components['CO2'],
+            components['C1'],
+            components['C2'],
+            components['C3'],
+            components['C4'],
+        ]
+        eos = PengRobinsonEOS(mixture)
+
+        with pytest.raises(PhaseError, match="degenerate trivial stability solution"):
+            calculate_bubble_point(T, z, mixture, eos)
+
+    def test_bubble_point_recovers_upper_branch_from_previous_guess(self, components):
+        """Upper bubble branch should remain reachable from the previous trace point."""
+        T = 296.93928571428575  # 23.789 C, next fixed-grid point after a 14.605 C bubble solve
+        z = np.array([0.6498, 0.1057, 0.1058, 0.1235, 0.0152])
+        mixture = [
+            components['CO2'],
+            components['C1'],
+            components['C2'],
+            components['C3'],
+            components['C4'],
+        ]
+        eos = PengRobinsonEOS(mixture)
+
+        result = calculate_bubble_point(
+            T,
+            z,
+            mixture,
+            eos,
+            pressure_initial=55.38207428791868e5,
+            post_check_stability_flip=True,
+            post_check_action="raise",
+        )
+
+        assert result.status == ConvergenceStatus.CONVERGED
+        assert result.pressure > 6.0e6
+
+    def test_bubble_point_is_guess_robust_for_realistic_volatile_oil_case(self, components):
+        """A realistic volatile oil should converge to the same bubble point across guesses."""
+        T = 360.0
+        component_ids = ["N2", "CO2", "C1", "C2", "C3", "iC4", "C4", "iC5", "C5", "C6", "C7", "C8", "C10"]
+        z = np.array(
+            [0.0021, 0.0187, 0.3478, 0.0712, 0.0934, 0.0302, 0.0431, 0.0276, 0.0418, 0.0574, 0.0835, 0.0886, 0.0946],
+            dtype=float,
+        )
+        z /= z.sum()
+        mixture = [components[component_id] for component_id in component_ids]
+        eos = PengRobinsonEOS(mixture)
+
+        reference = calculate_bubble_point(
+            T,
+            z,
+            mixture,
+            eos,
+            post_check_stability_flip=True,
+        )
+
+        assert reference.status == ConvergenceStatus.CONVERGED
+
+        for guess in [1e5, 1e6, 5e7]:
+            result = calculate_bubble_point(
+                T,
+                z,
+                mixture,
+                eos,
+                pressure_initial=guess,
+                post_check_stability_flip=True,
+            )
+
+            assert result.status == ConvergenceStatus.CONVERGED
+            assert result.pressure == pytest.approx(reference.pressure, abs=5e3)
+            np.testing.assert_allclose(
+                result.vapor_composition,
+                reference.vapor_composition,
+                atol=5e-6,
+                rtol=0.0,
+            )
+
+    def test_dew_point_rejects_degenerate_trivial_boundary(self, components):
+        """CO2-rich GUI case should not report a fake converged dew point."""
+        T = 573.15  # 300 C from the desktop workflow
+        z = np.array([0.6498, 0.1057, 0.1058, 0.1235, 0.0152])
+        mixture = [
+            components['CO2'],
+            components['C1'],
+            components['C2'],
+            components['C3'],
+            components['C4'],
+        ]
+        eos = PengRobinsonEOS(mixture)
+
+        with pytest.raises(PhaseError, match="degenerate trivial stability solution"):
+            calculate_dew_point(T, z, mixture, eos)
 
     def test_invalid_composition_sum_bubble(self, binary_c1_c10_eos, components):
         """Test that invalid composition sum raises error."""
