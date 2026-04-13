@@ -308,6 +308,8 @@ class DiagnosticsWidget(QWidget):
 
     def _plot_convergence(self, history) -> None:
         """Plot convergence history."""
+        from matplotlib.ticker import MaxNLocator
+
         self.figure.clear()
         ax = self.figure.add_subplot(111)
 
@@ -318,6 +320,7 @@ class DiagnosticsWidget(QWidget):
         ax.set_xlabel('Iteration')
         ax.set_ylabel('Residual')
         ax.set_title('Convergence History')
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
         ax.grid(True, alpha=0.3)
 
         self.figure.tight_layout()

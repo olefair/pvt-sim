@@ -1423,3 +1423,57 @@ def load_run_result(run_dir: Path) -> Optional[RunResult]:
         return RunResult.model_validate(data)
     except Exception:
         return None
+
+
+def load_run_config(run_dir: Path) -> Optional[RunConfig]:
+    """Load a RunConfig from a run directory.
+
+    Args:
+        run_dir: Path to run directory
+
+    Returns:
+        RunConfig if found and valid, None otherwise
+    """
+    config_path = run_dir / 'config.json'
+    if not config_path.exists():
+        return None
+
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return RunConfig.model_validate(data)
+    except Exception:
+        return None
+
+
+def build_rerun_config(config: RunConfig, run_name: Optional[str] = None) -> RunConfig:
+    """Return a replay-safe copy of a saved run configuration.
+
+    The rerun keeps the original calculation inputs but clears the old run ID so the
+    next execution gets a fresh artifact identity.
+    """
+    updates: Dict[str, Optional[str]] = {"run_id": None}
+    if run_name is not None:
+        updates["run_name"] = run_name
+    return config.model_copy(update=updates)
+
+
+def rerun_saved_run(
+    run_dir: Path,
+    output_dir: Optional[Path] = None,
+    callback: Optional[ProgressCallback] = None,
+    write_artifacts: bool = True,
+    run_name: Optional[str] = None,
+) -> RunResult:
+    """Reload a saved config.json and execute it again through the normal job runner."""
+    config = load_run_config(run_dir)
+    if config is None:
+        raise ValueError(f"No valid config.json found in saved run: {run_dir}")
+
+    rerun_config = build_rerun_config(config, run_name=run_name)
+    return run_calculation(
+        config=rerun_config,
+        output_dir=output_dir,
+        callback=callback,
+        write_artifacts=write_artifacts,
+    )

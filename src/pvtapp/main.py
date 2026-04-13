@@ -45,6 +45,7 @@ from pvtapp.widgets import (
     CompositionInputWidget,
     ConditionsInputWidget,
     ResultsTableWidget,
+    ResultsSidebarWidget,
     ResultsPlotWidget,
     DiagnosticsWidget,
     InputsPanel,
@@ -56,6 +57,7 @@ from pvtapp.widgets import (
     ViewSpec,
 )
 from pvtapp.workers import CalculationThread
+from pvtapp.job_runner import load_run_config
 from pvtapp.style import (
     DEFAULT_THEME,
     DEFAULT_UI_SCALE,
@@ -239,6 +241,8 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Outputs / tools (single shared instances)
         self.results_table = ResultsTableWidget()
+        self.results_report_widget = TextOutputWidget()
+        self.results_sidebar = ResultsSidebarWidget(self.results_table, self.results_report_widget)
         self.results_plot = ResultsPlotWidget(view_mode="phase_envelope_only")
         self.diagnostics_widget = DiagnosticsWidget()
         self.text_output_widget = TextOutputWidget()
@@ -281,8 +285,8 @@ class PVTSimulatorWindow(QMainWindow):
             fixed_widget=self.inputs_panel,
             fixed_title="Run Inputs",
             fixed_width=360,
-            fixed_right_widget=self.results_table,
-            fixed_right_title="Results table",
+            fixed_right_widget=self.results_sidebar,
+            fixed_right_title="Results",
             fixed_right_width=340,
             default_pane_mode="single",
         )
@@ -323,6 +327,8 @@ class PVTSimulatorWindow(QMainWindow):
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
         self.workspace.theme_mode_changed.connect(self._set_theme_mode)
+        self.run_log_widget.load_inputs_requested.connect(self._load_saved_run_inputs)
+        self.run_log_widget.result_selected.connect(self._on_logged_run_selected)
 
     @Slot()
     def _sync_characterization_context(self) -> None:
@@ -396,7 +402,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.progress_bar.setMaximumWidth(self._scaled_metric(self._base_progress_width))
         self.workspace.apply_ui_scale(clamped_scale, previous_scale=previous_scale)
         self.composition_widget.apply_ui_scale(clamped_scale)
-        self.results_table.apply_ui_scale(clamped_scale)
+        self.results_sidebar.apply_ui_scale(clamped_scale)
         self.diagnostics_widget.apply_ui_scale(clamped_scale)
         if hasattr(self.text_output_widget, "apply_ui_scale"):
             self.text_output_widget.apply_ui_scale(clamped_scale)
@@ -575,6 +581,52 @@ class PVTSimulatorWindow(QMainWindow):
             self._show_validation_error(str(e))
             return None
 
+    def _load_run_config_into_inputs(
+        self,
+        config: RunConfig,
+        *,
+        status_message: Optional[str] = None,
+    ) -> None:
+        """Populate GUI inputs from a validated run configuration."""
+        self.composition_widget.set_composition(config.composition)
+        self.conditions_widget.load_from_run_config(config)
+        self._update_component_dependent_views()
+        if status_message is not None:
+            self.status_label.setText(status_message)
+
+    def _set_results_pane_title(self, title: str) -> None:
+        """Update the fixed results-pane title."""
+        if self.workspace.results_pane is not None:
+            self.workspace.results_pane.set_title(title)
+
+    @staticmethod
+    def _results_title_for_config(config: RunConfig) -> str:
+        """Return a concise title for the active result surface."""
+        calc_title = config.calculation_type.value.replace("_", " ").title()
+        return f"{calc_title} Results"
+
+    def _start_calculation(self, config: RunConfig) -> None:
+        """Start a calculation thread from an already-built configuration."""
+        self._set_running_state(True)
+        self._set_results_pane_title(self._results_title_for_config(config))
+        self.status_label.setText(f"Running {config.calculation_type.value}...")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+
+        # Clear previous results
+        self.results_sidebar.clear()
+        self.results_plot.clear()
+        self.diagnostics_widget.clear()
+        self.text_output_widget.clear()
+
+        # Create and start worker thread
+        self._current_thread = CalculationThread(config)
+        self._current_thread.started.connect(self._on_calculation_started)
+        self._current_thread.progress.connect(self._on_calculation_progress)
+        self._current_thread.finished.connect(self._on_calculation_finished)
+        self._current_thread.error.connect(self._on_calculation_error)
+        self._current_thread.start()
+
     # =========================================================================
     # Action handlers
     # =========================================================================
@@ -597,10 +649,11 @@ class PVTSimulatorWindow(QMainWindow):
                 self.composition_widget._update_sum()
             if hasattr(self.composition_widget, "composition_edited"):
                 self.composition_widget.composition_edited.emit()
-            self.results_table.clear()
+            self.results_sidebar.clear()
             self.results_plot.clear()
             self.diagnostics_widget.clear()
             self.text_output_widget.clear()
+            self._set_results_pane_title("Results")
             self.status_label.setText("Ready")
 
     @Slot()
@@ -619,13 +672,7 @@ class PVTSimulatorWindow(QMainWindow):
                     data = json.load(f)
 
                 config = RunConfig.model_validate(data)
-
-                # Load composition
-                self.composition_widget.set_composition(config.composition)
-                self.conditions_widget.load_from_run_config(config)
-                self._update_component_dependent_views()
-
-                self.status_label.setText(f"Loaded: {Path(filename).name}")
+                self._load_run_config_into_inputs(config, status_message=f"Loaded: {Path(filename).name}")
 
             except Exception as e:
                 QMessageBox.critical(
@@ -668,13 +715,16 @@ class PVTSimulatorWindow(QMainWindow):
     def _export_results(self, format: str) -> None:
         """Export results to file."""
         if not self._run_history:
-            QMessageBox.warning(
-                self, "No Results",
-                "No results available to export"
-            )
-            return
-
-        result = self._run_history[-1]
+            current_result = self.results_table.current_result
+            if current_result is None:
+                QMessageBox.warning(
+                    self, "No Results",
+                    "No results available to export"
+                )
+                return
+            result = current_result
+        else:
+            result = self.results_table.current_result or self._run_history[-1]
 
         if format == "csv":
             filename, _ = QFileDialog.getSaveFileName(
@@ -858,26 +908,33 @@ class PVTSimulatorWindow(QMainWindow):
         config = self._build_config()
         if config is None:
             return
+        self._start_calculation(config)
 
-        # Update UI state
-        self._set_running_state(True)
-        self.status_label.setText(f"Running {config.calculation_type.value}...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
+    @Slot(str)
+    def _load_saved_run_inputs(self, run_dir: str) -> None:
+        """Hydrate GUI inputs from a persisted run directory."""
+        config = load_run_config(Path(run_dir))
+        if config is None:
+            QMessageBox.warning(
+                self,
+                "Load Inputs Failed",
+                f"Could not load config.json from saved run:\n\n{run_dir}",
+            )
+            return
 
-        # Clear previous results
-        self.results_table.clear()
-        self.results_plot.clear()
-        self.diagnostics_widget.clear()
-        self.text_output_widget.clear()
+        run_name = config.run_name or config.run_id or Path(run_dir).name
+        self._load_run_config_into_inputs(config, status_message=f"Loaded inputs: {run_name}")
 
-        # Create and start worker thread
-        self._current_thread = CalculationThread(config)
-        self._current_thread.started.connect(self._on_calculation_started)
-        self._current_thread.progress.connect(self._on_calculation_progress)
-        self._current_thread.finished.connect(self._on_calculation_finished)
-        self._current_thread.error.connect(self._on_calculation_error)
-        self._current_thread.start()
+    @Slot(object)
+    def _on_logged_run_selected(self, result: Optional[RunResult]) -> None:
+        """Render a saved run selection into the fixed right-side results rail."""
+        if result is None:
+            self.results_sidebar.clear()
+            self._set_results_pane_title("Results")
+            return
+
+        self.results_sidebar.display_cached_result(result)
+        self._set_results_pane_title(self._results_title_for_config(result.config))
 
     @Slot()
     def _cancel_calculation(self) -> None:
@@ -902,12 +959,13 @@ class PVTSimulatorWindow(QMainWindow):
         """Handle calculation completion signal."""
         self._set_running_state(False)
         self.progress_bar.setVisible(False)
+        self._set_results_pane_title(self._results_title_for_config(result.config))
 
         # Store result
         self._run_history.append(result)
 
         # Display results
-        self.results_table.display_result(result)
+        self.results_sidebar.display_result(result)
         self.results_plot.display_result(result)
         self.diagnostics_widget.display_result(result)
         self.text_output_widget.display_result(result)
@@ -946,6 +1004,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.run_action.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
         self.cancel_action.setEnabled(running)
+        self.run_log_widget.set_replay_actions_enabled(not running)
 
     @Slot(str)
     def _show_validation_error(self, message: str) -> None:

@@ -264,6 +264,17 @@ QGroupBox::title {{
   left: 0px;
   padding: 0 {px(3)}px 0 0;
 }}
+QGroupBox#ResultsSection {{
+  background: transparent;
+  border: none;
+  margin-top: {px(10)}px;
+  padding: 0;
+}}
+QGroupBox#ResultsSection::title {{
+  subcontrol-origin: margin;
+  left: 0px;
+  padding: 0 {px(3)}px {px(4)}px 0;
+}}
 
 /* Tables */
 QTableWidget {{
@@ -272,6 +283,9 @@ QTableWidget {{
   gridline-color: {palette['border']};
   border: 1px solid {palette['border']};
   border-radius: {px(10)}px;
+}}
+QTableWidget#ResultsSectionTable {{
+  border-radius: 0px;
 }}
 QHeaderView::section {{
   background: {palette['surface_elevated_bg']};
@@ -284,6 +298,11 @@ QHeaderView::section {{
 QTabWidget::pane {{
   border: 1px solid {palette['border']};
   border-radius: {px(6)}px;
+}}
+QTabWidget#HeavyFractionTabs::pane {{
+  border: none;
+  background: transparent;
+  margin-top: 0px;
 }}
 QTabBar::tab {{
   background: {palette['surface_elevated_bg']};

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -13,10 +14,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 try:
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QSettings, Qt
     from PySide6.QtWidgets import QApplication, QMessageBox
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     QSettings = None  # type: ignore[assignment]
+    Qt = None  # type: ignore[assignment]
     QApplication = None  # type: ignore[assignment]
     QMessageBox = None  # type: ignore[assignment]
 
@@ -35,6 +37,7 @@ from pvtapp.schemas import (
     PhaseEnvelopePoint,
     PhaseEnvelopeResult,
     PTFlashResult,
+    IterationRecord,
     RunConfig,
     RunResult,
     RunStatus,
@@ -48,12 +51,14 @@ try:
     from pvtapp.main import PVTSimulatorWindow
     from pvtapp.widgets.diagnostics_view import DiagnosticsWidget
     from pvtapp.widgets.results_view import ResultsPlotWidget, ResultsTableWidget
+    from pvtapp.widgets.run_log_view import RunLogWidget
     from pvtapp.widgets.text_output_view import TextOutputWidget
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     PVTSimulatorWindow = None  # type: ignore[assignment]
     DiagnosticsWidget = None  # type: ignore[assignment]
     ResultsPlotWidget = None  # type: ignore[assignment]
     ResultsTableWidget = None  # type: ignore[assignment]
+    RunLogWidget = None  # type: ignore[assignment]
     TextOutputWidget = None  # type: ignore[assignment]
 
 
@@ -187,6 +192,42 @@ def _bubble_point_plus_fraction_config() -> RunConfig:
                 "pressure_initial_pa": 1.0e5,
                 "pressure_unit": "bar",
                 "temperature_unit": "C",
+            },
+        }
+    )
+
+
+def _inline_pseudo_bubble_point_config() -> RunConfig:
+    return _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.199620},
+                    {"component_id": "C2", "mole_fraction": 0.100100},
+                    {"component_id": "C3", "mole_fraction": 0.185790},
+                    {"component_id": "nC4", "mole_fraction": 0.090360},
+                    {"component_id": "nC5", "mole_fraction": 0.188510},
+                    {"component_id": "PSEUDO_PLUS", "mole_fraction": 0.235630},
+                ],
+                "inline_components": [
+                    {
+                        "component_id": "PSEUDO_PLUS",
+                        "name": "Pseudo+",
+                        "formula": "Pseudo+",
+                        "molecular_weight_g_per_mol": 86.177000,
+                        "critical_temperature_k": 507.400000,
+                        "critical_pressure_pa": 3008134.215801,
+                        "omega": 0.296000,
+                    }
+                ],
+            },
+            "calculation_type": "bubble_point",
+            "eos_type": "peng_robinson",
+            "bubble_point_config": {
+                "temperature_k": 326.76111111111106,
+                "pressure_initial_pa": 1.0e7,
+                "pressure_unit": "bar",
+                "temperature_unit": "F",
             },
         }
     )
@@ -440,6 +481,50 @@ def _bubble_point_result() -> RunResult:
                 status=ConvergenceStatusEnum.CONVERGED,
                 iterations=5,
                 final_residual=1.0e-10,
+            ),
+        ),
+    )
+
+
+def _inline_pseudo_bubble_point_result() -> RunResult:
+    config = _inline_pseudo_bubble_point_config()
+    return _completed_run_result(
+        config,
+        bubble_point_result=BubblePointResult(
+            converged=True,
+            pressure_pa=5.236495885582632e6,
+            temperature_k=326.76111111111106,
+            iterations=12,
+            residual=6.16e-16,
+            stable_liquid=True,
+            liquid_composition={
+                "C1": 0.199618,
+                "C2": 0.100099,
+                "C3": 0.185788,
+                "nC4": 0.090359,
+                "nC5": 0.188508,
+                "PSEUDO_PLUS": 0.235628,
+            },
+            vapor_composition={
+                "C1": 0.724185,
+                "C2": 0.120726,
+                "C3": 0.099516,
+                "nC4": 0.021807,
+                "nC5": 0.021056,
+                "PSEUDO_PLUS": 0.012711,
+            },
+            k_values={
+                "C1": 3.627854,
+                "C2": 1.206062,
+                "C3": 0.535642,
+                "nC4": 0.241339,
+                "nC5": 0.111696,
+                "PSEUDO_PLUS": 0.053944,
+            },
+            diagnostics=SolverDiagnostics(
+                status=ConvergenceStatusEnum.CONVERGED,
+                iterations=12,
+                final_residual=6.16e-16,
             ),
         ),
     )
@@ -748,6 +833,53 @@ def test_main_window_round_trips_plus_fraction_bubble_config(window: PVTSimulato
     _assert_configs_equivalent(rebuilt, config)
 
 
+def test_main_window_loads_saved_run_inputs_from_artifact(
+    window: PVTSimulatorWindow,
+    tmp_path: Path,
+) -> None:
+    config = _bubble_point_plus_fraction_config()
+    run_dir = tmp_path / "saved-bubble"
+    run_dir.mkdir()
+    with (run_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config.model_dump(mode="json"), handle, indent=2)
+
+    window._load_saved_run_inputs(str(run_dir))
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    _assert_configs_equivalent(rebuilt, config)
+    assert window.status_label.text() == "Loaded inputs: saved-bubble"
+
+
+def test_main_window_loading_saved_run_inputs_does_not_start_calculation(
+    window: PVTSimulatorWindow,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_config = _pt_flash_config().model_copy(update={"run_id": "saved001", "run_name": "Saved PT Flash"})
+    run_dir = tmp_path / "saved-pt-flash"
+    run_dir.mkdir()
+    with (run_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(saved_config.model_dump(mode="json"), handle, indent=2)
+
+    observed: dict[str, RunConfig] = {}
+
+    def fake_start(config: RunConfig) -> None:
+        observed["config"] = config
+
+    monkeypatch.setattr(window, "_start_calculation", fake_start)
+
+    window._load_saved_run_inputs(str(run_dir))
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    _assert_configs_equivalent(rebuilt, saved_config)
+    assert "config" not in observed
+    assert window.status_label.text() == "Loaded inputs: Saved PT Flash"
+
+
 def test_main_window_round_trips_exact_cce_schedule(window: PVTSimulatorWindow) -> None:
     config = _run_config(
         {
@@ -968,7 +1100,9 @@ def _summary_values(widget: ResultsTableWidget) -> dict[str, str]:
     }
 
 
-def test_results_table_scales_compact_columns_with_ui_zoom(app: QApplication) -> None:
+def test_results_table_scales_summary_columns_with_ui_zoom_without_shrinking_composition_data(
+    app: QApplication,
+) -> None:
     table = ResultsTableWidget()
     table.resize(340, 900)
     table.display_result(_bubble_point_result())
@@ -982,7 +1116,18 @@ def test_results_table_scales_compact_columns_with_ui_zoom(app: QApplication) ->
     app.processEvents()
 
     assert table.summary_table.columnWidth(0) > initial_summary_width
-    assert table.composition_table.columnWidth(1) > initial_composition_width
+    assert table.composition_table.columnWidth(1) >= initial_composition_width
+
+
+def test_results_table_gives_composition_data_columns_more_room(app: QApplication) -> None:
+    table = ResultsTableWidget()
+    table.resize(340, 900)
+    table.display_result(_inline_pseudo_bubble_point_result())
+    table.show()
+    app.processEvents()
+
+    assert table.composition_table.columnWidth(0) < table.composition_table.columnWidth(1)
+    assert table.composition_table.columnWidth(2) >= table.composition_table.columnWidth(1) - 4
 
 
 def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> None:
@@ -995,6 +1140,7 @@ def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> N
     assert "border-bottom-right-radius" in stylesheet
     assert "QGroupBox" in stylesheet
     assert "border: none;" in stylesheet
+    assert "QTabWidget#HeavyFractionTabs::pane" in stylesheet
 
 
 def test_results_tables_align_to_shared_right_edge(app: QApplication) -> None:
@@ -1061,13 +1207,13 @@ def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication)
     summary = _summary_values(table)
 
     assert summary["Pressure"] == "8.00 MPa"
-    assert summary["Temperature"] == "170.33 F"
+    assert summary["Temperature"] == "170.33 °F"
 
     text = TextOutputWidget()
     text.display_result(result)
     report = text.text.toPlainText()
 
-    assert "T = 170.330 F" in report
+    assert "T = 170.330 °F" in report
     assert "P = 8.00000 MPa" in report
 
 
@@ -1115,7 +1261,7 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
     summary = _summary_values(table)
 
     assert summary["Bubble Pressure"] == "12.00 MPa"
-    assert summary["Temperature"] == "170.33 F"
+    assert summary["Temperature"] == "170.33 °F"
     assert "Solver Status" not in summary
     assert "Final Residual" not in summary
     assert table.summary_table.item(0, 0).text() == "Bubble Pressure"
@@ -1130,7 +1276,7 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
     text.display_result(result)
     report = text.text.toPlainText()
 
-    assert "T = 170.330 F" in report
+    assert "T = 170.330 °F" in report
     assert "Pb = 12.00000 MPa" in report
 
 
@@ -1225,6 +1371,37 @@ def test_saturation_result_widgets_render_plus_fraction_lump_names(app: QApplica
     assert "Manual; split MW model table, split to C20, lumping on (6 groups)" in report
     assert "LUMP1_C7_C9" in report
     assert "LUMP2_C10_C12" in report
+
+
+def test_saturation_result_widgets_render_inline_pseudo_display_label(app: QApplication) -> None:
+    result = _inline_pseudo_bubble_point_result()
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+
+    composition_labels = [
+        table.composition_table.item(row, 0).text()
+        for row in range(table.composition_table.rowCount())
+    ]
+    detail_labels = [
+        table.details_table.item(row, 0).text()
+        for row in range(table.details_table.rowCount())
+    ]
+
+    assert "Pseudo+" in composition_labels
+    assert "Pseudo+" in detail_labels
+    assert "PSEUDO_PLUS" not in composition_labels
+    assert "PSEUDO_PLUS" not in detail_labels
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+
+    tick_labels = [tick.get_text() for tick in plot.figure.axes[0].get_xticklabels()]
+    assert "Pseudo+" in tick_labels
+    assert "PSEUDO_PLUS" not in tick_labels
+    assert plot.figure.subplotpars.bottom <= 0.22
 
 
 @pytest.mark.parametrize(
@@ -1462,6 +1639,37 @@ def test_diagnostics_widget_displays_dew_point_solver_status(app: QApplication) 
     assert "No solver diagnostics available" not in widget.log_text.toPlainText()
 
 
+def test_diagnostics_widget_convergence_plot_uses_integer_iteration_ticks(
+    app: QApplication,
+) -> None:
+    result = _bubble_point_result()
+    diagnostics = result.bubble_point_result.diagnostics.model_copy(
+        update={
+            "iteration_history": [
+                IterationRecord(iteration=1, residual=1.0e-1, step_norm=0.0, damping=1.0, elapsed_ms=1.0),
+                IterationRecord(iteration=2, residual=4.0e-2, step_norm=0.0, damping=1.0, elapsed_ms=2.0),
+                IterationRecord(iteration=3, residual=1.0e-2, step_norm=0.0, damping=1.0, elapsed_ms=3.0),
+                IterationRecord(iteration=4, residual=1.0e-12, step_norm=0.0, damping=1.0, elapsed_ms=4.0),
+            ]
+        }
+    )
+    result = result.model_copy(
+        update={
+            "bubble_point_result": result.bubble_point_result.model_copy(
+                update={"diagnostics": diagnostics}
+            )
+        }
+    )
+
+    widget = DiagnosticsWidget()
+    widget.display_result(result)
+
+    ax = widget.figure.axes[0]
+    visible_ticks = [tick for tick in ax.get_xticks() if 1 <= tick <= 4]
+    assert visible_ticks
+    assert all(float(tick).is_integer() for tick in visible_ticks)
+
+
 def test_main_window_phase_envelope_view_rejects_non_envelope_plots(
     window: PVTSimulatorWindow,
 ) -> None:
@@ -1563,6 +1771,208 @@ def test_main_window_zoom_controls_rescale_shell(window: PVTSimulatorWindow) -> 
     assert window.workspace.fixed_pane.minimumWidth() == initial_fixed_min_width
     assert window.workspace.results_pane.minimumWidth() == initial_results_min_width
     assert window.text_output_widget.text.font().pointSizeF() == initial_text_font_size
+
+
+def test_main_window_results_pane_title_tracks_active_calculation(
+    window: PVTSimulatorWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _bubble_point_result()
+    monkeypatch.setattr(window.run_log_widget, "refresh", lambda: None)
+
+    window._on_calculation_finished(result)
+
+    assert window.workspace.results_pane is not None
+    assert window.workspace.results_pane._title_label.text() == "Bubble Point Results"
+    assert window.results_table.run_id_label.text() == result.run_name
+    assert window.results_report_widget.text.toPlainText().startswith("Bubble Point")
+
+
+def test_main_window_logged_run_selection_populates_cached_results_sidebar(
+    window: PVTSimulatorWindow,
+) -> None:
+    result = _inline_pseudo_bubble_point_result()
+
+    window._on_logged_run_selected(result)
+
+    assert window.workspace.results_pane is not None
+    assert window.workspace.results_pane._title_label.text() == "Bubble Point Results"
+    assert window.results_table.run_id_label.text() == result.run_name
+    assert window.results_table.status_label.text() == "Cached"
+    assert window.results_table.display_is_cached is True
+    assert "Bubble Point" in window.results_report_widget.text.toPlainText()
+
+
+def test_run_log_widget_collapses_empty_preview_until_selection(app: QApplication) -> None:
+    widget = RunLogWidget()
+    widget.resize(900, 700)
+    widget.show()
+    app.processEvents()
+
+    widget._set_preview(None, None)
+    app.processEvents()
+    empty_tree_height = widget.tree.height()
+
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    widget._set_preview(Path("C:/tmp/run"), _pt_flash_result())
+    app.processEvents()
+    selected_tree_height = widget.tree.height()
+
+    assert widget._preview_panel.isVisible() is True
+    assert empty_tree_height > selected_tree_height
+    assert "Pt Flash" in widget.preview_title.text()
+
+
+def test_run_log_widget_emits_selected_result_signal(app: QApplication) -> None:
+    widget = RunLogWidget()
+    seen: list[object] = []
+    widget.result_selected.connect(seen.append)
+
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    result = _pt_flash_result()
+    widget._set_preview(Path("C:/tmp/run"), result)
+    widget._set_preview(None, None)
+
+    assert seen[0] == result
+    assert seen[-1] is None
+
+
+def test_run_log_widget_sorts_flat_run_list_by_clicked_header(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_a = str(Path("C:/tmp/run-a"))
+    run_b = str(Path("C:/tmp/run-b"))
+    run_c = str(Path("C:/tmp/run-c"))
+    run_results = {
+        run_a: _completed_run_result(
+            _pt_flash_config().model_copy(update={"run_name": "alpha"}),
+            pt_flash_result=_pt_flash_result().pt_flash_result,
+        ).model_copy(update={"run_name": "alpha"}),
+        run_c: _completed_run_result(
+            _pt_flash_config().model_copy(update={"run_name": "charlie"}),
+            pt_flash_result=_pt_flash_result().pt_flash_result,
+        ).model_copy(update={"run_name": "charlie"}),
+        run_b: _completed_run_result(
+            _pt_flash_config().model_copy(update={"run_name": "bravo"}),
+            pt_flash_result=_pt_flash_result().pt_flash_result,
+        ).model_copy(update={"run_name": "bravo"}),
+    }
+    runs = [
+        {"path": run_a},
+        {"path": run_c},
+        {"path": run_b},
+    ]
+
+    monkeypatch.setattr("pvtapp.widgets.run_log_view.list_runs", lambda limit=200: runs[:limit])
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_dir: run_results.get(str(run_dir)),
+    )
+
+    widget = RunLogWidget()
+    widget.show()
+    app.processEvents()
+
+    assert widget.tree.isSortingEnabled() is False
+    assert widget.tree.topLevelItemCount() == 3
+    assert widget.tree.header().sortIndicatorSection() == 2
+    assert widget.tree.header().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+    widget._on_header_clicked(0)
+    app.processEvents()
+
+    ordered_names = [
+        widget.tree.topLevelItem(index).text(0)
+        for index in range(widget.tree.topLevelItemCount())
+    ]
+    assert ordered_names == ["alpha", "bravo", "charlie"]
+
+
+def test_run_log_widget_groups_by_test_type_and_keeps_child_sorting(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_a = str(Path("C:/tmp/run-a"))
+    run_b = str(Path("C:/tmp/run-b"))
+    run_c = str(Path("C:/tmp/run-c"))
+    run_results = {
+        run_a: _completed_run_result(
+            _bubble_point_config().model_copy(update={"run_name": "charlie"}),
+            bubble_point_result=_bubble_point_result().bubble_point_result,
+        ).model_copy(update={"run_name": "charlie"}),
+        run_b: _completed_run_result(
+            _bubble_point_config().model_copy(update={"run_name": "alpha"}),
+            bubble_point_result=_bubble_point_result().bubble_point_result,
+        ).model_copy(update={"run_name": "alpha"}),
+        run_c: _completed_run_result(
+            _pt_flash_config().model_copy(update={"run_name": "bravo"}),
+            pt_flash_result=_pt_flash_result().pt_flash_result,
+        ).model_copy(update={"run_name": "bravo"}),
+    }
+    runs = [{"path": run_a}, {"path": run_b}, {"path": run_c}]
+
+    monkeypatch.setattr("pvtapp.widgets.run_log_view.list_runs", lambda limit=200: runs[:limit])
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_dir: run_results.get(str(run_dir)),
+    )
+
+    widget = RunLogWidget()
+    widget.show()
+    app.processEvents()
+
+    widget.group_by_combo.setCurrentText("Test Type")
+    widget._on_header_clicked(0)
+    app.processEvents()
+
+    assert widget.tree.topLevelItemCount() == 2
+    bubble_group = widget.tree.topLevelItem(0)
+    assert bubble_group.text(0) == "Bubble Point"
+    assert bubble_group.childCount() == 2
+    assert bubble_group.child(0).text(0) == "alpha"
+    assert bubble_group.child(1).text(0) == "charlie"
+
+
+def test_main_window_disables_log_replay_actions_while_running(window: PVTSimulatorWindow) -> None:
+    window.run_log_widget._set_preview(Path("C:/tmp/saved-run"), _pt_flash_result())
+
+    assert window.run_log_widget.load_inputs_btn.isEnabled() is True
+
+    window._set_running_state(True)
+
+    assert window.run_log_widget.load_inputs_btn.isEnabled() is False
+
+    window._set_running_state(False)
+
+    assert window.run_log_widget.load_inputs_btn.isEnabled() is True
+
+
+def test_main_window_log_item_click_populates_cached_results_sidebar(
+    window: PVTSimulatorWindow,
+    monkeypatch: pytest.MonkeyPatch,
+    app: QApplication,
+) -> None:
+    run_dir = "C:/tmp/run-a"
+    expected_run_dir = str(Path(run_dir))
+    result = _inline_pseudo_bubble_point_result()
+
+    monkeypatch.setattr("pvtapp.widgets.run_log_view.list_runs", lambda limit=200: [{"path": run_dir}])
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_path: result if str(run_path) == expected_run_dir else None,
+    )
+
+    window.run_log_widget.refresh()
+    app.processEvents()
+
+    assert window.run_log_widget.tree.topLevelItemCount() == 1
+    item = window.run_log_widget.tree.topLevelItem(0)
+    window.run_log_widget._on_item_clicked(item, 0)
+    app.processEvents()
+
+    assert window.results_table.status_label.text() == "Cached"
+    assert "Bubble Point" in window.results_report_widget.text.toPlainText()
 
 
 def test_main_window_restores_persisted_zoom_between_sessions(

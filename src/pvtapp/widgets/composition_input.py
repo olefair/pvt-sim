@@ -7,7 +7,7 @@ with strict validation ensuring mole fractions sum to 1.0.
 import json
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDoubleValidator
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -137,6 +137,32 @@ class ClickSelectComboBox(NoWheelComboBox):
 
     def wheelEvent(self, event) -> None:  # pragma: no cover - simple UI guard
         event.ignore()
+
+
+class CompactTabWidget(NoWheelTabWidget):
+    """Tab widget that sizes itself to the currently visible tab page."""
+
+    def sizeHint(self) -> QSize:
+        base = super().sizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return base
+        current_hint = current.sizeHint()
+        tab_bar_hint = self.tabBar().sizeHint()
+        height = tab_bar_hint.height() + current_hint.height() + scale_metric(8, DEFAULT_UI_SCALE)
+        width = max(base.width(), current_hint.width(), tab_bar_hint.width())
+        return QSize(width, height)
+
+    def minimumSizeHint(self) -> QSize:
+        base = super().minimumSizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return base
+        current_hint = current.minimumSizeHint()
+        tab_bar_hint = self.tabBar().minimumSizeHint()
+        height = tab_bar_hint.height() + current_hint.height() + scale_metric(8, DEFAULT_UI_SCALE)
+        width = max(base.width(), current_hint.width(), tab_bar_hint.width())
+        return QSize(width, height)
 
 
 class MoleFractionItemDelegate(QStyledItemDelegate):
@@ -313,8 +339,10 @@ class CompositionInputWidget(QWidget):
         self.heavy_mode.addItem("None", HEAVY_MODE_NONE)
         self.heavy_mode.addItem("Plus Fraction", HEAVY_MODE_PLUS)
         self.heavy_mode.addItem("Inline Pseudo", HEAVY_MODE_INLINE)
-        self.heavy_tabs = NoWheelTabWidget()
+        self.heavy_tabs = CompactTabWidget()
+        self.heavy_tabs.setObjectName("HeavyFractionTabs")
         self.heavy_tabs.setUsesScrollButtons(False)
+        self.heavy_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.heavy_tabs.tabBar().setExpanding(True)
         self.heavy_tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         self.heavy_tabs.addTab(QWidget(), "None")
@@ -451,6 +479,8 @@ class CompositionInputWidget(QWidget):
         combo_index = self.heavy_mode.findData(mode)
         if combo_index >= 0 and combo_index != self.heavy_mode.currentIndex():
             self.heavy_mode.setCurrentIndex(combo_index)
+        self.heavy_tabs.updateGeometry()
+        self.updateGeometry()
 
     def _on_heavy_mode_changed(self, *_args) -> None:
         """Switch the visible heavy-end editor and refresh validation state."""
@@ -481,6 +511,8 @@ class CompositionInputWidget(QWidget):
         self._refresh_plus_characterization_preview()
         self._sync_plus_lumping_state()
         self._update_sum()
+        self.heavy_tabs.updateGeometry()
+        self.updateGeometry()
         self.composition_edited.emit()
 
     def _sync_plus_lumping_state(self, *_args) -> None:

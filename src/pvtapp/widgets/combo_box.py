@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox, QTabWidget, QWidget
+from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox, QTabBar, QTabWidget, QWidget
 
 
 class NoWheelComboBox(QComboBox):
@@ -41,11 +41,22 @@ class NoWheelDoubleSpinBox(QDoubleSpinBox):
         event.ignore()
 
 
+class NoWheelTabBar(QTabBar):
+    """Tab bar that ignores mouse-wheel tab switching."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+
+    def wheelEvent(self, event) -> None:  # pragma: no cover - simple UI guard
+        event.ignore()
+
+
 class NoWheelTabWidget(QTabWidget):
     """Tab widget that ignores mouse-wheel tab switching."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self.setTabBar(NoWheelTabBar(self))
 
     def wheelEvent(self, event) -> None:  # pragma: no cover - simple UI guard
         event.ignore()
