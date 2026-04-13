@@ -32,7 +32,7 @@ class InputsPanel(QScrollArea):
         content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
-        self._content_layout.setSpacing(10)
+        self._content_layout.setSpacing(8)
         self._content_layout.addWidget(self.composition_widget)
         self._content_layout.addWidget(self.conditions_widget)
         self._content_layout.addStretch(1)
@@ -41,7 +41,7 @@ class InputsPanel(QScrollArea):
 
     def apply_ui_scale(self, ui_scale: float) -> None:
         """Forward app zoom into child widgets that expose scaling hooks."""
-        self._content_layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._content_layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
         for widget in (self.composition_widget, self.conditions_widget):
             if hasattr(widget, "apply_ui_scale"):
                 widget.apply_ui_scale(ui_scale)

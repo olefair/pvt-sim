@@ -7,7 +7,7 @@ with explicit unit handling and strict validation.
 import re
 from typing import Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
     QWidget,
@@ -87,6 +87,26 @@ class ValidatedLineEdit(QLineEdit):
             self.setStyleSheet("border: 2px solid red;")
 
 
+class CompactStackedWidget(QStackedWidget):
+    """A stacked widget that sizes itself to the currently visible page."""
+
+    def sizeHint(self) -> QSize:
+        base = super().sizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return base
+        current_hint = current.sizeHint()
+        return QSize(max(base.width(), current_hint.width()), current_hint.height())
+
+    def minimumSizeHint(self) -> QSize:
+        base = super().minimumSizeHint()
+        current = self.currentWidget()
+        if current is None:
+            return base
+        current_hint = current.minimumSizeHint()
+        return QSize(max(base.width(), current_hint.width()), current_hint.height())
+
+
 class ConditionsInputWidget(QWidget):
     """Widget for entering calculation conditions with unit selection.
 
@@ -127,7 +147,8 @@ class ConditionsInputWidget(QWidget):
         layout.addWidget(calc_group)
 
         # Stacked widget for calculation-specific inputs
-        self.config_stack = QStackedWidget()
+        self.config_stack = CompactStackedWidget()
+        self.config_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
 
         # PT Flash config
         self.pt_flash_widget = self._create_pt_flash_widget()
@@ -653,6 +674,8 @@ class ConditionsInputWidget(QWidget):
         else:
             self.config_stack.setCurrentWidget(self.placeholder_widget)
 
+        self.config_stack.updateGeometry()
+        self.updateGeometry()
         self.conditions_changed.emit()
 
     def _validate_pressure(self) -> bool:

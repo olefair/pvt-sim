@@ -155,6 +155,9 @@ class _StaticPane(QFrame):
         widget.show()
         self._content_layout.addWidget(widget)
 
+    def set_title(self, title: str) -> None:
+        self._title_label.setText(title)
+
     def apply_ui_scale(self, scale: float) -> None:
         self._outer.setContentsMargins(*([scale_metric(12, scale, reference_scale=DEFAULT_UI_SCALE)] * 4))
         self._outer.setSpacing(scale_metric(10, scale, reference_scale=DEFAULT_UI_SCALE))

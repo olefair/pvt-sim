@@ -34,12 +34,17 @@ def _pa_to_bar(p_pa: float) -> float:
     return float(p_pa) / 1e5
 
 
+def _format_temperature_unit(unit: TemperatureUnit) -> str:
+    """Render compact temperature units with a visible degree marker."""
+    return f"\N{DEGREE SIGN}{unit.value}"
+
+
 def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 5) -> str:
     return f"{pressure_from_pa(value_pa, unit):.{precision}f} {unit.value}"
 
 
 def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int = 3) -> str:
-    return f"{temperature_from_k(value_k, unit):.{precision}f} {unit.value}"
+    return f"{temperature_from_k(value_k, unit):.{precision}f} {_format_temperature_unit(unit)}"
 
 
 def _pt_flash_units(config: Optional[PTFlashConfig]) -> tuple[PressureUnit, TemperatureUnit]:

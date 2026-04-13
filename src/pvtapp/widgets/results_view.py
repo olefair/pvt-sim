@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
+from pvtapp.widgets.text_output_view import TextOutputWidget
 from pvtapp.schemas import (
     RunResult,
     RunStatus,
@@ -53,6 +55,34 @@ PLOT_CANVAS_COLOR = PLOT_SURFACE_COLOR
 PLOT_TEXT_COLOR = "#e5e7eb"
 PLOT_GRID_COLOR = "#223044"
 PLOT_LEGEND_FACE_COLOR = "#121f34"
+INLINE_PSEUDO_TOKEN = "PSEUDO_PLUS"
+INLINE_PSEUDO_FALLBACK_LABEL = "Pseudo+"
+
+
+def _display_component_label(
+    component_id: str,
+    current_result: Optional[RunResult],
+) -> str:
+    """Map runtime component tokens to compact user-facing labels."""
+    normalized = component_id.strip()
+    if current_result is not None:
+        plus_fraction = current_result.config.composition.plus_fraction
+        if plus_fraction is not None and normalized == plus_fraction.label.strip():
+            return plus_fraction.label.strip()
+        for spec in current_result.config.composition.inline_components:
+            if spec.component_id.strip() == normalized:
+                display_label = spec.name.strip() or spec.formula.strip()
+                if display_label.upper() in {"PSEUDO+", "PSEUDO_PLUS"}:
+                    return INLINE_PSEUDO_FALLBACK_LABEL
+                return display_label or INLINE_PSEUDO_FALLBACK_LABEL
+    if normalized == INLINE_PSEUDO_TOKEN:
+        return INLINE_PSEUDO_FALLBACK_LABEL
+    return normalized
+
+
+def _format_temperature_unit(unit: TemperatureUnit) -> str:
+    """Render compact temperature units with a visible degree marker."""
+    return f"\N{DEGREE SIGN}{unit.value}"
 
 
 def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 2) -> str:
@@ -62,7 +92,7 @@ def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 2)
 
 def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int = 2) -> str:
     """Format a temperature in the requested display unit."""
-    return f"{temperature_from_k(value_k, unit):.{precision}f} {unit.value}"
+    return f"{temperature_from_k(value_k, unit):.{precision}f} {_format_temperature_unit(unit)}"
 
 
 class ResultsTableWidget(QWidget):
@@ -77,6 +107,7 @@ class ResultsTableWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._current_result: Optional[RunResult] = None
+        self._display_is_cached = False
         self._ui_scale = DEFAULT_UI_SCALE
         self._setup_ui()
 
@@ -87,26 +118,35 @@ class ResultsTableWidget(QWidget):
         self._layout.setSpacing(10)
 
         # Header with run info
-        self._header_layout = QHBoxLayout()
+        self._header_layout = QVBoxLayout()
         self._header_layout.setContentsMargins(0, 0, 0, 0)
-        self._header_layout.setSpacing(8)
+        self._header_layout.setSpacing(4)
+
+        self._header_meta_row = QHBoxLayout()
+        self._header_meta_row.setContentsMargins(0, 0, 0, 0)
+        self._header_meta_row.setSpacing(8)
         self.run_id_label = QLabel("No results")
         self.run_id_label.setStyleSheet("font-weight: bold;")
-        self.run_id_label.setWordWrap(True)
+        self.run_id_label.setWordWrap(False)
         self.run_id_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._header_layout.addWidget(self.run_id_label)
+        self._header_meta_row.addWidget(self.run_id_label, 1)
+        self._header_layout.addLayout(self._header_meta_row)
 
+        self._header_actions_row = QHBoxLayout()
+        self._header_actions_row.setContentsMargins(0, 0, 0, 0)
+        self._header_actions_row.setSpacing(8)
         self.status_label = QLabel("")
-        self._header_layout.addWidget(self.status_label)
-        self._header_layout.addStretch()
+        self._header_actions_row.addWidget(self.status_label)
+        self._header_actions_row.addStretch()
 
         # Export buttons
         self.export_csv_btn = QPushButton("Export CSV")
         self.export_csv_btn.clicked.connect(lambda: self.export_requested.emit("csv"))
         self.export_json_btn = QPushButton("Export JSON")
         self.export_json_btn.clicked.connect(lambda: self.export_requested.emit("json"))
-        self._header_layout.addWidget(self.export_csv_btn)
-        self._header_layout.addWidget(self.export_json_btn)
+        self._header_actions_row.addWidget(self.export_csv_btn)
+        self._header_actions_row.addWidget(self.export_json_btn)
+        self._header_layout.addLayout(self._header_actions_row)
 
         self._layout.addLayout(self._header_layout)
 
@@ -121,6 +161,11 @@ class ResultsTableWidget(QWidget):
         self.summary_section = self._build_table_section("Summary", self.summary_table)
         self.composition_section = self._build_table_section("Compositions", self.composition_table)
         self.details_section = self._build_table_section("Details", self.details_table)
+        self._sections = (
+            self.summary_section,
+            self.composition_section,
+            self.details_section,
+        )
 
         self.sections_scroll = QScrollArea()
         self.sections_scroll.setWidgetResizable(True)
@@ -141,18 +186,40 @@ class ResultsTableWidget(QWidget):
         # Deprecated legacy attribute kept as a sentinel for compatibility.
         self.tabs = None
 
+    @property
+    def current_result(self) -> Optional[RunResult]:
+        """Return the result currently rendered in the fixed right rail."""
+        return self._current_result
+
+    @property
+    def display_is_cached(self) -> bool:
+        """Whether the current right-rail result came from saved run artifacts."""
+        return self._display_is_cached
+
     def apply_ui_scale(self, ui_scale: float) -> None:
         """Refresh column sizing after global zoom changes."""
         self._ui_scale = ui_scale
         self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
-        self._header_layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._header_layout.setSpacing(scale_metric(4, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._header_meta_row.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._header_actions_row.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
         self._sections_layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        for section in self._sections:
+            layout = section.layout()
+            if layout is not None:
+                inset = scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+                layout.setContentsMargins(0, inset, 0, 0)
         self._finalize_section_tables()
+
+    def _component_display_label(self, component_id: str) -> str:
+        """Map runtime component tokens to compact user-facing labels."""
+        return _display_component_label(component_id, self._current_result)
 
     @staticmethod
     def _create_section_table() -> QTableWidget:
         """Create a compact read-only table for the fixed right rail."""
         table = QTableWidget()
+        table.setObjectName("ResultsSectionTable")
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -167,8 +234,9 @@ class ResultsTableWidget(QWidget):
     def _build_table_section(title: str, table: QTableWidget) -> QGroupBox:
         """Wrap a results table in a standalone titled section."""
         section = QGroupBox(title)
+        section.setObjectName("ResultsSection")
         section_layout = QVBoxLayout(section)
-        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setContentsMargins(0, scale_metric(8, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE), 0, 0)
         section_layout.setSpacing(0)
         section_layout.addWidget(table)
         return section
@@ -198,13 +266,22 @@ class ResultsTableWidget(QWidget):
         self.summary_table.setColumnWidth(0, property_width)
         self.summary_table.setColumnWidth(1, value_width)
 
-    @staticmethod
-    def _column_width_bounds(column_name: str, column_index: int) -> tuple[int, int]:
+    def _column_width_bounds(
+        self,
+        table: QTableWidget,
+        column_name: str,
+        column_index: int,
+    ) -> tuple[int, int]:
         """Return pragmatic min/max widths for right-rail result tables."""
         label = column_name.lower()
+        if table is self.composition_table:
+            if column_index == 0 and "component" in label:
+                return 66, 96
+            if any(token in label for token in ("liquid", "vapor")):
+                return 84, 120
         if column_index == 0:
             if any(token in label for token in ("component", "property", "stage")):
-                return 82, 132
+                return 78, 116
             if "type" in label:
                 return 64, 88
             return 56, 96
@@ -228,7 +305,7 @@ class ResultsTableWidget(QWidget):
         for column in range(table.columnCount()):
             header = table.horizontalHeaderItem(column)
             header_label = header.text() if header is not None else ""
-            minimum, maximum = self._column_width_bounds(header_label, column)
+            minimum, maximum = self._column_width_bounds(table, header_label, column)
             minimum = scale_metric(minimum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
             maximum = scale_metric(maximum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
             table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
@@ -262,11 +339,38 @@ class ResultsTableWidget(QWidget):
         if slack <= 0:
             return
 
-        per_column, remainder = divmod(slack, column_count)
+        weights: list[float] = []
         for column in range(column_count):
-            growth = per_column + (1 if column < remainder else 0)
+            header = table.horizontalHeaderItem(column)
+            label = header.text().lower() if header is not None else ""
+            weight = 1.0
+            if table is self.composition_table:
+                if column == 0 and "component" in label:
+                    weight = 0.72
+                elif "liquid" in label:
+                    weight = 1.08
+                elif "vapor" in label:
+                    weight = 1.20
+            elif table is self.details_table:
+                if column == 0 and "component" in label:
+                    weight = 0.82
+                elif "k-value" in label:
+                    weight = 1.18
+            weights.append(weight)
+
+        total_weight = sum(weights) or float(column_count)
+        distributed = 0
+        for column in range(column_count):
+            growth = int(round((slack * weights[column]) / total_weight))
             if growth > 0:
                 table.setColumnWidth(column, table.columnWidth(column) + growth)
+                distributed += growth
+        remainder = slack - distributed
+        for column in range(column_count):
+            if remainder <= 0:
+                break
+            table.setColumnWidth(column, table.columnWidth(column) + 1)
+            remainder -= 1
 
     def _sync_table_height(self, table: QTableWidget) -> None:
         """Let the outer scroll area own scrolling instead of nested table scrollbars."""
@@ -274,11 +378,11 @@ class ResultsTableWidget(QWidget):
         header_height = table.horizontalHeader().height() if table.horizontalHeader().isVisible() else 0
         body_height = sum(table.rowHeight(row) for row in range(table.rowCount()))
         height = max(
-            scale_metric(72, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            scale_metric(68, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
             header_height
             + body_height
             + (2 * table.frameWidth())
-            + scale_metric(6, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            + scale_metric(2, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
         )
         table.setMinimumHeight(height)
         table.setMaximumHeight(height)
@@ -306,24 +410,33 @@ class ResultsTableWidget(QWidget):
         super().resizeEvent(event)
         self._finalize_section_tables()
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._finalize_section_tables()
+
     def clear(self) -> None:
         """Clear all result displays."""
         self._current_result = None
+        self._display_is_cached = False
         self.run_id_label.setText("No results")
+        self.run_id_label.setToolTip("")
         self.status_label.setText("")
+        self.status_label.setToolTip("")
         self.summary_table.setRowCount(0)
         self.composition_table.setRowCount(0)
         self.details_table.setRowCount(0)
         self._finalize_section_tables()
 
-    def display_result(self, result: RunResult) -> None:
+    def display_result(self, result: RunResult, *, cached: bool = False) -> None:
         """Display a calculation result.
 
         Args:
             result: RunResult to display
         """
         self._current_result = result
-        self.run_id_label.setText(f"Run: {result.run_name or result.run_id}")
+        self._display_is_cached = cached
+        self.run_id_label.setText(result.run_name or result.run_id or "Run")
+        self.run_id_label.setToolTip(result.run_name or result.run_id or "")
 
         # Set status with color
         status = result.status
@@ -334,8 +447,14 @@ class ResultsTableWidget(QWidget):
             RunStatus.RUNNING: "blue",
             RunStatus.PENDING: "gray",
         }
-        color = color_map.get(status, "black")
-        self.status_label.setText(f"Status: {status.value}")
+        color = "#60a5fa" if cached else color_map.get(status, "black")
+        status_text = "Cached" if cached else status.value.replace("_", " ").title()
+        self.status_label.setText(status_text)
+        self.status_label.setToolTip(
+            f"Saved run artifact ({status.value.replace('_', ' ').title()})"
+            if cached
+            else ""
+        )
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
         # Display appropriate result type
@@ -458,7 +577,7 @@ class ResultsTableWidget(QWidget):
         self.composition_table.setRowCount(len(components))
 
         for row, comp in enumerate(components):
-            self.composition_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.composition_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
 
             # Calculate feed from material balance (approximate)
             x = result.liquid_composition.get(comp, 0)
@@ -482,7 +601,7 @@ class ResultsTableWidget(QWidget):
         self.details_table.setRowCount(len(components))
 
         for row, comp in enumerate(components):
-            self.details_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.details_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.details_table.setItem(
                 row, 1, QTableWidgetItem(f"{result.K_values.get(comp, 0):.6f}")
             )
@@ -607,7 +726,7 @@ class ResultsTableWidget(QWidget):
         self.details_table.setRowCount(len(components))
 
         for row, comp in enumerate(components):
-            self.composition_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.composition_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.composition_table.setItem(
                 row, 1, QTableWidgetItem(f"{result.liquid_composition.get(comp, 0.0):.6f}")
             )
@@ -615,7 +734,7 @@ class ResultsTableWidget(QWidget):
                 row, 2, QTableWidgetItem(f"{result.vapor_composition.get(comp, 0.0):.6f}")
             )
 
-            self.details_table.setItem(row, 0, QTableWidgetItem(comp))
+            self.details_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.details_table.setItem(
                 row, 1, QTableWidgetItem(f"{result.k_values.get(comp, 0.0):.6f}")
             )
@@ -651,7 +770,7 @@ class ResultsTableWidget(QWidget):
 
         # Summary
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
             ("Steps", str(len(result.steps))),
         ]
 
@@ -697,7 +816,7 @@ class ResultsTableWidget(QWidget):
     def _display_dl(self, result: DLResult) -> None:
         """Display DL results."""
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
             ("Bubble Pressure", f"{result.bubble_pressure_pa / 1e5:.2f} bar"),
             ("Initial Rs", f"{result.rsi:.4f}"),
             ("Initial Bo", f"{result.boi:.4f}"),
@@ -750,7 +869,7 @@ class ResultsTableWidget(QWidget):
     def _display_cvd(self, result: CVDResult) -> None:
         """Display CVD results."""
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} C"),
+            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
             ("Dew Pressure", f"{result.dew_pressure_pa / 1e5:.2f} bar"),
             ("Initial Z", f"{result.initial_z:.4f}"),
             ("Steps", str(len(result.steps))),
@@ -868,6 +987,58 @@ class ResultsTableWidget(QWidget):
         self.details_table.setRowCount(0)
 
 
+class ResultsSidebarWidget(QWidget):
+    """Fixed right-rail surface: summary tables on top, text report below."""
+
+    def __init__(
+        self,
+        table_widget: Optional[ResultsTableWidget] = None,
+        report_widget: Optional[TextOutputWidget] = None,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.table_widget = table_widget or ResultsTableWidget()
+        self.report_widget = report_widget or TextOutputWidget()
+
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
+
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(scale_metric(4, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE))
+        self._splitter.addWidget(self.table_widget)
+        self._splitter.addWidget(self.report_widget)
+        self._splitter.setStretchFactor(0, 3)
+        self._splitter.setStretchFactor(1, 2)
+        self._splitter.setSizes([420, 260])
+
+        self._layout.addWidget(self._splitter, 1)
+
+    @property
+    def current_result(self) -> Optional[RunResult]:
+        return self.table_widget.current_result
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._splitter.setHandleWidth(scale_metric(4, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.table_widget.apply_ui_scale(ui_scale)
+        if hasattr(self.report_widget, "apply_ui_scale"):
+            self.report_widget.apply_ui_scale(ui_scale)
+
+    def clear(self) -> None:
+        self.table_widget.clear()
+        self.report_widget.clear()
+
+    def display_result(self, result: RunResult) -> None:
+        self.table_widget.display_result(result)
+        self.report_widget.display_result(result)
+
+    def display_cached_result(self, result: RunResult) -> None:
+        self.table_widget.display_result(result, cached=True)
+        self.report_widget.display_result(result)
+
+
 class ResultsPlotWidget(QWidget):
     """Widget for plotting calculation results.
 
@@ -957,6 +1128,14 @@ class ResultsPlotWidget(QWidget):
                 text.set_color(PLOT_TEXT_COLOR)
             if legend.get_title() is not None:
                 legend.get_title().set_color(PLOT_TEXT_COLOR)
+
+    def _component_display_label(self, component_id: str) -> str:
+        """Use the same compact component labels in plots as in the results tables."""
+        return _display_component_label(component_id, self._current_result)
+
+    def _tighten_composition_plot_layout(self) -> None:
+        """Keep bar-chart composition plots from wasting vertical space below the x-axis."""
+        self.figure.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.20)
 
     def clear(self) -> None:
         """Clear the plot."""
@@ -1048,6 +1227,7 @@ class ResultsPlotWidget(QWidget):
         ax.set_facecolor(PLOT_CANVAS_COLOR)
 
         components = sorted(result.liquid_composition.keys())
+        display_labels = [self._component_display_label(component) for component in components]
         x = list(range(len(components)))
         width = 0.35
 
@@ -1061,11 +1241,11 @@ class ResultsPlotWidget(QWidget):
         ax.set_ylabel('Mole Fraction')
         ax.set_title(f'PT Flash Results ({result.phase.title()})')
         ax.set_xticks(x)
-        ax.set_xticklabels(components, rotation=45, ha='right')
+        ax.set_xticklabels(display_labels, rotation=35, ha='right', rotation_mode='anchor')
         ax.legend()
         self._apply_axes_theme(ax)
 
-        self.figure.tight_layout()
+        self._tighten_composition_plot_layout()
 
     def _plot_phase_envelope(self, result: PhaseEnvelopeResult) -> None:
         """Plot phase envelope."""
@@ -1137,6 +1317,7 @@ class ResultsPlotWidget(QWidget):
             set(result.liquid_composition)
             | set(result.vapor_composition)
         )
+        display_labels = [self._component_display_label(component) for component in components]
         x = list(range(len(components)))
         width = 0.35
 
@@ -1165,11 +1346,11 @@ class ResultsPlotWidget(QWidget):
         pressure_unit = self._saturation_pressure_unit()
         ax.set_title(f"{title} at {_format_pressure(result.pressure_pa, pressure_unit)}")
         ax.set_xticks(x)
-        ax.set_xticklabels(components, rotation=45, ha="right")
+        ax.set_xticklabels(display_labels, rotation=35, ha="right", rotation_mode="anchor")
         ax.legend()
         self._apply_axes_theme(ax)
 
-        self.figure.tight_layout()
+        self._tighten_composition_plot_layout()
 
     def _plot_bubble_point(self, result: BubblePointResult) -> None:
         """Plot bubble-point results."""

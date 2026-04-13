@@ -457,7 +457,7 @@ def test_heavy_fraction_tabs_ignore_mouse_wheel_changes(app: QApplication) -> No
             self.ignored = True
 
     event = DummyWheelEvent()
-    widget.heavy_tabs.wheelEvent(event)
+    widget.heavy_tabs.tabBar().wheelEvent(event)
 
     assert event.ignored is True
     assert widget.heavy_tabs.currentIndex() == 1

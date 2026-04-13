@@ -1,8 +1,8 @@
-"""Run log / history view with preview.
+"""Run log / history view with a plot preview.
 
-This is intended to mirror the MI-PVT "Log" tab concept:
-- A tree of prior runs
-- Selecting a run previews its results (plot) for side-by-side comparisons
+This keeps the middle pane focused on:
+- a sortable list of saved runs
+- a plot preview for the selected run
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -28,8 +28,8 @@ from PySide6.QtWidgets import (
 from pvtapp.job_runner import list_runs, load_run_result
 from pvtapp.schemas import RunResult
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
+from pvtapp.widgets.combo_box import NoWheelComboBox
 from pvtapp.widgets.results_view import ResultsPlotWidget
-from pvtapp.widgets.text_output_view import TextOutputWidget
 
 
 def _fmt_dt(dt: Optional[datetime]) -> str:
@@ -44,10 +44,19 @@ def _fmt_dt(dt: Optional[datetime]) -> str:
 class RunLogWidget(QWidget):
     """Show a run history tree and preview the selected run."""
 
+    load_inputs_requested = Signal(str)
+    result_selected = Signal(object)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._selected_run_dir: Optional[Path] = None
         self._selected_result: Optional[RunResult] = None
+        self._replay_actions_enabled = True
+        self._preview_split_fraction = 0.58
+        self._sort_column = 2
+        self._sort_order = Qt.SortOrder.DescendingOrder
+        self._group_by = "none"
+        self._entries: list[dict[str, object]] = []
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
@@ -62,9 +71,23 @@ class RunLogWidget(QWidget):
         title.setStyleSheet("color: #9ca3af;")
         self._header.addWidget(title, 1)
 
+        self.group_by_label = QLabel("Group by")
+        self._header.addWidget(self.group_by_label)
+
+        self.group_by_combo = NoWheelComboBox()
+        self.group_by_combo.addItem("None", "none")
+        self.group_by_combo.addItem("Test Type", "calc_type")
+        self.group_by_combo.addItem("Status", "status")
+        self.group_by_combo.currentIndexChanged.connect(self._on_group_by_changed)
+        self._header.addWidget(self.group_by_combo)
+
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh)
         self._header.addWidget(self.refresh_btn)
+
+        self.load_inputs_btn = QPushButton("Load Inputs")
+        self.load_inputs_btn.clicked.connect(self._emit_load_inputs_requested)
+        self._header.addWidget(self.load_inputs_btn)
 
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.clicked.connect(self._delete_selected)
@@ -72,19 +95,25 @@ class RunLogWidget(QWidget):
 
         self._layout.addLayout(self._header)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setChildrenCollapsible(False)
+        self._splitter = QSplitter(Qt.Orientation.Vertical)
+        self._splitter.setChildrenCollapsible(False)
 
         # Run tree
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Run", "Status", "When"])
         self.tree.setUniformRowHeights(True)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setSortingEnabled(False)
+        self.tree.header().setSortIndicatorShown(True)
+        self.tree.header().setSortIndicator(self._sort_column, self._sort_order)
+        self.tree.header().sectionClicked.connect(self._on_header_clicked)
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
-        splitter.addWidget(self.tree)
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        self._splitter.addWidget(self.tree)
 
-        # Preview area (plot + text)
-        preview = QWidget()
-        self._preview_layout = QVBoxLayout(preview)
+        # Preview area (plot only)
+        self._preview_panel = QWidget()
+        self._preview_layout = QVBoxLayout(self._preview_panel)
         self._preview_layout.setContentsMargins(0, 0, 0, 0)
         self._preview_layout.setSpacing(10)
 
@@ -96,15 +125,14 @@ class RunLogWidget(QWidget):
         self.preview_plot = ResultsPlotWidget()
         self._preview_layout.addWidget(self.preview_plot, 2)
 
-        self.preview_text = TextOutputWidget()
-        self._preview_layout.addWidget(self.preview_text, 1)
+        self._splitter.addWidget(self._preview_panel)
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 2)
 
-        splitter.addWidget(preview)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        self._layout.addWidget(self._splitter, 1)
 
-        self._layout.addWidget(splitter, 1)
-
+        self._set_preview(None, None)
+        self._sync_action_state()
         self.refresh()
 
     def apply_ui_scale(self, ui_scale: float) -> None:
@@ -112,15 +140,12 @@ class RunLogWidget(QWidget):
         self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
         self._header.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
         self._preview_layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
-        if hasattr(self.preview_text, "apply_ui_scale"):
-            self.preview_text.apply_ui_scale(ui_scale)
 
     def refresh(self) -> None:
         """Reload the run tree from the runs directory."""
-        self.tree.clear()
-
+        selected_run_path = str(self._selected_run_dir) if self._selected_run_dir is not None else None
         runs = list_runs(limit=200)
-        groups: dict[str, QTreeWidgetItem] = {}
+        entries: list[dict[str, object]] = []
 
         for run in runs:
             run_dir = Path(run.get("path", ""))
@@ -128,23 +153,32 @@ class RunLogWidget(QWidget):
             if result is None:
                 continue
 
-            calc_type = result.config.calculation_type.value.replace("_", " ").title()
-            group_item = groups.get(calc_type)
-            if group_item is None:
-                group_item = QTreeWidgetItem([calc_type, "", ""])
-                group_item.setFirstColumnSpanned(False)
-                self.tree.addTopLevelItem(group_item)
-                groups[calc_type] = group_item
+            entries.append(
+                {
+                    "path": run_dir,
+                    "result": result,
+                    "name": result.run_name or result.run_id,
+                    "status": result.status.value,
+                    "when": _fmt_dt(result.completed_at or result.started_at),
+                    "when_dt": result.completed_at or result.started_at,
+                    "calc_type": result.config.calculation_type.value.replace("_", " ").title(),
+                }
+            )
 
-            name = result.run_name or result.run_id
-            status = result.status.value
-            when = _fmt_dt(result.completed_at or result.started_at)
+        self._entries = entries
+        selected_item = self._rebuild_tree(selected_run_path)
 
-            item = QTreeWidgetItem([name, status, when])
-            item.setData(0, Qt.ItemDataRole.UserRole, str(run_dir))
-            group_item.addChild(item)
+        if selected_item is not None:
+            self.tree.setCurrentItem(selected_item)
+            self._load_item_preview(selected_item)
+        elif self._selected_run_dir is not None or self._selected_result is not None:
+            self._set_preview(None, None)
+        self._sync_action_state()
 
-        self.tree.expandAll()
+    def set_replay_actions_enabled(self, enabled: bool) -> None:
+        """Enable or disable actions that reuse saved run artifacts."""
+        self._replay_actions_enabled = enabled
+        self._sync_action_state()
 
     def _on_selection_changed(self) -> None:
         items = self.tree.selectedItems()
@@ -152,10 +186,120 @@ class RunLogWidget(QWidget):
             self._set_preview(None, None)
             return
 
-        item = items[0]
+        self._load_item_preview(items[0])
+
+    def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        """Handle explicit user clicks even if the clicked row was already selected."""
+        if not item.data(0, Qt.ItemDataRole.UserRole):
+            item.setExpanded(not item.isExpanded())
+            return
+        self._load_item_preview(item)
+
+    def _on_group_by_changed(self, _index: int) -> None:
+        """Regroup the run list without changing the current sort column/order."""
+        self._group_by = str(self.group_by_combo.currentData() or "none")
+        selected_run_path = str(self._selected_run_dir) if self._selected_run_dir is not None else None
+        selected_item = self._rebuild_tree(selected_run_path)
+        if selected_item is not None:
+            self.tree.setCurrentItem(selected_item)
+        elif self._selected_run_dir is not None or self._selected_result is not None:
+            self._set_preview(None, None)
+
+    def _on_header_clicked(self, section: int) -> None:
+        """Toggle manual sorting so grouped and flat views behave consistently."""
+        if self._sort_column == section:
+            self._sort_order = (
+                Qt.SortOrder.AscendingOrder
+                if self._sort_order == Qt.SortOrder.DescendingOrder
+                else Qt.SortOrder.DescendingOrder
+            )
+        else:
+            self._sort_column = section
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if section == 2
+                else Qt.SortOrder.AscendingOrder
+            )
+        self.tree.header().setSortIndicator(self._sort_column, self._sort_order)
+        selected_run_path = str(self._selected_run_dir) if self._selected_run_dir is not None else None
+        selected_item = self._rebuild_tree(selected_run_path)
+        if selected_item is not None:
+            self.tree.setCurrentItem(selected_item)
+
+    def _entry_sort_key(self, entry: dict[str, object]) -> object:
+        """Return the active Python sort key for a run entry."""
+        if self._sort_column == 0:
+            return str(entry["name"]).casefold()
+        if self._sort_column == 1:
+            return str(entry["status"]).casefold()
+        when_dt = entry["when_dt"]
+        return when_dt or datetime.min
+
+    def _sorted_entries(self) -> list[dict[str, object]]:
+        """Return entries sorted by the active header sort selection."""
+        reverse = self._sort_order == Qt.SortOrder.DescendingOrder
+        return sorted(self._entries, key=self._entry_sort_key, reverse=reverse)
+
+    def _group_label(self, entry: dict[str, object]) -> str:
+        """Return the visible group label for a run entry."""
+        if self._group_by == "calc_type":
+            return str(entry["calc_type"])
+        if self._group_by == "status":
+            return str(entry["status"]).replace("_", " ").title()
+        return ""
+
+    def _build_run_item(self, entry: dict[str, object]) -> QTreeWidgetItem:
+        """Create a concrete selectable run row."""
+        item = QTreeWidgetItem(
+            [
+                str(entry["name"]),
+                str(entry["status"]),
+                str(entry["when"]),
+            ]
+        )
+        item.setData(0, Qt.ItemDataRole.UserRole, str(entry["path"]))
+        item.setToolTip(0, str(entry["calc_type"]))
+        return item
+
+    def _rebuild_tree(self, selected_run_path: Optional[str]) -> Optional[QTreeWidgetItem]:
+        """Rebuild the tree using the current grouping and sorting rules."""
+        self.tree.clear()
+        self.tree.setRootIsDecorated(self._group_by != "none")
+        selected_item: Optional[QTreeWidgetItem] = None
+        entries = self._sorted_entries()
+
+        if self._group_by == "none":
+            for entry in entries:
+                item = self._build_run_item(entry)
+                self.tree.addTopLevelItem(item)
+                if selected_run_path is not None and str(entry["path"]) == selected_run_path:
+                    selected_item = item
+            return selected_item
+
+        groups: dict[str, list[dict[str, object]]] = {}
+        for entry in entries:
+            group = self._group_label(entry)
+            groups.setdefault(group, []).append(entry)
+
+        for group_name in sorted(groups.keys(), key=str.casefold):
+            group_item = QTreeWidgetItem([group_name, "", ""])
+            group_item.setFirstColumnSpanned(True)
+            group_item.setFlags(group_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            group_item.setExpanded(True)
+            self.tree.addTopLevelItem(group_item)
+
+            for entry in groups[group_name]:
+                item = self._build_run_item(entry)
+                group_item.addChild(item)
+                if selected_run_path is not None and str(entry["path"]) == selected_run_path:
+                    selected_item = item
+
+        return selected_item
+
+    def _load_item_preview(self, item: QTreeWidgetItem) -> None:
+        """Load the saved result for a concrete tree item."""
         run_dir_str = item.data(0, Qt.ItemDataRole.UserRole)
         if not run_dir_str:
-            # Selected a group header
             self._set_preview(None, None)
             return
 
@@ -170,15 +314,36 @@ class RunLogWidget(QWidget):
         if run_dir is None or result is None:
             self.preview_title.setText("Select a run to preview")
             self.preview_plot.clear()
-            self.preview_text.clear()
+            self._preview_panel.setVisible(False)
+            self._splitter.setSizes([1, 0])
+            self._sync_action_state()
+            self.result_selected.emit(None)
             return
 
+        preview_was_hidden = not self._preview_panel.isVisible()
+        self._preview_panel.setVisible(True)
         calc_type = result.config.calculation_type.value.replace("_", " ").title()
         self.preview_title.setText(
             f"{calc_type} — {result.run_name or result.run_id}  ({result.status.value})"
         )
         self.preview_plot.display_result(result)
-        self.preview_text.display_result(result)
+        if preview_was_hidden:
+            total_height = max(self._splitter.height(), self.height(), 1)
+            preview_height = max(1, int(total_height * self._preview_split_fraction))
+            tree_height = max(1, total_height - preview_height)
+            self._splitter.setSizes([tree_height, preview_height])
+        self._sync_action_state()
+        self.result_selected.emit(result)
+
+    def _sync_action_state(self) -> None:
+        has_selected_run = self._selected_run_dir is not None and self._selected_result is not None
+        self.load_inputs_btn.setEnabled(has_selected_run and self._replay_actions_enabled)
+        self.delete_btn.setEnabled(has_selected_run)
+
+    def _emit_load_inputs_requested(self) -> None:
+        if self._selected_run_dir is None or not self._replay_actions_enabled:
+            return
+        self.load_inputs_requested.emit(str(self._selected_run_dir))
 
     def _delete_selected(self) -> None:
         if self._selected_run_dir is None:

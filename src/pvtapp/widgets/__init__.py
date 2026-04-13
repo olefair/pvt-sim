@@ -2,7 +2,7 @@
 
 from pvtapp.widgets.composition_input import CompositionInputWidget
 from pvtapp.widgets.conditions_input import ConditionsInputWidget
-from pvtapp.widgets.results_view import ResultsTableWidget, ResultsPlotWidget
+from pvtapp.widgets.results_view import ResultsTableWidget, ResultsPlotWidget, ResultsSidebarWidget
 from pvtapp.widgets.diagnostics_view import DiagnosticsWidget
 from pvtapp.widgets.inputs_panel import InputsPanel
 from pvtapp.widgets.critical_props_view import CriticalPropsWidget
@@ -16,6 +16,7 @@ __all__ = [
     'ConditionsInputWidget',
     'ResultsTableWidget',
     'ResultsPlotWidget',
+    'ResultsSidebarWidget',
     'DiagnosticsWidget',
     'InputsPanel',
     'CriticalPropsWidget',
