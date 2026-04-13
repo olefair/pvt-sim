@@ -46,9 +46,17 @@ desktop.ini
 Thumbs.db
 ehthumbs.db
 
-# Patches 
+# Patches
 *.patch
 *.changes
 
 # Generated validation / assignment outputs
 assignment_run_*.json
+
+# UAF related docs
+LECTURE_SLIDES_MERGED.md
+TERM_PROJECT_ASSIGNMENT.md
+
+# AI tooling
+AGENTS.md
+.agents/*
