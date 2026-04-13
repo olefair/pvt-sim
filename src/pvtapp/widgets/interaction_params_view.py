@@ -8,7 +8,6 @@ import numpy as np
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QLabel,
     QHBoxLayout,
     QTableWidget,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from pvtcore.characterization.bip import BIPMethod, build_bip_matrix
 from pvtcore.models.component import Component
+from pvtapp.widgets.combo_box import NoWheelComboBox
 
 
 class InteractionParamsWidget(QWidget):
@@ -45,7 +45,7 @@ class InteractionParamsWidget(QWidget):
         self._hint.setStyleSheet("color: #9ca3af;")
         header.addWidget(self._hint, 1)
 
-        self.method_combo = QComboBox()
+        self.method_combo = NoWheelComboBox()
         self.method_combo.addItem("Default", BIPMethod.DEFAULT_VALUES)
         self.method_combo.addItem("All zeros", BIPMethod.ZERO)
         self.method_combo.addItem("Chueh–Prausnitz", BIPMethod.CHUEH_PRAUSNITZ)

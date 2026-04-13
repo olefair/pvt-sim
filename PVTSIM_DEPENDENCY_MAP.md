@@ -108,85 +108,27 @@ For each active slice, include:
 - last structural update
 
 ### Current active slices
-- directive / task name: canonical pvtapp shell + desktop contract baseline
-  owner / lane: Ole + Codex on `main`
+- directive / task name: gui runtime follow-on lane
+  owner / lane: Ole + Codex on planned `codex/gui`
   touched repo surfaces:
-  - `.github/workflows/smoke.yml`
-  - `.gitignore`
-  - `src/pvtapp/capabilities.py`
-  - `src/pvtapp/job_runner.py`
-  - `src/pvtapp/main.py`
-  - `src/pvtapp/style.py`
-  - `src/pvtapp/workers.py`
-  - `src/pvtapp/widgets/`
+  - `src/pvtapp/`
   - `tests/unit/test_pvtapp_*`
   - `tests/unit/test_cli_validate.py`
   - `README.md`
-  - `docs/packaging.md`
-  - `docs/tbp.md`
-  - `docs/tuning.md`
-  - `pyproject.toml`
-  - `data/pure_components/components.json`
-  - `AGENTS.md`
-  - `PVTSIM_DEPENDENCY_MAP.md`
+  - `docs/development.md`
+  - `docs/runtime_surface_standard.md`
+  - `examples/pete665_assignment_case.json`
+  - `scripts/run_pete665_assignment.py`
+  - `scripts/validate_modules.py`
   upstream dependencies:
-  - keep `src/pvtcore/` thermodynamics untouched while the app shell is still settling
-  - align the desktop contract before promoting more calculation types or EOS choices into the GUI
-  - shared-surface caution applies because `pyproject.toml` is already in flight in this slice
+  - starts from the 2026-04-12 merged mainline baseline prepared from `codex/handoff-external-validation`
+  - phase-envelope solver work must be consumed through the stable runtime contract, not by parallel edits inside `src/pvtcore/envelope/`
   blocked_by / blockers:
   - none currently recorded
   status:
-  - validated checkpoint baseline on the canonical branch
+  - declared for immediate dedicated worktree creation from updated `main`
   coordination rule:
-  - do not spawn overlapping app-shell, desktop-contract, or packaging work until new issue-scoped follow-on slices are declared from this baseline
-  last structural update:
-  - 2026-04-11
-
-- directive / task name: saturation validation lane unification
-  owner / lane: Codex in current thermo-validation thread
-  touched repo surfaces:
-  - `src/pvtcore/flash/bubble_point.py`
-  - `src/pvtcore/flash/dew_point.py`
-  - `src/pvtcore/validation/external_corpus.py`
-  - `tests/validation/test_saturation_equation_benchmarks.py`
-  - `tests/validation/test_plus_fraction_dew_characterization.py`
-  - `tests/validation/test_plus_fraction_bubble_characterization.py`
-  - `tests/validation/test_phase_envelope_runtime_matrix.py`
-  - `tests/validation/test_external_corpus_schema.py`
-  - `tests/validation/test_vs_mi_pvt.py`
-  - `tests/validation/mi_pvt/README.md`
-  - `docs/validation/bubble_point_validation_matrix.md`
-  - `docs/validation/dew_point_validation_matrix.md`
-  - `docs/validation/phase_envelope_validation_matrix.md`
-  - `docs/validation/mi_pvt_phase_envelope_roster.md`
-  - `docs/validation_plan.md`
-  - `src/pvtapp/job_runner.py`
-  - `src/pvtapp/main.py`
-  - `src/pvtapp/schemas.py`
-  - `src/pvtapp/widgets/composition_input.py`
-  - `src/pvtapp/widgets/conditions_input.py`
-  - `src/pvtapp/widgets/results_view.py`
-  - `src/pvtapp/widgets/text_output_view.py`
-  - `src/pvtapp/widgets/diagnostics_view.py`
-  - `tests/unit/test_pvtapp_conditions_input.py`
-  - `tests/unit/test_pvtapp_desktop_contract.py`
-  - `tests/unit/test_pvtapp_runtime_contract.py`
-  - `tests/unit/test_pvtapp_remaining_workflows.py`
-  - `tests/unit/test_pvtapp_zero_fraction_duplicates.py`
-  - `tests/unit/test_saturation.py`
-  upstream dependencies:
-  - the 2026-04-11 desktop-contract baseline remains the upstream runtime shell baseline for any app-surface changes
-  - bubble-point and dew-point authority, robustness, and GUI honesty are treated as one saturation lane because the solver methods and failure semantics are intentionally mirrored
-  - external-data ingestion and corpus acquisition remain required before full physical-accuracy signoff
-  blocked_by / blockers:
-  - no measured external pure-component saturation anchors have been entered yet
-  - no measured external rich-fluid `C1`-`C6` + `C7+` bubble/dew anchors have been entered yet
-  - MI-PVT or literature envelope overlays for the current runtime matrix roster are still secondary/manual, not fully ingested
-  status:
-  - handoff-ready; internal solver/runtime and practical family coverage established, external-authority lane still open
-  coordination rule:
-  - do not split bubble and dew saturation validation into separate concurrent slices unless the controller records a file-level partition first
-  - if app result surfaces are touched, keep the runtime semantics aligned with the same certificates and failure states exposed by the thermo layer
+  - keep this lane out of `src/pvtcore/envelope/`, `tests/validation/test_phase_envelope_*`, and `tests/validation/test_vs_*` unless a controller records an explicit shared-surface serialization rule
   last structural update:
   - 2026-04-12
 
@@ -238,15 +180,21 @@ For each active slice, include:
   - `tests/validation/test_vs_mi_pvt.py`
   - `tests/validation/test_vs_prode.py`
   - `tests/validation/test_vs_thermopack.py`
+  - `tests/validation/mi_pvt/`
+  - `tests/validation/prode/`
+  - `tests/validation/thermopack/`
+  - `scripts/debug_phase_envelope_roots.py`
+  - `docs/validation/phase_envelope_validation_matrix.md`
+  - `docs/validation/mi_pvt_phase_envelope_roster.md`
   upstream dependencies:
-  - the 2026-04-11 desktop-contract baseline remains the app/runtime shell baseline
-  - the 2026-04-12 saturation-validation lane remains upstream for bubble/dew authority and external-corpus intake
-  - runtime-surface honesty must stay aligned with `docs/runtime_surface_standard.md`
+  - starts from the same 2026-04-12 merged mainline baseline
+  - owns the carried local continuation checkpoint preserved on `codex/phase-envelope`
+  - saturation authority and external-corpus ingestion remain upstream references, but critical-point alignment and release-gate/runtime-matrix certification are owned here
   blocked_by / blockers:
-  - a fresh targeted verification pass is still required before declaring the branch clean
-  - full-suite status remains intentionally unknown unless explicitly requested
+  - the continuation/ThermoPack critical-point mismatch remains unresolved
+  - release-gate and runtime-matrix certification still need a fresh pass after follow-on solver changes
   status:
-  - dirty-worktree cleanup in progress on the reconciled validation-across-modules lane
+  - mainline reconciliation in progress on the reconciled validation-across-modules lane
   coordination rule:
   - do not run overlapping edits across `src/pvtapp/`, `src/pvtcore/flash/`, `src/pvtcore/envelope/`, `src/pvtcore/validation/`, and validation docs until this cleanup checkpoint lands
   - treat fresh `phase-envelope` and `gui` work as follow-on lanes branched from updated `main`, not from this mixed validation lane

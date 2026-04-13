@@ -9,6 +9,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
+from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.schemas import (
     PressureUnit,
     PTFlashConfig,
@@ -33,12 +34,17 @@ def _pa_to_bar(p_pa: float) -> float:
     return float(p_pa) / 1e5
 
 
+def _format_temperature_unit(unit: TemperatureUnit) -> str:
+    """Render compact temperature units with a visible degree marker."""
+    return f"\N{DEGREE SIGN}{unit.value}"
+
+
 def _format_pressure(value_pa: float, unit: PressureUnit, *, precision: int = 5) -> str:
     return f"{pressure_from_pa(value_pa, unit):.{precision}f} {unit.value}"
 
 
 def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int = 3) -> str:
-    return f"{temperature_from_k(value_k, unit):.{precision}f} {unit.value}"
+    return f"{temperature_from_k(value_k, unit):.{precision}f} {_format_temperature_unit(unit)}"
 
 
 def _pt_flash_units(config: Optional[PTFlashConfig]) -> tuple[PressureUnit, TemperatureUnit]:
@@ -58,22 +64,29 @@ class TextOutputWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
 
         self._hint = QLabel("Text output / run report")
         self._hint.setStyleSheet("color: #9ca3af;")
-        layout.addWidget(self._hint)
+        self._layout.addWidget(self._hint)
 
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         mono = QFont("Consolas")
         mono.setStyleHint(QFont.StyleHint.Monospace)
         self.text.setFont(mono)
-        layout.addWidget(self.text, 1)
+        self._layout.addWidget(self.text, 1)
 
         self.clear()
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Scale the monospace report view with the app zoom."""
+        self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        font = self.text.font()
+        font.setPointSizeF(scale_metric(11, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.text.setFont(font)
 
     def clear(self) -> None:
         self.text.setPlainText("(no results yet)")

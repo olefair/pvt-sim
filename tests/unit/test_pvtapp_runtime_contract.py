@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from pvtapp.job_runner import ProgressCallback, run_calculation, validate_runtime_config
+from pvtapp.job_runner import (
+    ProgressCallback,
+    build_rerun_config,
+    load_run_config,
+    rerun_saved_run,
+    run_calculation,
+    validate_runtime_config,
+)
 from pvtapp.schemas import RunConfig, RunStatus
 
 
@@ -836,6 +843,69 @@ def test_run_calculation_cancels_mid_phase_envelope_trace(
     assert result.error_message == "Calculation was cancelled by user"
     assert callback.cancelled_run_id == result.run_id
     assert callback.check_count >= callback.cancel_after_checks
+
+def test_load_run_config_reads_persisted_config_json(tmp_path: Path) -> None:
+    config = _pt_flash_config()
+    run_dir = tmp_path / "saved-run"
+    run_dir.mkdir()
+    with (run_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config.model_dump(mode="json"), handle, indent=2)
+
+    loaded = load_run_config(run_dir)
+
+    assert loaded is not None
+    assert loaded.model_dump(mode="json") == config.model_dump(mode="json")
+
+
+def test_build_rerun_config_clears_old_run_id_and_preserves_inputs() -> None:
+    config = _pt_flash_config().model_copy(update={"run_id": "abcd1234", "run_name": "Saved PT Flash"})
+
+    rerun = build_rerun_config(config)
+
+    assert rerun.run_id is None
+    assert rerun.run_name == "Saved PT Flash"
+    assert rerun.model_dump(mode="json", exclude={"run_id"}) == config.model_dump(
+        mode="json",
+        exclude={"run_id"},
+    )
+
+
+def test_rerun_saved_run_reuses_persisted_config_with_fresh_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _pt_flash_config().model_copy(update={"run_id": "original01", "run_name": "Saved PT Flash"})
+    run_dir = tmp_path / "saved-run"
+    run_dir.mkdir()
+    with (run_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config.model_dump(mode="json"), handle, indent=2)
+
+    observed: dict[str, object] = {}
+
+    def fake_run_calculation(
+        config: RunConfig,
+        output_dir: Path | None = None,
+        callback: ProgressCallback | None = None,
+        write_artifacts: bool = True,
+    ) -> RunStatus:
+        observed["config"] = config
+        observed["output_dir"] = output_dir
+        observed["callback"] = callback
+        observed["write_artifacts"] = write_artifacts
+        return RunStatus.COMPLETED
+
+    monkeypatch.setattr("pvtapp.job_runner.run_calculation", fake_run_calculation)
+
+    result = rerun_saved_run(run_dir, output_dir=tmp_path / "reruns", write_artifacts=False, run_name="Replay")
+
+    assert result == RunStatus.COMPLETED
+    rerun_config = observed["config"]
+    assert isinstance(rerun_config, RunConfig)
+    assert rerun_config.run_id is None
+    assert rerun_config.run_name == "Replay"
+    assert rerun_config.calculation_type == config.calculation_type
+    assert rerun_config.composition.model_dump(mode="json") == config.composition.model_dump(mode="json")
+    assert observed["write_artifacts"] is False
 
 
 def test_calculation_thread_preserves_cancel_request_before_worker_exists(
