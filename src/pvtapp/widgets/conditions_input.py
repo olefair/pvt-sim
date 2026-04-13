@@ -7,7 +7,8 @@ with explicit unit handling and strict validation.
 import re
 from typing import Optional, Tuple
 
-from PySide6.QtCore import QSize, Qt, Signal
+import numpy as np
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
     QWidget,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QPushButton,
     QSizePolicy,
+    QToolTip,
 )
 
 from pvtapp.schemas import (
@@ -117,10 +119,38 @@ class ConditionsInputWidget(QWidget):
 
     conditions_changed = Signal()
     validation_error = Signal(str)
+    status_hint = Signal(str)
+    status_warning = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._focus_tooltip_text_by_widget: dict[QWidget, str] = {}
+        self._updating_cce_pressure_points = False
+        self._cce_pressure_points_is_auto = True
+        self._cce_schedule_hint = (
+            "CCE exact pressures are shown high-to-low because constant composition "
+            "expansion runs from high pressure to low pressure."
+        )
         self._setup_ui()
+        self._cce_temperature_unit_value = self._coerce_combo_enum(
+            self.cce_temperature_unit.currentData(),
+            TemperatureUnit,
+        )
+        self._cce_pressure_unit_value = self._coerce_combo_enum(
+            self.cce_pressure_unit.currentData(),
+            PressureUnit,
+        )
+        self._dl_temperature_unit_value = self._coerce_combo_enum(
+            self.dl_temperature_unit.currentData(),
+            TemperatureUnit,
+        )
+        self._dl_pressure_unit_value = self._coerce_combo_enum(
+            self.dl_pressure_unit.currentData(),
+            PressureUnit,
+        )
+        self._sync_cce_pressure_affordances()
+        self._sync_dl_pressure_affordances()
+        self._sync_cce_generated_pressure_points(force=True)
         self._connect_signals()
         self._on_calc_type_changed()
 
@@ -229,6 +259,49 @@ class ConditionsInputWidget(QWidget):
             unit_widget.setMaximumWidth(96)
         layout.addWidget(field, 1)
         layout.addWidget(unit_widget, 0)
+
+    @staticmethod
+    def _populate_pressure_units(combo: NoWheelComboBox, default_unit: PressureUnit = PressureUnit.BAR) -> None:
+        """Populate a pressure-unit combo with the shared enum order."""
+        for unit in PressureUnit:
+            combo.addItem(unit.value, unit)
+        index = combo.findData(default_unit)
+        combo.setCurrentIndex(0 if index < 0 else index)
+
+    @staticmethod
+    def _populate_temperature_units(
+        combo: NoWheelComboBox,
+        default_unit: TemperatureUnit = TemperatureUnit.C,
+    ) -> None:
+        """Populate a temperature-unit combo with the shared enum order."""
+        for unit in TemperatureUnit:
+            combo.addItem(unit.value, unit)
+        index = combo.findData(default_unit)
+        combo.setCurrentIndex(0 if index < 0 else index)
+
+    def _register_focus_tooltip(self, widget: QWidget, text: str) -> None:
+        """Show full helper copy when a clipped sidebar field receives focus."""
+        widget.setToolTip(text)
+        widget.setWhatsThis(text)
+        self._focus_tooltip_text_by_widget[widget] = text
+        widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        tooltip = self._focus_tooltip_text_by_widget.get(watched)
+        if tooltip is not None and event is not None:
+            if event.type() == QEvent.Type.FocusIn:
+                QToolTip.showText(
+                    watched.mapToGlobal(QPoint(0, watched.height())),
+                    tooltip,
+                    watched,
+                )
+            elif event.type() == QEvent.Type.MouseButtonPress:
+                QToolTip.showText(
+                    watched.mapToGlobal(QPoint(0, watched.height())),
+                    tooltip,
+                    watched,
+                )
+        return super().eventFilter(watched, event)
 
     def apply_ui_scale(self, ui_scale: float) -> None:
         """Scale sidebar-only geometry that is not controlled by QSS."""
@@ -411,8 +484,9 @@ class ConditionsInputWidget(QWidget):
         self.cce_temperature.setRange(-200, 500)
         self.cce_temperature.setValue(100)
         self.cce_temperature.setDecimals(2)
-        t_layout.addWidget(self.cce_temperature)
-        t_layout.addWidget(QLabel("C"))
+        self.cce_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(self.cce_temperature_unit, TemperatureUnit.C)
+        self._configure_unit_row(t_layout, self.cce_temperature, self.cce_temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
         # Start pressure
@@ -421,8 +495,9 @@ class ConditionsInputWidget(QWidget):
         self.cce_p_start.setRange(0.01, 10000)
         self.cce_p_start.setValue(500)
         self.cce_p_start.setDecimals(2)
-        p_start_layout.addWidget(self.cce_p_start)
-        p_start_layout.addWidget(QLabel("bar"))
+        self.cce_pressure_unit = NoWheelComboBox()
+        self._populate_pressure_units(self.cce_pressure_unit, PressureUnit.BAR)
+        self._configure_unit_row(p_start_layout, self.cce_p_start, self.cce_pressure_unit)
         layout.addRow("Start Pressure:", p_start_layout)
 
         # End pressure
@@ -431,8 +506,8 @@ class ConditionsInputWidget(QWidget):
         self.cce_p_end.setRange(0.01, 10000)
         self.cce_p_end.setValue(50)
         self.cce_p_end.setDecimals(2)
-        p_end_layout.addWidget(self.cce_p_end)
-        p_end_layout.addWidget(QLabel("bar"))
+        self.cce_p_end_unit = QLabel(PressureUnit.BAR.value)
+        self._configure_unit_row(p_end_layout, self.cce_p_end, self.cce_p_end_unit)
         layout.addRow("End Pressure:", p_end_layout)
 
         # Number of steps
@@ -442,9 +517,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Number of Steps:", self.cce_n_steps)
 
         self.cce_pressure_points = QLineEdit()
-        self.cce_pressure_points.setPlaceholderText(
-            "Optional exact pressures in bar, e.g. 200, 150, 100"
-        )
+        self._register_focus_tooltip(self.cce_pressure_points, "")
         layout.addRow("Exact Pressures:", self.cce_pressure_points)
 
         return widget
@@ -460,8 +533,9 @@ class ConditionsInputWidget(QWidget):
         self.dl_temperature.setRange(-200, 500)
         self.dl_temperature.setValue(100)
         self.dl_temperature.setDecimals(2)
-        t_layout.addWidget(self.dl_temperature)
-        t_layout.addWidget(QLabel("C"))
+        self.dl_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(self.dl_temperature_unit, TemperatureUnit.C)
+        self._configure_unit_row(t_layout, self.dl_temperature, self.dl_temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
         bubble_layout = QHBoxLayout()
@@ -469,8 +543,9 @@ class ConditionsInputWidget(QWidget):
         self.dl_bubble_pressure.setRange(0.01, 10000)
         self.dl_bubble_pressure.setValue(150)
         self.dl_bubble_pressure.setDecimals(2)
-        bubble_layout.addWidget(self.dl_bubble_pressure)
-        bubble_layout.addWidget(QLabel("bar"))
+        self.dl_pressure_unit = NoWheelComboBox()
+        self._populate_pressure_units(self.dl_pressure_unit, PressureUnit.BAR)
+        self._configure_unit_row(bubble_layout, self.dl_bubble_pressure, self.dl_pressure_unit)
         layout.addRow("Bubble Pressure:", bubble_layout)
 
         end_layout = QHBoxLayout()
@@ -478,8 +553,8 @@ class ConditionsInputWidget(QWidget):
         self.dl_p_end.setRange(0.01, 10000)
         self.dl_p_end.setValue(10)
         self.dl_p_end.setDecimals(2)
-        end_layout.addWidget(self.dl_p_end)
-        end_layout.addWidget(QLabel("bar"))
+        self.dl_p_end_unit = QLabel(PressureUnit.BAR.value)
+        self._configure_unit_row(end_layout, self.dl_p_end, self.dl_p_end_unit)
         layout.addRow("End Pressure:", end_layout)
 
         self.dl_n_steps = NoWheelSpinBox()
@@ -488,9 +563,7 @@ class ConditionsInputWidget(QWidget):
         layout.addRow("Number of Steps:", self.dl_n_steps)
 
         self.dl_pressure_points = QLineEdit()
-        self.dl_pressure_points.setPlaceholderText(
-            "Optional exact pressures below bubble in bar, e.g. 60, 40, 20"
-        )
+        self._register_focus_tooltip(self.dl_pressure_points, "")
         layout.addRow("Exact Pressures:", self.dl_pressure_points)
 
         return widget
@@ -638,12 +711,24 @@ class ConditionsInputWidget(QWidget):
         self.dew_temperature.textChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess.textChanged.connect(self._emit_conditions_changed)
         self.dew_pressure_guess.textChanged.connect(self._emit_conditions_changed)
-        self.cce_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.cce_temperature.valueChanged.connect(self._emit_conditions_changed)
+        self.cce_p_start.valueChanged.connect(self._on_cce_schedule_inputs_changed)
+        self.cce_p_end.valueChanged.connect(self._on_cce_schedule_inputs_changed)
+        self.cce_n_steps.valueChanged.connect(self._on_cce_schedule_inputs_changed)
+        self.dl_temperature.valueChanged.connect(self._emit_conditions_changed)
+        self.dl_bubble_pressure.valueChanged.connect(self._emit_conditions_changed)
+        self.dl_p_end.valueChanged.connect(self._emit_conditions_changed)
+        self.dl_n_steps.valueChanged.connect(self._emit_conditions_changed)
+        self.cce_pressure_points.textChanged.connect(self._on_cce_pressure_points_changed)
         self.dl_pressure_points.textChanged.connect(self._emit_conditions_changed)
         self.bubble_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.dew_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.dew_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.cce_temperature_unit.currentIndexChanged.connect(self._on_cce_temperature_unit_changed)
+        self.cce_pressure_unit.currentIndexChanged.connect(self._on_cce_pressure_unit_changed)
+        self.dl_temperature_unit.currentIndexChanged.connect(self._on_dl_temperature_unit_changed)
+        self.dl_pressure_unit.currentIndexChanged.connect(self._on_dl_pressure_unit_changed)
         self.bubble_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
         self.dew_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
 
@@ -720,20 +805,201 @@ class ConditionsInputWidget(QWidget):
         return enum_type(value)
 
     @staticmethod
-    def _parse_pressure_points_bar(text: str) -> Optional[list[float]]:
-        """Parse an optional comma/whitespace-delimited pressure list in bar."""
+    def _parse_pressure_points(text: str, unit: PressureUnit) -> Optional[list[float]]:
+        """Parse an optional comma/whitespace-delimited pressure list."""
         stripped = text.strip()
         if not stripped:
             return None
         tokens = [token for token in re.split(r"[,\s;]+", stripped) if token]
-        return [float(token) * 1e5 for token in tokens]
+        return [pressure_to_pa(float(token), unit) for token in tokens]
 
     @staticmethod
-    def _format_pressure_points_bar(values_pa: Optional[list[float]]) -> str:
-        """Format an optional pressure list in bar for the widget."""
+    def _normalize_descending_pressure_points(values_pa: Optional[list[float]]) -> Optional[list[float]]:
+        """Sort explicit pressure schedules into descending solver order."""
+        if values_pa is None:
+            return None
+        return sorted(values_pa, reverse=True)
+
+    @staticmethod
+    def _format_pressure_points(values_pa: Optional[list[float]], unit: PressureUnit) -> str:
+        """Format an optional pressure list in the selected pressure unit."""
         if not values_pa:
             return ""
-        return ", ".join(f"{value / 1e5:.12g}" for value in values_pa)
+        return ", ".join(f"{pressure_from_pa(value, unit):.12g}" for value in values_pa)
+
+    def _generated_cce_pressure_points_pa(self) -> list[float]:
+        """Return the derived CCE pressure schedule from start/end/steps."""
+        unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
+        start_pa = pressure_to_pa(self.cce_p_start.value(), unit)
+        end_pa = pressure_to_pa(self.cce_p_end.value(), unit)
+        high_pa = max(start_pa, end_pa)
+        low_pa = min(start_pa, end_pa)
+        return np.linspace(high_pa, low_pa, self.cce_n_steps.value(), dtype=float).tolist()
+
+    def _cce_schedule_is_valid(self) -> bool:
+        """Return True when the entered CCE start/end schedule is physically descending."""
+        unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
+        start_pa = pressure_to_pa(self.cce_p_start.value(), unit)
+        end_pa = pressure_to_pa(self.cce_p_end.value(), unit)
+        return start_pa > end_pa
+
+    def _set_cce_pressure_points_text(self, text: str, *, auto_generated: bool) -> None:
+        """Set the visible CCE exact-pressure list without marking it as manual."""
+        self._updating_cce_pressure_points = True
+        try:
+            self.cce_pressure_points.setText(text)
+        finally:
+            self._updating_cce_pressure_points = False
+        self._cce_pressure_points_is_auto = auto_generated
+
+    def _sync_cce_generated_pressure_points(self, *, force: bool = False) -> None:
+        """Keep the CCE exact-pressure preview aligned with start/end/steps."""
+        if not force and not self._cce_pressure_points_is_auto:
+            return
+        if not self._cce_schedule_is_valid():
+            if self._cce_pressure_points_is_auto and self.cce_pressure_points.text().strip():
+                self._set_cce_pressure_points_text("", auto_generated=True)
+            return
+        unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
+        generated_text = self._format_pressure_points(
+            self._generated_cce_pressure_points_pa(),
+            unit,
+        )
+        if self.cce_pressure_points.text().strip() != generated_text:
+            self._set_cce_pressure_points_text(generated_text, auto_generated=True)
+        else:
+            self._cce_pressure_points_is_auto = True
+
+    @staticmethod
+    def _convert_pressure_spinbox_unit(
+        spinbox: NoWheelDoubleSpinBox,
+        old_unit: PressureUnit,
+        new_unit: PressureUnit,
+    ) -> None:
+        """Preserve the physical pressure value when the display unit changes."""
+        pressure_pa = pressure_to_pa(spinbox.value(), old_unit)
+        spinbox.setValue(pressure_from_pa(pressure_pa, new_unit))
+
+    @staticmethod
+    def _convert_temperature_spinbox_unit(
+        spinbox: NoWheelDoubleSpinBox,
+        old_unit: TemperatureUnit,
+        new_unit: TemperatureUnit,
+    ) -> None:
+        """Preserve the physical temperature value when the display unit changes."""
+        temperature_k = temperature_to_k(spinbox.value(), old_unit)
+        spinbox.setValue(temperature_from_k(temperature_k, new_unit))
+
+    def _convert_pressure_points_text(
+        self,
+        widget: QLineEdit,
+        old_unit: PressureUnit,
+        new_unit: PressureUnit,
+    ) -> None:
+        """Re-render an exact-pressure list when the selected pressure unit changes."""
+        try:
+            values_pa = self._parse_pressure_points(widget.text(), old_unit)
+        except ValueError:
+            return
+        if values_pa is None:
+            return
+        widget.setText(self._format_pressure_points(values_pa, new_unit))
+
+    def _set_focus_tooltip_text(self, widget: QWidget, text: str) -> None:
+        """Refresh a registered focus tooltip without reinstalling the event filter."""
+        widget.setToolTip(text)
+        widget.setWhatsThis(text)
+        self._focus_tooltip_text_by_widget[widget] = text
+
+    def _sync_cce_pressure_affordances(self) -> None:
+        """Keep the CCE pressure labels and helper copy aligned to the chosen unit."""
+        unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
+        self.cce_p_end_unit.setText(unit.value)
+        self.cce_pressure_points.setPlaceholderText(f"Optional exact pressures ({unit.value})")
+        self._set_focus_tooltip_text(
+            self.cce_pressure_points,
+            (
+                f"Optional exact pressures in {unit.value}. "
+                "You can enter them in any order."
+            ),
+        )
+
+    def _sync_dl_pressure_affordances(self) -> None:
+        """Keep the DL pressure labels and helper copy aligned to the chosen unit."""
+        unit = self._coerce_combo_enum(self.dl_pressure_unit.currentData(), PressureUnit)
+        self.dl_p_end_unit.setText(unit.value)
+        self.dl_pressure_points.setPlaceholderText(f"Optional exact pressures below bubble ({unit.value})")
+        self._set_focus_tooltip_text(
+            self.dl_pressure_points,
+            (
+                f"Optional exact pressures below bubble in {unit.value}. "
+                "You can enter them in any order."
+            ),
+        )
+
+    def _on_cce_temperature_unit_changed(self, *_args) -> None:
+        """Convert the visible CCE temperature when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.cce_temperature_unit.currentData(), TemperatureUnit)
+        old_unit = self._cce_temperature_unit_value
+        if new_unit != old_unit:
+            self._convert_temperature_spinbox_unit(self.cce_temperature, old_unit, new_unit)
+            self._cce_temperature_unit_value = new_unit
+        self.conditions_changed.emit()
+
+    def _on_cce_pressure_unit_changed(self, *_args) -> None:
+        """Convert visible CCE pressures when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
+        old_unit = self._cce_pressure_unit_value
+        was_auto_generated = self._cce_pressure_points_is_auto
+        if new_unit != old_unit:
+            self._convert_pressure_spinbox_unit(self.cce_p_start, old_unit, new_unit)
+            self._convert_pressure_spinbox_unit(self.cce_p_end, old_unit, new_unit)
+            self._convert_pressure_points_text(self.cce_pressure_points, old_unit, new_unit)
+            self._cce_pressure_unit_value = new_unit
+            self._cce_pressure_points_is_auto = was_auto_generated
+        self._sync_cce_pressure_affordances()
+        self._sync_cce_generated_pressure_points()
+        self.conditions_changed.emit()
+
+    def _on_cce_schedule_inputs_changed(self, *_args) -> None:
+        """Refresh the generated CCE exact-pressure preview when schedule inputs change."""
+        self._sync_cce_generated_pressure_points()
+        if self._cce_schedule_is_valid():
+            self.status_hint.emit(self._cce_schedule_hint)
+        else:
+            self.status_warning.emit(
+                "⚠ End pressure must be lower than start pressure for CCE."
+            )
+        self.conditions_changed.emit()
+
+    def _on_cce_pressure_points_changed(self, *_args) -> None:
+        """Track whether the CCE exact-pressure list is generated or user-authored."""
+        if not self._updating_cce_pressure_points:
+            self._cce_pressure_points_is_auto = not bool(self.cce_pressure_points.text().strip())
+            if self._cce_pressure_points_is_auto:
+                self._sync_cce_generated_pressure_points(force=True)
+        self.conditions_changed.emit()
+
+    def _on_dl_temperature_unit_changed(self, *_args) -> None:
+        """Convert the visible DL temperature when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.dl_temperature_unit.currentData(), TemperatureUnit)
+        old_unit = self._dl_temperature_unit_value
+        if new_unit != old_unit:
+            self._convert_temperature_spinbox_unit(self.dl_temperature, old_unit, new_unit)
+            self._dl_temperature_unit_value = new_unit
+        self.conditions_changed.emit()
+
+    def _on_dl_pressure_unit_changed(self, *_args) -> None:
+        """Convert visible DL pressures when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.dl_pressure_unit.currentData(), PressureUnit)
+        old_unit = self._dl_pressure_unit_value
+        if new_unit != old_unit:
+            self._convert_pressure_spinbox_unit(self.dl_bubble_pressure, old_unit, new_unit)
+            self._convert_pressure_spinbox_unit(self.dl_p_end, old_unit, new_unit)
+            self._convert_pressure_points_text(self.dl_pressure_points, old_unit, new_unit)
+            self._dl_pressure_unit_value = new_unit
+        self._sync_dl_pressure_affordances()
+        self.conditions_changed.emit()
 
     def get_calculation_type(self) -> CalculationType:
         """Get selected calculation type."""
@@ -852,23 +1118,55 @@ class ConditionsInputWidget(QWidget):
 
     def set_cce_config(self, config: CCEConfig) -> None:
         """Load CCE config into widget controls."""
-        self.cce_temperature.setValue(config.temperature_k - 273.15)
-        self.cce_p_start.setValue(config.pressure_start_pa / 1e5)
-        self.cce_p_end.setValue(config.pressure_end_pa / 1e5)
-        self.cce_n_steps.setValue(config.n_steps)
-        self.cce_pressure_points.setText(
-            self._format_pressure_points_bar(config.pressure_points_pa)
-        )
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.cce_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.cce_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.cce_pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.cce_pressure_unit.setCurrentIndex(p_index)
+
+        self.cce_temperature.setValue(temperature_from_k(config.temperature_k, temperature_unit))
+        if config.pressure_start_pa is not None:
+            self.cce_p_start.setValue(pressure_from_pa(config.pressure_start_pa, pressure_unit))
+        if config.pressure_end_pa is not None:
+            self.cce_p_end.setValue(pressure_from_pa(config.pressure_end_pa, pressure_unit))
+        if config.n_steps is not None:
+            self.cce_n_steps.setValue(config.n_steps)
+        if config.pressure_points_pa:
+            self._set_cce_pressure_points_text(
+                self._format_pressure_points(config.pressure_points_pa, pressure_unit),
+                auto_generated=True,
+            )
+        else:
+            self._set_cce_pressure_points_text("", auto_generated=True)
+            self._sync_cce_generated_pressure_points(force=True)
+        self._sync_cce_pressure_affordances()
 
     def set_dl_config(self, config: DLConfig) -> None:
         """Load DL config into widget controls."""
-        self.dl_temperature.setValue(config.temperature_k - 273.15)
-        self.dl_bubble_pressure.setValue(config.bubble_pressure_pa / 1e5)
-        self.dl_p_end.setValue(config.pressure_end_pa / 1e5)
-        self.dl_n_steps.setValue(config.n_steps)
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.dl_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.dl_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.dl_pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.dl_pressure_unit.setCurrentIndex(p_index)
+
+        self.dl_temperature.setValue(temperature_from_k(config.temperature_k, temperature_unit))
+        self.dl_bubble_pressure.setValue(pressure_from_pa(config.bubble_pressure_pa, pressure_unit))
+        if config.pressure_end_pa is not None:
+            self.dl_p_end.setValue(pressure_from_pa(config.pressure_end_pa, pressure_unit))
+        if config.n_steps is not None:
+            self.dl_n_steps.setValue(config.n_steps)
         self.dl_pressure_points.setText(
-            self._format_pressure_points_bar(config.pressure_points_pa)
+            self._format_pressure_points(config.pressure_points_pa, pressure_unit)
         )
+        self._sync_dl_pressure_affordances()
 
     def set_cvd_config(self, config: CVDConfig) -> None:
         """Load CVD config into widget controls."""
@@ -1081,18 +1379,37 @@ class ConditionsInputWidget(QWidget):
     def get_cce_config(self) -> Optional[CCEConfig]:
         """Get CCE configuration if valid."""
         try:
-            t_k = self.cce_temperature.value() + 273.15
-            pressure_points_pa = self._parse_pressure_points_bar(
+            temperature_unit = self._coerce_combo_enum(
+                self.cce_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
+            pressure_unit = self._coerce_combo_enum(
+                self.cce_pressure_unit.currentData(),
+                PressureUnit,
+            )
+            t_k = temperature_to_k(self.cce_temperature.value(), temperature_unit)
+            pressure_points_pa = self._parse_pressure_points(
                 self.cce_pressure_points.text()
+                ,
+                pressure_unit,
             )
             if pressure_points_pa is not None:
+                original_pressure_points_pa = list(pressure_points_pa)
+                pressure_points_pa = self._normalize_descending_pressure_points(pressure_points_pa)
+                normalized_text = self._format_pressure_points(pressure_points_pa, pressure_unit)
+                if self.cce_pressure_points.text().strip() != normalized_text:
+                    self.cce_pressure_points.setText(normalized_text)
+                if list(pressure_points_pa) != original_pressure_points_pa:
+                    self.status_hint.emit(self._cce_schedule_hint)
                 return CCEConfig(
                     temperature_k=t_k,
                     pressure_points_pa=pressure_points_pa,
+                    pressure_unit=pressure_unit,
+                    temperature_unit=temperature_unit,
                 )
 
-            p_start_pa = self.cce_p_start.value() * 1e5  # bar to Pa
-            p_end_pa = self.cce_p_end.value() * 1e5
+            p_start_pa = pressure_to_pa(self.cce_p_start.value(), pressure_unit)
+            p_end_pa = pressure_to_pa(self.cce_p_end.value(), pressure_unit)
 
             if p_start_pa <= p_end_pa:
                 self.validation_error.emit(
@@ -1105,6 +1422,8 @@ class ConditionsInputWidget(QWidget):
                 pressure_start_pa=p_start_pa,
                 pressure_end_pa=p_end_pa,
                 n_steps=self.cce_n_steps.value(),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
             )
         except Exception as e:
             self.validation_error.emit(str(e))
@@ -1113,19 +1432,34 @@ class ConditionsInputWidget(QWidget):
     def get_dl_config(self) -> Optional[DLConfig]:
         """Get DL configuration if valid."""
         try:
-            t_k = self.dl_temperature.value() + 273.15
-            bubble_pressure_pa = self.dl_bubble_pressure.value() * 1e5
-            pressure_points_pa = self._parse_pressure_points_bar(
+            temperature_unit = self._coerce_combo_enum(
+                self.dl_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
+            pressure_unit = self._coerce_combo_enum(
+                self.dl_pressure_unit.currentData(),
+                PressureUnit,
+            )
+            t_k = temperature_to_k(self.dl_temperature.value(), temperature_unit)
+            bubble_pressure_pa = pressure_to_pa(self.dl_bubble_pressure.value(), pressure_unit)
+            pressure_points_pa = self._parse_pressure_points(
                 self.dl_pressure_points.text()
+                ,
+                pressure_unit,
             )
             if pressure_points_pa is not None:
+                normalized_text = self._format_pressure_points(pressure_points_pa, pressure_unit)
+                if self.dl_pressure_points.text().strip() != normalized_text:
+                    self.dl_pressure_points.setText(normalized_text)
                 return DLConfig(
                     temperature_k=t_k,
                     bubble_pressure_pa=bubble_pressure_pa,
                     pressure_points_pa=pressure_points_pa,
+                    pressure_unit=pressure_unit,
+                    temperature_unit=temperature_unit,
                 )
 
-            p_end_pa = self.dl_p_end.value() * 1e5
+            p_end_pa = pressure_to_pa(self.dl_p_end.value(), pressure_unit)
 
             if bubble_pressure_pa <= p_end_pa:
                 self.validation_error.emit(
@@ -1138,6 +1472,8 @@ class ConditionsInputWidget(QWidget):
                 bubble_pressure_pa=bubble_pressure_pa,
                 pressure_end_pa=p_end_pa,
                 n_steps=self.dl_n_steps.value(),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
             )
         except Exception as e:
             self.validation_error.emit(str(e))

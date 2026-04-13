@@ -10,7 +10,7 @@ from typing import Final
 
 MIN_UI_SCALE = 0.8
 MAX_UI_SCALE = 1.6
-DEFAULT_UI_SCALE = 1.10
+DEFAULT_UI_SCALE = 1.05
 UI_SCALE_STEP = 0.10
 
 THEME_DARK: Final[str] = "dark"
@@ -284,6 +284,9 @@ QTableWidget {{
   border: 1px solid {palette['border']};
   border-radius: {px(10)}px;
 }}
+QTableWidget#CompositionInputTable {{
+  border-radius: 0px;
+}}
 QTableWidget#ResultsSectionTable {{
   border-radius: 0px;
 }}
@@ -303,6 +306,10 @@ QTabWidget#HeavyFractionTabs::pane {{
   border: none;
   background: transparent;
   margin-top: 0px;
+}}
+QTabWidget#HeavyFractionTabs QStackedWidget {{
+  background: transparent;
+  border: none;
 }}
 QTabBar::tab {{
   background: {palette['surface_elevated_bg']};

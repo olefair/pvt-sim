@@ -31,6 +31,89 @@ Before non-trivial repo work here:
 3. If you are creating, managing, or auditing delegated/concurrent work, read
    `PVTSIM_DEPENDENCY_MAP.md`.
 
+## Temporary Codex Orchestration Contract
+
+This contract governs Codex behavior in this repository until the current
+assignment phase is complete or this document is explicitly replaced.
+
+### Purpose
+
+The goal is to preserve the richest correct codebase with the least
+coordination overhead.
+
+Git is used here for auditability, rollback, synchronization, and controlled
+integration. Elegant history is not the priority. Stable forward progress is.
+
+### Core terms
+
+- `main` is the canonical integration branch.
+- `integration root` is the dedicated clean worktree attached to `main`.
+- `lane` is a scoped implementation stream such as `gui`, `thermo`,
+  `validation`, or `scratch`.
+- `lane worktree` is a worker checkout used for implementation within one lane.
+
+### Lane roster
+
+- `gui`
+- `thermo`
+- `validation`
+- `scratch`
+
+### Operating model
+
+This repo uses a controller-and-worker model.
+
+- One controller thread acts as the command center.
+- One clean integration root is reserved for `main` integration work.
+- Worker lanes may use their own branch and worktree when isolation is
+  warranted.
+- No feature implementation occurs in the integration root.
+- All accepted progress flows through `main`.
+
+### Integration-root rule
+
+All branch-state operations involving `main` must be rooted through the
+integration root.
+
+The integration root is the only surface allowed to:
+- reconcile with `main`
+- absorb lane work into `main`
+- run final publish verification for `main`
+- push updates to `main`
+- perform merge, rebase, cherry-pick, revert, or similar operations that
+  affect `main`
+
+There are no exceptions to this rule.
+
+### Publish path
+
+All accepted progress flows as follows:
+
+`lane worktree -> integration root -> main`
+
+No lane may merge directly into another lane. No lane may publish directly to
+`main`. Other lanes refresh only from `main`.
+
+### Roles
+
+Controller thread:
+- classifies work
+- starts and directs workers
+- prevents overlap
+- decides when a lane has reached a checkpoint-ready slice
+- routes refresh, absorb, and push operations through the integration root
+
+Worker subagents:
+- implement only within assigned scope
+- do not broaden scope on their own
+- do not make Git strategy decisions
+- produce narrow, auditable deltas
+
+Integrator:
+- operates only through the integration root
+- performs refresh, absorb, verification, and push operations affecting `main`
+- never performs feature implementation
+
 ## Concurrency rule
 
 Default posture:
@@ -38,12 +121,23 @@ Default posture:
 - do not allow cross-contamination across touched repo surfaces
 - do not run overlapping concurrent work on the same repo surface unless a
   controller explicitly documents the coordination rule
+- do not perform any `main`-affecting Git operation outside the integration
+  root
+
+Parallel work is allowed only when repo-touch overlap is low enough to be
+safe.
+
+If overlap is discovered after work begins, stop the later task and escalate
+to the controller.
 
 ## Dependency-map rule
 
 `PVTSIM_DEPENDENCY_MAP.md` is the controller-owned operational map for:
 - active work partitions
 - touched repo surfaces
+- lane ownership and touched surfaces
+- active lane branch / worktree state
+- behind-`main` status and last absorbed commit
 - dependency edges
 - blocked edges
 - serial-only/shared surfaces
@@ -51,6 +145,68 @@ Default posture:
 If delegated or concurrent work changes scope, touched files, or dependency
 ordering, update the dependency map before spawning more work or declaring the
 map current.
+
+## Shared / Serial-only Surfaces
+
+These are controller-only unless explicitly reassigned:
+
+- `AGENTS.md`
+- `PVTSIM_DEPENDENCY_MAP.md`
+- `.github/`
+- `pyproject.toml`
+- `requirements*.txt`
+- repo-wide workflow documentation
+- branch and worktree lifecycle operations
+- merge, rebase, cherry-pick, revert, and push operations
+- broad refactors spanning multiple lanes
+
+## Checkpoint Cadence
+
+Workers must not accumulate large unpublished deltas.
+
+When a lane reaches a coherent, verified slice, absorbing that slice into
+`main` should be treated as the default next step rather than postponed
+cleanup.
+
+A coherent slice includes:
+- a completed bug fix
+- a user-visible improvement
+- a completed small feature slice
+- a verified refactor step
+- any test-backed state worth preserving
+
+## Worker Boundaries
+
+Workers may:
+- implement scoped changes
+- create lane-local commits
+- run the smallest relevant verification for their assigned work
+
+Workers may not:
+- touch shared or serial-only surfaces unless explicitly told to
+- merge into `main`
+- push to `main`
+- reconcile branch state involving `main`
+- merge lane-to-lane
+- choose branch or worktree strategy on their own
+
+## Escalation
+
+Stop and escalate to the controller when:
+- scope expands beyond the assigned lane
+- overlap with another active lane is discovered
+- shared or serial-only surfaces are required
+- another lane must be touched
+- a Git decision affecting `main` is needed
+- verification suggests cross-lane impact
+
+## Output Contract
+
+Worker closeout must contain only:
+- changed files
+- what changed
+- verification run
+- blocker or residual risk
 
 ## Documentation boundary
 
@@ -72,4 +228,3 @@ without explicit documentation and user-facing disclosure.
 Read `AGENTS.md` for execution boundaries.
 Read `docs/` for simulator reality.
 Use `PVTSIM_DEPENDENCY_MAP.md` only for safe parallelization work.
-

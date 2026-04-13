@@ -922,6 +922,8 @@ def execute_cce(
             liquid_fraction=_finite_or_none(step.liquid_volume_fraction),
             vapor_fraction=_finite_or_none(step.vapor_fraction),
             z_factor=_finite_or_none(step.compressibility_Z),
+            liquid_density_kg_per_m3=_finite_or_none(step.liquid_density),
+            vapor_density_kg_per_m3=_finite_or_none(step.vapor_density),
         )
         for step in result.steps
     ]

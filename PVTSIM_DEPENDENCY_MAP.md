@@ -43,6 +43,28 @@ The limiting factors are:
 - shared/serial-only surfaces
 - checkpoint/audit burden
 
+## Temporary Codex lane model
+
+For the current assignment-phase Codex workflow, use the following operational
+model:
+
+- `main` is the canonical integration branch
+- `integration root` is the only worktree allowed to perform branch-state
+  operations affecting `main`
+- accepted progress flows `lane worktree -> integration root -> main`
+- lane worktrees refresh only from `main`
+- lane-to-lane merges are not allowed
+
+Default lane names:
+
+- `gui`
+- `thermo`
+- `validation`
+- `scratch`
+
+Use these lane names when opening or updating active slices unless a controller
+records an explicit exception.
+
 ## Provisional parallel partitions
 
 These are the initial high-level concurrency partitions for Phase 1. Refine them as the real work proves a better split.
@@ -101,105 +123,95 @@ Use this section to record real active delegated slices.
 For each active slice, include:
 - directive / task name
 - owner / lane
+- branch
+- worktree
 - touched repo surfaces
+- forbidden / shared surfaces
+- behind-main status
+- last absorbed commit
 - upstream dependencies
 - blocked_by / blockers
 - status
 - last structural update
 
 ### Current active slices
-- directive / task name: gui runtime follow-on lane
-  owner / lane: Ole + Codex on planned `codex/gui`
+- directive / task name: gui general UI fixes
+  owner / lane: Ole + Codex on active `gui` lane
+  branch:
+  - planned `codex/gui`
+  worktree:
+  - pending dedicated `gui` worker bootstrap from current `main`
   touched repo surfaces:
-  - `src/pvtapp/`
+  - `src/pvtapp/widgets/`
+  - `src/pvtapp/style.py`
+  - `src/pvtapp/main.py`
   - `tests/unit/test_pvtapp_*`
-  - `tests/unit/test_cli_validate.py`
-  - `README.md`
-  - `docs/development.md`
-  - `docs/runtime_surface_standard.md`
-  - `examples/pete665_assignment_case.json`
-  - `scripts/run_pete665_assignment.py`
-  - `scripts/validate_modules.py`
-  upstream dependencies:
-  - starts from the 2026-04-12 merged mainline baseline prepared from `codex/handoff-external-validation`
-  - phase-envelope solver work must be consumed through the stable runtime contract, not by parallel edits inside `src/pvtcore/envelope/`
-  blocked_by / blockers:
-  - none currently recorded
-  status:
-  - declared for immediate dedicated worktree creation from updated `main`
-  coordination rule:
-  - keep this lane out of `src/pvtcore/envelope/`, `tests/validation/test_phase_envelope_*`, and `tests/validation/test_vs_*` unless a controller records an explicit shared-surface serialization rule
-  last structural update:
-  - 2026-04-12
-
-- directive / task name: runtime surface consolidation + assignment validation expansion
-  owner / lane: Ole + Codex on `codex/validate-composition-across-modules`
-  touched repo surfaces:
+  forbidden / shared surfaces:
   - `AGENTS.md`
-  - `README.md`
-  - `docs/development.md`
-  - `docs/input_schema.md`
-  - `docs/runtime_surface_standard.md`
-  - `docs/runtime_surface_consolidation_blueprint.md`
-  - `docs/validation/`
-  - `examples/pete665_assignment_case.json`
-  - `scripts/audit_component_aliases.py`
-  - `scripts/debug_phase_envelope_roots.py`
-  - `scripts/run_pete665_assignment.py`
-  - `scripts/validate_modules.py`
+  - `PVTSIM_DEPENDENCY_MAP.md`
+  - `.github/`
+  - `pyproject.toml`
+  - `requirements*.txt`
   - `src/pvtapp/assignment_case.py`
   - `src/pvtapp/component_catalog.py`
   - `src/pvtapp/job_runner.py`
-  - `src/pvtapp/main.py`
   - `src/pvtapp/plus_fraction_policy.py`
   - `src/pvtapp/schemas.py`
-  - `src/pvtapp/widgets/`
-  - `src/pvtcore/characterization/pipeline.py`
+  - `src/pvtcore/`
+  - `tests/validation/`
+  - `docs/validation/`
+  behind-main status:
+  - clean launch requested from current `main` controller baseline
+  last absorbed commit:
+  - none yet
+  upstream dependencies:
+  - starts from current `main`
+  blocked_by / blockers:
+  - none currently recorded
+  status:
+  - active and ready for worker spawn on general UI fixes
+  coordination rule:
+  - no other active lane conflicts are currently recorded
+  - widen ownership only through an explicit controller update
+  last structural update:
+  - 2026-04-13
+
+- directive / task name: phase-envelope kernel slice
+  owner / lane: Codex background `thermo` lane
+  branch:
+  - planned `codex/phase-envelope`
+  worktree:
+  - `C:/Users/olefa/.codex/worktrees/phase-envelope-pvt-sim_canon`
+  touched repo surfaces:
   - `src/pvtcore/envelope/`
-  - `src/pvtcore/experiments/cce.py`
-  - `src/pvtcore/flash/bubble_point.py`
-  - `src/pvtcore/flash/dew_point.py`
-  - `src/pvtcore/io/data_io.py`
-  - `src/pvtcore/io/fluid_definition.py`
-  - `src/pvtcore/models/component.py`
-  - `src/pvtcore/validation/`
-  - `tests/unit/test_envelope_*`
-  - `tests/unit/test_fluid_definition_parser.py`
-  - `tests/unit/test_pete665_assignment.py`
-  - `tests/unit/test_pvtapp_*`
-  - `tests/unit/test_saturation.py`
-  - `tests/unit/test_validation_backend_registry.py`
-  - `tests/validation/mi_pvt/`
-  - `tests/validation/prode/`
-  - `tests/validation/thermopack/`
+  - `tests/unit/test_envelope.py`
+  - `tests/unit/test_envelope_continuation.py`
   - `tests/validation/test_phase_envelope_release_gates.py`
   - `tests/validation/test_phase_envelope_runtime_matrix.py`
-  - `tests/validation/test_plus_fraction_bubble_characterization.py`
-  - `tests/validation/test_plus_fraction_dew_characterization.py`
-  - `tests/validation/test_saturation_equation_benchmarks.py`
-  - `tests/validation/test_vs_mi_pvt.py`
-  - `tests/validation/test_vs_prode.py`
-  - `tests/validation/test_vs_thermopack.py`
-  - `tests/validation/mi_pvt/`
-  - `tests/validation/prode/`
-  - `tests/validation/thermopack/`
-  - `scripts/debug_phase_envelope_roots.py`
-  - `docs/validation/phase_envelope_validation_matrix.md`
-  - `docs/validation/mi_pvt_phase_envelope_roster.md`
+  forbidden / shared surfaces:
+  - `AGENTS.md`
+  - `PVTSIM_DEPENDENCY_MAP.md`
+  - `.github/`
+  - `pyproject.toml`
+  - `requirements*.txt`
+  - `src/pvtapp/`
+  - `src/pvtcore/experiments/tbp.py`
+  - `docs/tbp.md`
+  behind-main status:
+  - clean launch requested from current `main` controller baseline
+  last absorbed commit:
+  - none yet
   upstream dependencies:
-  - starts from the same 2026-04-12 merged mainline baseline
-  - owns the carried local continuation checkpoint preserved on `codex/phase-envelope`
-  - saturation authority and external-corpus ingestion remain upstream references, but critical-point alignment and release-gate/runtime-matrix certification are owned here
+  - starts from current `main`
   blocked_by / blockers:
-  - the continuation/ThermoPack critical-point mismatch remains unresolved
-  - release-gate and runtime-matrix certification still need a fresh pass after follow-on solver changes
+  - none currently recorded
   status:
-  - mainline reconciliation in progress on the reconciled validation-across-modules lane
+  - active background worker launch requested for one substantial envelope kernel slice
   coordination rule:
-  - do not run overlapping edits across `src/pvtapp/`, `src/pvtcore/flash/`, `src/pvtcore/envelope/`, `src/pvtcore/validation/`, and validation docs until this cleanup checkpoint lands
-  - treat fresh `phase-envelope` and `gui` work as follow-on lanes branched from updated `main`, not from this mixed validation lane
+  - no overlap with the active `gui` surface
+  - stop immediately if the slice needs `pvtapp` or shared surfaces
   last structural update:
-  - 2026-04-12
+  - 2026-04-13
 
 ## Dependency refresh protocol
 
@@ -238,3 +250,4 @@ Do not run concurrent delegated work against the same repo surface unless the co
 - 2026-04-12: Added the unified saturation-validation lane so bubble-point and dew-point authority, robustness, and GUI honesty stay in one controlled surface.
 - 2026-04-12: Added the runtime-surface consolidation + assignment validation expansion slice to capture the current branch scope while the dirty worktree is being cleaned for commit.
 - 2026-04-12: Reconciled the active mixed local lane onto `codex/validate-composition-across-modules` so fresh `phase-envelope` and `gui` follow-on branches can split cleanly from updated `main`.
+- 2026-04-13: Refreshed the ledger to match the current operating model: `gui` is the active lane being launched from `main`, and no other active lane is currently recorded.

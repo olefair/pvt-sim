@@ -8,13 +8,17 @@ from typing import Optional
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QTextEdit, QVBoxLayout, QWidget
 
+from pvtapp.capabilities import GUI_EOS_TYPE_LABELS
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.schemas import (
+    EOSType,
     PressureUnit,
     PTFlashConfig,
     RunResult,
     SaturationPointConfig,
+    CCEConfig,
+    DLConfig,
     TemperatureUnit,
     pressure_from_pa,
     temperature_from_k,
@@ -57,6 +61,23 @@ def _saturation_units(config: Optional[SaturationPointConfig]) -> tuple[Pressure
     if config is None:
         return PressureUnit.BAR, TemperatureUnit.C
     return config.pressure_unit, config.temperature_unit
+
+
+def _cce_units(config: Optional[CCEConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
+
+
+def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
+
+
+def format_eos_label(eos_type: EOSType) -> str:
+    """Return the GUI-facing EOS label for reports and compact summaries."""
+    return GUI_EOS_TYPE_LABELS.get(eos_type, eos_type.value.replace("_", " ").title())
 
 
 class TextOutputWidget(QWidget):
@@ -105,7 +126,7 @@ class TextOutputWidget(QWidget):
 
         lines.append(f"Run: {result.run_name or result.run_id}")
         lines.append(f"Status: {result.status.value}")
-        lines.append(f"EOS: {cfg.eos_type.value}")
+        lines.append(f"EOS: {format_eos_label(cfg.eos_type)}")
         if result.duration_seconds is not None:
             lines.append(f"Duration: {result.duration_seconds:.3f} s")
         lines.append("")
@@ -248,35 +269,53 @@ class TextOutputWidget(QWidget):
 
         elif result.cce_result is not None:
             r = result.cce_result
+            pressure_unit, temperature_unit = _cce_units(cfg.cce_config)
             lines.append("CCE")
             lines.append("---")
-            lines.append(f"T = {r.temperature_k:.3f} K")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
             if r.saturation_pressure_pa is not None:
-                lines.append(f"Psat = {_pa_to_bar(r.saturation_pressure_pa):.5f} bar")
+                lines.append(f"Psat = {_format_pressure(r.saturation_pressure_pa, pressure_unit)}")
             lines.append("")
-            lines.append("P (bar)        RelVol     z")
+            lines.append(f"P ({pressure_unit.value})        RelVol      rhoL      rhoV        z")
             for step in r.steps[:80]:
                 z = step.z_factor
                 z_txt = f"{z:.5f}" if z is not None else ""
-                lines.append(f"{_pa_to_bar(step.pressure_pa):>10.5f} {step.relative_volume:>10.5f} {z_txt:>8s}")
+                liquid_density = step.liquid_density_kg_per_m3
+                vapor_density = step.vapor_density_kg_per_m3
+                liquid_txt = (
+                    f"{liquid_density:.2f}"
+                    if liquid_density is not None and liquid_density > 0
+                    else "-"
+                )
+                vapor_txt = (
+                    f"{vapor_density:.2f}"
+                    if vapor_density is not None and vapor_density > 0
+                    else "-"
+                )
+                lines.append(
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
+                    f"{step.relative_volume:>10.5f} "
+                    f"{liquid_txt:>9s} {vapor_txt:>9s} {z_txt:>8s}"
+                )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
             lines.append("")
 
         elif result.dl_result is not None:
             r = result.dl_result
+            pressure_unit, temperature_unit = _dl_units(cfg.dl_config)
             lines.append("Differential liberation")
             lines.append("-----------------------")
-            lines.append(f"T = {r.temperature_k:.3f} K")
-            lines.append(f"Pb = {_pa_to_bar(r.bubble_pressure_pa):.5f} bar")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"Pb = {_format_pressure(r.bubble_pressure_pa, pressure_unit)}")
             lines.append(f"Rsi = {r.rsi:.5f}")
             lines.append(f"Boi = {r.boi:.5f}")
             lines.append(f"Converged: {r.converged}")
             lines.append("")
-            lines.append("P (bar)         Rs         Bo         Bt     VaporFrac")
+            lines.append(f"P ({pressure_unit.value})         Rs         Bo         Bt     VaporFrac")
             for step in r.steps[:80]:
                 lines.append(
-                    f"{_pa_to_bar(step.pressure_pa):>10.5f} "
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
                     f"{step.rs:>10.5f} "
                     f"{step.bo:>10.5f} "
                     f"{step.bt:>10.5f} "

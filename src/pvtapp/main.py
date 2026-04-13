@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 import uuid
 
-from PySide6.QtCore import QSettings, Qt, Slot
+from PySide6.QtCore import QSettings, Qt, QTimer, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFileDialog,
     QPushButton,
+    QSizePolicy,
 )
 
 from pvtapp import __version__, __app_name__
@@ -47,6 +48,7 @@ from pvtapp.widgets import (
     ConditionsInputWidget,
     ResultsTableWidget,
     ResultsSidebarWidget,
+    UnitConverterWidget,
     ResultsPlotWidget,
     DiagnosticsWidget,
     InputsPanel,
@@ -241,6 +243,14 @@ class PVTSimulatorWindow(QMainWindow):
         validate_btn.clicked.connect(self._validate_input)
         toolbar.addWidget(validate_btn)
 
+        toolbar.addSeparator()
+        self._toolbar_spacer = QWidget()
+        self._toolbar_spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(self._toolbar_spacer)
+
+        self.unit_converter_widget = UnitConverterWidget()
+        toolbar.addWidget(self.unit_converter_widget)
+
     def _setup_central_widget(self) -> None:
         """Create central widget with fixed sidebars and configurable center panes."""
 
@@ -251,9 +261,8 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Outputs / tools (single shared instances)
         self.results_table = ResultsTableWidget()
-        self.results_report_widget = TextOutputWidget()
-        self.results_sidebar = ResultsSidebarWidget(self.results_table, self.results_report_widget)
-        self.results_plot = ResultsPlotWidget(view_mode="phase_envelope_only")
+        self.results_sidebar = ResultsSidebarWidget(self.results_table)
+        self.results_plot = ResultsPlotWidget(view_mode="generic")
         self.diagnostics_widget = DiagnosticsWidget()
         self.text_output_widget = TextOutputWidget()
 
@@ -272,7 +281,7 @@ class PVTSimulatorWindow(QMainWindow):
             ViewSpec("interaction_params", "Interaction para."),
             ViewSpec("log", "Log"),
             ViewSpec("text_output", "Text output"),
-            ViewSpec("phase_envelope", "Phase Envelope"),
+            ViewSpec("phase_envelope", "Plot"),
             ViewSpec("diagnostics", "Diagnostics"),
             ViewSpec("vapor_saturation", "Vapor saturation"),
         ]
@@ -297,7 +306,7 @@ class PVTSimulatorWindow(QMainWindow):
             fixed_width=360,
             fixed_right_widget=self.results_sidebar,
             fixed_right_title="Results",
-            fixed_right_width=340,
+            fixed_right_width=420,
             default_pane_mode="single",
         )
         self.setCentralWidget(self.workspace)
@@ -323,11 +332,33 @@ class PVTSimulatorWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         statusbar.addPermanentWidget(self.progress_bar)
 
+        self._status_style_reset_timer = QTimer(self)
+        self._status_style_reset_timer.setSingleShot(True)
+        self._status_style_reset_timer.timeout.connect(
+            lambda: self.status_label.setStyleSheet("")
+        )
+
+    def _set_status_message(
+        self,
+        message: str,
+        *,
+        color: Optional[str] = None,
+        timeout_ms: int = 0,
+    ) -> None:
+        """Update the bottom status strip with optional transient emphasis."""
+        self._status_style_reset_timer.stop()
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet("" if color is None else f"color: {color};")
+        if color is not None and timeout_ms > 0:
+            self._status_style_reset_timer.start(timeout_ms)
+
     def _connect_signals(self) -> None:
         """Connect widget signals."""
         # Validation errors
         self.composition_widget.validation_error.connect(self._show_validation_error)
         self.conditions_widget.validation_error.connect(self._show_validation_error)
+        self.conditions_widget.status_hint.connect(self._show_status_hint)
+        self.conditions_widget.status_warning.connect(self._show_status_warning)
 
         # Composition edits drive derived views
         self.composition_widget.composition_edited.connect(self._update_component_dependent_views)
@@ -338,7 +369,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.results_table.export_requested.connect(self._export_results)
         self.workspace.theme_mode_changed.connect(self._set_theme_mode)
         self.run_log_widget.load_inputs_requested.connect(self._load_saved_run_inputs)
-        self.run_log_widget.result_selected.connect(self._on_logged_run_selected)
+        self.run_log_widget.result_activated.connect(self._on_logged_run_selected)
 
     @Slot()
     def _sync_characterization_context(self) -> None:
@@ -413,6 +444,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.workspace.apply_ui_scale(clamped_scale, previous_scale=previous_scale)
         self.composition_widget.apply_ui_scale(clamped_scale)
         self.results_sidebar.apply_ui_scale(clamped_scale)
+        self.unit_converter_widget.apply_ui_scale(clamped_scale)
         self.diagnostics_widget.apply_ui_scale(clamped_scale)
         if hasattr(self.text_output_widget, "apply_ui_scale"):
             self.text_output_widget.apply_ui_scale(clamped_scale)
@@ -423,7 +455,7 @@ class PVTSimulatorWindow(QMainWindow):
         self._ui_scale_initialized = True
 
         if announce:
-            self.status_label.setText(f"Zoom: {int(round(clamped_scale * 100))}%")
+            self._set_status_message(f"Zoom: {int(round(clamped_scale * 100))}%")
 
     @Slot(str)
     def _set_theme_mode(self, theme: str) -> None:
@@ -435,7 +467,7 @@ class PVTSimulatorWindow(QMainWindow):
             build_cato_stylesheet(scale=self._ui_scale, theme=self._theme_mode)
         )
         self._persist_theme_mode()
-        self.status_label.setText(f"Palette: {'Slate' if theme == THEME_SLATE else 'Dark'}")
+        self._set_status_message(f"Palette: {'Slate' if theme == THEME_SLATE else 'Dark'}")
 
     @Slot()
     def _zoom_in(self) -> None:
@@ -602,7 +634,7 @@ class PVTSimulatorWindow(QMainWindow):
         self.conditions_widget.load_from_run_config(config)
         self._update_component_dependent_views()
         if status_message is not None:
-            self.status_label.setText(status_message)
+            self._set_status_message(status_message)
 
     def _set_results_pane_title(self, title: str) -> None:
         """Update the fixed results-pane title."""
@@ -619,7 +651,7 @@ class PVTSimulatorWindow(QMainWindow):
         """Start a calculation thread from an already-built configuration."""
         self._set_running_state(True)
         self._set_results_pane_title(self._results_title_for_config(config))
-        self.status_label.setText(f"Running {config.calculation_type.value}...")
+        self._set_status_message(f"Running {config.calculation_type.value}...")
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
 
@@ -665,7 +697,7 @@ class PVTSimulatorWindow(QMainWindow):
             self.diagnostics_widget.clear()
             self.text_output_widget.clear()
             self._set_results_pane_title("Results")
-            self.status_label.setText("Ready")
+            self._set_status_message("Ready")
 
     @Slot()
     def _open_config(self) -> None:
@@ -714,7 +746,7 @@ class PVTSimulatorWindow(QMainWindow):
                 with open(filename, 'w') as f:
                     json.dump(config.model_dump(mode='json'), f, indent=2, default=str)
 
-                self.status_label.setText(f"Saved: {Path(filename).name}")
+                self._set_status_message(f"Saved: {Path(filename).name}")
 
             except Exception as e:
                 QMessageBox.critical(
@@ -847,7 +879,7 @@ class PVTSimulatorWindow(QMainWindow):
                             stage.converged,
                         ])
 
-            self.status_label.setText(f"Exported: {Path(filename).name}")
+            self._set_status_message(f"Exported: {Path(filename).name}")
 
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
@@ -859,7 +891,7 @@ class PVTSimulatorWindow(QMainWindow):
             with open(filename, 'w') as f:
                 json.dump(result.model_dump(mode='json'), f, indent=2, default=str)
 
-            self.status_label.setText(f"Exported: {Path(filename).name}")
+            self._set_status_message(f"Exported: {Path(filename).name}")
 
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
@@ -948,7 +980,7 @@ class PVTSimulatorWindow(QMainWindow):
             "Setup Recommendation",
             format_run_recommendation(recommendation),
         )
-        self.status_label.setText("Recommendation ready")
+        self._set_status_message("Recommendation ready")
 
     @Slot()
     def _run_calculation(self) -> None:
@@ -976,7 +1008,7 @@ class PVTSimulatorWindow(QMainWindow):
 
     @Slot(object)
     def _on_logged_run_selected(self, result: Optional[RunResult]) -> None:
-        """Render a saved run selection into the fixed right-side results rail."""
+        """Render an explicitly activated saved run into the fixed right-side results rail."""
         if result is None:
             self.results_sidebar.clear()
             self._set_results_pane_title("Results")
@@ -990,18 +1022,18 @@ class PVTSimulatorWindow(QMainWindow):
         """Cancel running calculation."""
         if self._current_thread:
             self._current_thread.cancel()
-            self.status_label.setText("Cancelling...")
+            self._set_status_message("Cancelling...")
 
     @Slot(str, str)
     def _on_calculation_started(self, run_id: str, calc_type: str) -> None:
         """Handle calculation started signal."""
-        self.status_label.setText(f"Running {calc_type}...")
+        self._set_status_message(f"Running {calc_type}...")
 
     @Slot(str, int, str)
     def _on_calculation_progress(self, run_id: str, progress: int, message: str) -> None:
         """Handle progress update signal."""
         self.progress_bar.setValue(progress)
-        self.status_label.setText(message)
+        self._set_status_message(message)
 
     @Slot(object)
     def _on_calculation_finished(self, result: RunResult) -> None:
@@ -1027,13 +1059,13 @@ class PVTSimulatorWindow(QMainWindow):
 
         # Update status
         if result.status == RunStatus.COMPLETED:
-            self.status_label.setText(
+            self._set_status_message(
                 f"Completed in {result.duration_seconds:.2f}s"
             )
         elif result.status == RunStatus.CANCELLED:
-            self.status_label.setText("Calculation cancelled")
+            self._set_status_message("Calculation cancelled")
         else:
-            self.status_label.setText(f"Calculation failed: {result.error_message}")
+            self._set_status_message(f"Calculation failed: {result.error_message}")
 
     @Slot(str, str)
     def _on_calculation_error(self, run_id: str, error_message: str) -> None:
@@ -1045,7 +1077,7 @@ class PVTSimulatorWindow(QMainWindow):
             self, "Calculation Error",
             f"Calculation failed:\n\n{error_message}"
         )
-        self.status_label.setText("Calculation failed")
+        self._set_status_message("Calculation failed")
 
     def _set_running_state(self, running: bool) -> None:
         """Update UI for running/idle state."""
@@ -1060,12 +1092,29 @@ class PVTSimulatorWindow(QMainWindow):
     @Slot(str)
     def _show_validation_error(self, message: str) -> None:
         """Show validation error in status bar."""
-        self.status_label.setText(f"Validation error: {message}")
-        self.status_label.setStyleSheet("color: red;")
+        self._set_status_message(
+            f"Validation error: {message}",
+            color="red",
+            timeout_ms=3000,
+        )
 
-        # Reset style after 3 seconds
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(3000, lambda: self.status_label.setStyleSheet(""))
+    @Slot(str)
+    def _show_status_hint(self, message: str) -> None:
+        """Show a transient non-error reminder in the status bar."""
+        self._set_status_message(
+            message,
+            color="#93c5fd",
+            timeout_ms=5000,
+        )
+
+    @Slot(str)
+    def _show_status_warning(self, message: str) -> None:
+        """Show a transient warning in the status bar."""
+        self._set_status_message(
+            message,
+            color="#fbbf24",
+            timeout_ms=5000,
+        )
 
     @Slot()
     def _show_about(self) -> None:
