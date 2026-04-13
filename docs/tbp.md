@@ -1,20 +1,17 @@
 # TBP Status
 
-Dedicated TBP workflows are not implemented in this repo today.
+A bounded standalone TBP kernel now exists in `pvtcore` at `pvtcore.experiments.tbp`.
 
-Current status:
+Current supported surface:
 
-- Phase 1 support exists in the schema-driven `pvtcore` fluid-definition path only.
-- `fluid.plus_fraction.tbp_data.cuts` can be used by `load_fluid_definition(...)` + `characterize_from_schema(...)` to derive aggregate plus-fraction inputs (`z_plus` and `mw_plus_g_per_mol`) for the existing characterization pipeline.
-- There is no supported `pvtcore.experiments.tbp` module.
-- There is no supported `pvtapp` calculation type for TBP runs.
-- The supported laboratory workflows are CCE, DL, CVD, and multi-stage separator calculations.
+- `pvtcore.experiments.tbp.simulate_tbp(...)` accepts phase-1 TBP cuts (`C<number>` names with `z` and `mw`, plus optional `sg`) and returns a standalone cut-resolved assay summary.
+- The standalone result includes derived `z_plus` / `mw_plus_g_per_mol` plus cumulative mole- and mass-yield curves across the ordered cuts.
+- `fluid.plus_fraction.tbp_data.cuts` remains supported in the schema-driven `load_fluid_definition(...)` + `characterize_from_schema(...)` path.
+- There is still no supported `pvtapp` calculation type for TBP runs.
 
-Phase-1 limitations:
+Current limitations:
 
-- TBP cut data is input-side characterization support, not a standalone TBP experiment product.
-- `solve_AB_from: fit_to_tbp` remains unsupported.
-- Phase 1 accepts only contiguous one-carbon cuts starting at `fluid.plus_fraction.cut_start`.
-- Gapped assays, interval cuts, and temperature-endpoint fitting remain out of scope.
-
-Use TBP data today only as a way to derive aggregate plus-fraction inputs inside `pvtcore`. Do not assume GUI, CLI, or dedicated lab-workflow support for TBP runs.
+- The repo-local TBP contract does not yet carry boiling-point or temperature-endpoint data, so the standalone module does not generate temperature-based distillation curves or fit boiling-point correlations.
+- Phase 1 still accepts only contiguous one-carbon cuts starting at `fluid.plus_fraction.cut_start`.
+- Gapped assays, interval cuts, and `solve_AB_from: fit_to_tbp` remain unsupported.
+- TBP remains kernel-only: no GUI or CLI workflow or dedicated `pvtapp` lab-test runner is exposed.

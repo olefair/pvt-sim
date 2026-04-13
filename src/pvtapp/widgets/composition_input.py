@@ -48,7 +48,9 @@ from pvtapp.schemas import (
     PlusFractionCharacterizationPreset,
     PressureUnit,
     TemperatureUnit,
+    pressure_from_pa,
     pressure_to_pa,
+    temperature_from_k,
     temperature_to_k,
 )
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
@@ -290,6 +292,7 @@ class CompositionInputWidget(QWidget):
 
         # Component table
         self.table = QTableWidget()
+        self.table.setObjectName("CompositionInputTable")
         self.table.setColumnCount(2)
         self.table.setHorizontalHeaderLabels(["Component", "Mole Fraction"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -349,6 +352,7 @@ class CompositionInputWidget(QWidget):
 
         plus_page = QWidget()
         plus_form = QFormLayout(plus_page)
+        self.plus_form = plus_form
         self._configure_form_layout(plus_form)
         self.plus_label_edit = QLineEdit(PLUS_FRACTION_TOKEN)
         self.plus_cut_start_spin = NoWheelSpinBox()
@@ -433,6 +437,7 @@ class CompositionInputWidget(QWidget):
         heavy_layout.addWidget(self.heavy_tabs)
         layout.addWidget(heavy_group)
 
+        self._sync_heavy_tab_spacing()
         self._on_heavy_mode_changed()
         self._refresh_plus_characterization_preview()
         self._sync_plus_lumping_state()
@@ -880,6 +885,12 @@ class CompositionInputWidget(QWidget):
         """Scale metrics relative to the current default desktop baseline."""
         return scale_metric(value, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
 
+    def _sync_heavy_tab_spacing(self) -> None:
+        """Keep a small visual gap between the tab strip and the first form row."""
+        top_margin = scale_metric(6, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        for form_layout in (self.plus_form, self.inline_form):
+            form_layout.setContentsMargins(0, top_margin, 0, 0)
+
     def apply_ui_scale(self, ui_scale: float) -> None:
         """Scale non-QSS geometry to follow the app zoom level."""
         self._ui_scale = ui_scale
@@ -910,6 +921,7 @@ class CompositionInputWidget(QWidget):
             combo = self.table.cellWidget(row, 0)
             if isinstance(combo, ClickSelectComboBox):
                 combo.apply_ui_scale(ui_scale)
+        self._sync_heavy_tab_spacing()
         self._sync_table_height()
 
     def _connect_signals(self) -> None:
@@ -1173,6 +1185,8 @@ class CompositionInputWidget(QWidget):
             return None, None, error
 
         try:
+            tc_unit = TemperatureUnit(self.inline_tc_unit.currentText())
+            pc_unit = PressureUnit(self.inline_pc_unit.currentText())
             spec = InlineComponentSpec(
                 component_id=component_id,
                 name=name,
@@ -1180,12 +1194,14 @@ class CompositionInputWidget(QWidget):
                 molecular_weight_g_per_mol=float(mw),
                 critical_temperature_k=temperature_to_k(
                     float(tc_raw),
-                    TemperatureUnit(self.inline_tc_unit.currentText()),
+                    tc_unit,
                 ),
                 critical_pressure_pa=pressure_to_pa(
                     float(pc_raw),
-                    PressureUnit(self.inline_pc_unit.currentText()),
+                    pc_unit,
                 ),
+                critical_temperature_unit=tc_unit,
+                critical_pressure_unit=pc_unit,
                 omega=float(omega),
             )
             return spec, float(z_inline), None
@@ -1704,10 +1720,14 @@ class CompositionInputWidget(QWidget):
                 self.inline_z_edit.setText(f"{inline_fraction:.6f}")
             self.heavy_mode.setCurrentIndex(self.heavy_mode.findData(HEAVY_MODE_INLINE))
             self.inline_mw_edit.setText(f"{spec.molecular_weight_g_per_mol:.6f}")
-            self.inline_tc_unit.setCurrentText(TemperatureUnit.K.value)
-            self.inline_tc_edit.setText(f"{spec.critical_temperature_k:.6f}")
-            self.inline_pc_unit.setCurrentText(PressureUnit.PA.value)
-            self.inline_pc_edit.setText(f"{spec.critical_pressure_pa:.6f}")
+            self.inline_tc_unit.setCurrentText(spec.critical_temperature_unit.value)
+            self.inline_tc_edit.setText(
+                f"{temperature_from_k(spec.critical_temperature_k, spec.critical_temperature_unit):.6f}"
+            )
+            self.inline_pc_unit.setCurrentText(spec.critical_pressure_unit.value)
+            self.inline_pc_edit.setText(
+                f"{pressure_from_pa(spec.critical_pressure_pa, spec.critical_pressure_unit):.6f}"
+            )
             self.inline_omega_edit.setText(f"{spec.omega:.6f}")
 
         self._sync_table_height()

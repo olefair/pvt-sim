@@ -28,11 +28,13 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSizePolicy,
+    QLineEdit,
 )
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
-from pvtapp.widgets.text_output_view import TextOutputWidget
+from pvtapp.widgets.text_output_view import format_eos_label
+from pvtapp.widgets.combo_box import NoWheelComboBox, NoWheelDoubleSpinBox
 from pvtapp.schemas import (
     RunResult,
     RunStatus,
@@ -46,10 +48,14 @@ from pvtapp.schemas import (
     CVDResult,
     SeparatorResult,
     SaturationPointConfig,
+    CCEConfig,
+    DLConfig,
     PressureUnit,
     TemperatureUnit,
+    pressure_to_pa,
     pressure_from_pa,
     temperature_from_k,
+    temperature_to_k,
 )
 
 
@@ -161,10 +167,6 @@ class ResultsTableWidget(QWidget):
         self._header_actions_row.addWidget(self.status_label)
         self._header_actions_row.addStretch()
 
-        self.capture_summary_btn = QPushButton("Capture Summary")
-        self.capture_summary_btn.clicked.connect(self.capture_current_summary)
-        self._header_actions_row.addWidget(self.capture_summary_btn)
-
         # Export buttons
         self.export_csv_btn = QPushButton("Export CSV")
         self.export_csv_btn.clicked.connect(lambda: self.export_requested.emit("csv"))
@@ -231,6 +233,8 @@ class ResultsTableWidget(QWidget):
         self.sections_scroll = QScrollArea()
         self.sections_scroll.setWidgetResizable(True)
         self.sections_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.sections_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sections_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         self._sections_host = QWidget()
         self._sections_layout = QVBoxLayout(self._sections_host)
@@ -290,6 +294,7 @@ class ResultsTableWidget(QWidget):
         table.setWordWrap(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(False)
         return table
 
@@ -337,25 +342,39 @@ class ResultsTableWidget(QWidget):
     ) -> tuple[int, int]:
         """Return pragmatic min/max widths for right-rail result tables."""
         label = column_name.lower()
+        if table is self.summary_table:
+            if column_index == 0:
+                return 132, 220
+            return 104, 176
         if table is self.composition_table:
             if column_index == 0 and "component" in label:
-                return 66, 96
+                return 84, 124
             if any(token in label for token in ("liquid", "vapor")):
-                return 84, 120
+                return 96, 140
+            if "feed" in label:
+                return 76, 112
+        if table is self.details_table and table.columnCount() <= 2:
+            if column_index == 0 and any(token in label for token in ("component", "property", "stage")):
+                return 108, 196
+            if any(token in label for token in ("k-value", "value", "temperature", "pressure", "moles", "fugacity")):
+                return 116, 232
+            if column_index == 0:
+                return 96, 180
+            return 108, 216
         if column_index == 0:
             if any(token in label for token in ("component", "property", "stage")):
-                return 78, 116
+                return 78, 112
             if "type" in label:
                 return 64, 88
             return 56, 96
         if "value" in label:
-            return 84, 132
+            return 88, 136
         if "fugacity" in label:
-            return 88, 112
+            return 84, 108
         if any(token in label for token in ("temperature", "pressure", "moles")):
-            return 80, 104
+            return 76, 104
         if any(token in label for token in ("liquid", "vapor", "feed", "k-value", "z-factor")):
-            return 74, 92
+            return 72, 98
         if any(token in label for token in ("dropout", "converged", "frac")):
             return 72, 92
         return 68, 96
@@ -381,13 +400,44 @@ class ResultsTableWidget(QWidget):
             )
             table.setColumnWidth(column, width)
 
+    def _column_fill_weights(self, table: QTableWidget) -> list[float]:
+        """Bias extra width toward the columns most likely to clip user-visible values."""
+        weights: list[float] = []
+        for column in range(table.columnCount()):
+            header = table.horizontalHeaderItem(column)
+            label = header.text().lower() if header is not None else ""
+            weight = 1.0
+            if table is self.summary_table:
+                weight = 0.92 if column == 0 else 1.08
+            elif table is self.composition_table:
+                if column == 0 and "component" in label:
+                    weight = 0.78
+                elif "feed" in label:
+                    weight = 0.92
+                elif "liquid" in label:
+                    weight = 1.10
+                elif "vapor" in label:
+                    weight = 1.18
+            elif table is self.details_table:
+                if table.columnCount() <= 2:
+                    if column == 0 and "component" in label:
+                        weight = 0.88
+                    else:
+                        weight = 1.12
+                elif column == 0 and "component" in label:
+                    weight = 0.84
+                elif "k-value" in label:
+                    weight = 1.12
+            weights.append(weight)
+        return weights
+
     def _expand_columns_to_fill(self, table: QTableWidget) -> None:
-        """Distribute unused table width so stacked sections share the same right edge."""
+        """Fit table columns inside the right rail without hidden horizontal overflow."""
         column_count = table.columnCount()
         if column_count == 0:
             return
 
-        available_width = table.viewport().width()
+        available_width = self.sections_scroll.viewport().width() - (2 * table.frameWidth())
         if available_width <= 0:
             available_width = (
                 table.width()
@@ -397,43 +447,63 @@ class ResultsTableWidget(QWidget):
         if available_width <= 0:
             return
 
-        occupied_width = sum(table.columnWidth(column) for column in range(column_count))
-        slack = available_width - occupied_width
-        if slack <= 0:
-            return
-
-        weights: list[float] = []
+        widths: list[int] = []
+        minimums: list[int] = []
+        maximums: list[int] = []
         for column in range(column_count):
             header = table.horizontalHeaderItem(column)
-            label = header.text().lower() if header is not None else ""
-            weight = 1.0
-            if table is self.composition_table:
-                if column == 0 and "component" in label:
-                    weight = 0.72
-                elif "liquid" in label:
-                    weight = 1.08
-                elif "vapor" in label:
-                    weight = 1.20
-            elif table is self.details_table:
-                if column == 0 and "component" in label:
-                    weight = 0.82
-                elif "k-value" in label:
-                    weight = 1.18
-            weights.append(weight)
+            header_label = header.text() if header is not None else ""
+            minimum, maximum = self._column_width_bounds(table, header_label, column)
+            minimum = scale_metric(minimum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            maximum = scale_metric(maximum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            minimums.append(minimum)
+            maximums.append(maximum)
+            widths.append(max(minimum, min(maximum, table.columnWidth(column))))
 
-        total_weight = sum(weights) or float(column_count)
-        distributed = 0
-        for column in range(column_count):
-            growth = int(round((slack * weights[column]) / total_weight))
-            if growth > 0:
-                table.setColumnWidth(column, table.columnWidth(column) + growth)
-                distributed += growth
-        remainder = slack - distributed
-        for column in range(column_count):
-            if remainder <= 0:
-                break
-            table.setColumnWidth(column, table.columnWidth(column) + 1)
-            remainder -= 1
+        occupied_width = sum(widths)
+        if occupied_width > available_width:
+            overflow = occupied_width - available_width
+            while overflow > 0:
+                shrinkable = [max(0, widths[index] - minimums[index]) for index in range(column_count)]
+                total_shrinkable = sum(shrinkable)
+                if total_shrinkable <= 0:
+                    break
+                for column in range(column_count):
+                    capacity = shrinkable[column]
+                    if capacity <= 0 or overflow <= 0:
+                        continue
+                    shrink = min(
+                        capacity,
+                        max(1, int(round((overflow * capacity) / total_shrinkable))),
+                    )
+                    widths[column] -= shrink
+                    overflow -= shrink
+        else:
+            slack = available_width - occupied_width
+            weights = self._column_fill_weights(table)
+            while slack > 0:
+                growable = [max(0, maximums[index] - widths[index]) for index in range(column_count)]
+                total_growable = sum(growable)
+                if total_growable <= 0:
+                    break
+                total_weight = sum(
+                    weights[index]
+                    for index in range(column_count)
+                    if growable[index] > 0
+                ) or float(column_count)
+                for column in range(column_count):
+                    capacity = growable[column]
+                    if capacity <= 0 or slack <= 0:
+                        continue
+                    growth = min(
+                        capacity,
+                        max(1, int(round((slack * weights[column]) / total_weight))),
+                    )
+                    widths[column] += growth
+                    slack -= growth
+
+        for column, width in enumerate(widths):
+            table.setColumnWidth(column, width)
 
     def _sync_table_height(self, table: QTableWidget) -> None:
         """Let the outer scroll area own scrolling instead of nested table scrollbars."""
@@ -469,7 +539,7 @@ class ResultsTableWidget(QWidget):
         self.summary_section.setVisible(True)
         self.composition_section.setVisible(self._section_has_content(self.composition_table))
         self.details_section.setVisible(self._section_has_content(self.details_table))
-        self.captured_section.setVisible(True)
+        self.captured_section.setVisible(bool(self._captured_rows))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -487,6 +557,9 @@ class ResultsTableWidget(QWidget):
         self.run_id_label.setToolTip("")
         self.status_label.setText("")
         self.status_label.setToolTip("")
+        self.summary_section.setTitle("Summary")
+        self.composition_section.setTitle("Compositions")
+        self.details_section.setTitle("Details")
         self.summary_table.setRowCount(0)
         self.composition_table.setRowCount(0)
         self.details_table.setRowCount(0)
@@ -523,6 +596,9 @@ class ResultsTableWidget(QWidget):
             else ""
         )
         self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self.summary_section.setTitle("Summary")
+        self.composition_section.setTitle("Compositions")
+        self.details_section.setTitle("Details")
 
         # Display appropriate result type
         if result.pt_flash_result:
@@ -708,6 +784,24 @@ class ResultsTableWidget(QWidget):
                 self._current_result.config.bubble_point_config
                 or self._current_result.config.dew_point_config
             )
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _cce_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred CCE display units."""
+        config: Optional[CCEConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.cce_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _dl_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred DL display units."""
+        config: Optional[DLConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.dl_config
         if config is None:
             return PressureUnit.BAR, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
@@ -904,6 +998,7 @@ class ResultsTableWidget(QWidget):
         summary_data = [
             (pressure_label, _format_pressure(result.pressure_pa, pressure_unit)),
             ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
+            ("EOS", format_eos_label(self._current_result.config.eos_type)),
             (stability_label, "Yes" if stability_value else "No"),
         ]
         summary_data.extend(self._plus_fraction_summary_rows())
@@ -979,18 +1074,20 @@ class ResultsTableWidget(QWidget):
 
     def _display_cce(self, result: CCEResult) -> None:
         """Display CCE results."""
-        self.details_table.setRowCount(0)
+        self.composition_section.setTitle("Expansion")
+        self.details_section.setTitle("Densities")
+        pressure_unit, temperature_unit = self._cce_display_units()
 
         # Summary
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
             ("Steps", str(len(result.steps))),
         ]
 
         if result.saturation_pressure_pa:
             summary_data.append((
                 "Saturation Pressure",
-                f"{result.saturation_pressure_pa / 1e5:.2f} bar"
+                _format_pressure(result.saturation_pressure_pa, pressure_unit)
             ))
         summary_data.extend(self._plus_fraction_summary_rows())
 
@@ -1002,13 +1099,15 @@ class ResultsTableWidget(QWidget):
         # Steps in composition table
         self.composition_table.setColumnCount(4)
         self.composition_table.setHorizontalHeaderLabels([
-            "Pressure (bar)", "Rel. Volume", "Liquid Frac.", "Z-factor"
+            f"Pressure ({pressure_unit.value})", "Rel. Volume", "Liquid Frac.", "Z-factor"
         ])
         self.composition_table.setRowCount(len(result.steps))
 
         for row, step in enumerate(result.steps):
             self.composition_table.setItem(
-                row, 0, QTableWidgetItem(f"{step.pressure_pa / 1e5:.2f}")
+                row,
+                0,
+                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
             )
             self.composition_table.setItem(
                 row, 1, QTableWidgetItem(f"{step.relative_volume:.4f}")
@@ -1022,15 +1121,36 @@ class ResultsTableWidget(QWidget):
                 f"{zf:.4f}" if zf else "-"
             ))
 
-        self.composition_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        self.details_table.setColumnCount(3)
+        self.details_table.setHorizontalHeaderLabels([
+            f"Pressure ({pressure_unit.value})", "Liquid Density", "Vapor Density"
+        ])
+        self.details_table.setRowCount(len(result.steps))
+        for row, step in enumerate(result.steps):
+            self.details_table.setItem(
+                row,
+                0,
+                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
+            )
+            liquid_density = step.liquid_density_kg_per_m3
+            vapor_density = step.vapor_density_kg_per_m3
+            self.details_table.setItem(
+                row, 1, QTableWidgetItem(
+                    "-" if liquid_density is None or liquid_density <= 0 else f"{liquid_density:.2f}"
+                )
+            )
+            self.details_table.setItem(
+                row, 2, QTableWidgetItem(
+                    "-" if vapor_density is None or vapor_density <= 0 else f"{vapor_density:.2f}"
+                )
+            )
 
     def _display_dl(self, result: DLResult) -> None:
         """Display DL results."""
+        pressure_unit, temperature_unit = self._dl_display_units()
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
-            ("Bubble Pressure", f"{result.bubble_pressure_pa / 1e5:.2f} bar"),
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
+            ("Bubble Pressure", _format_pressure(result.bubble_pressure_pa, pressure_unit)),
             ("Initial Rs", f"{result.rsi:.4f}"),
             ("Initial Bo", f"{result.boi:.4f}"),
             ("Converged", "Yes" if result.converged else "No"),
@@ -1045,7 +1165,7 @@ class ResultsTableWidget(QWidget):
 
         self.composition_table.setColumnCount(5)
         self.composition_table.setHorizontalHeaderLabels(
-            ["Pressure (bar)", "Rs", "Bo", "Bt", "Vapor Frac."]
+            [f"Pressure ({pressure_unit.value})", "Rs", "Bo", "Bt", "Vapor Frac."]
         )
         self.composition_table.setRowCount(len(result.steps))
 
@@ -1055,7 +1175,9 @@ class ResultsTableWidget(QWidget):
 
         for row, step in enumerate(result.steps):
             self.composition_table.setItem(
-                row, 0, QTableWidgetItem(f"{step.pressure_pa / 1e5:.2f}")
+                row,
+                0,
+                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
             )
             self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs:.4f}"))
             self.composition_table.setItem(row, 2, QTableWidgetItem(f"{step.bo:.4f}"))
@@ -1201,32 +1323,20 @@ class ResultsTableWidget(QWidget):
 
 
 class ResultsSidebarWidget(QWidget):
-    """Fixed right-rail surface: summary tables on top, text report below."""
+    """Fixed right-rail surface: compact results tables only."""
 
     def __init__(
         self,
         table_widget: Optional[ResultsTableWidget] = None,
-        report_widget: Optional[TextOutputWidget] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.table_widget = table_widget or ResultsTableWidget()
-        self.report_widget = report_widget or TextOutputWidget()
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(10)
-
-        self._splitter = QSplitter(Qt.Orientation.Vertical)
-        self._splitter.setChildrenCollapsible(False)
-        self._splitter.setHandleWidth(scale_metric(4, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE))
-        self._splitter.addWidget(self.table_widget)
-        self._splitter.addWidget(self.report_widget)
-        self._splitter.setStretchFactor(0, 3)
-        self._splitter.setStretchFactor(1, 2)
-        self._splitter.setSizes([420, 260])
-
-        self._layout.addWidget(self._splitter, 1)
+        self._layout.addWidget(self.table_widget, 1)
 
     @property
     def current_result(self) -> Optional[RunResult]:
@@ -1234,22 +1344,148 @@ class ResultsSidebarWidget(QWidget):
 
     def apply_ui_scale(self, ui_scale: float) -> None:
         self._layout.setSpacing(scale_metric(10, ui_scale, reference_scale=DEFAULT_UI_SCALE))
-        self._splitter.setHandleWidth(scale_metric(4, ui_scale, reference_scale=DEFAULT_UI_SCALE))
         self.table_widget.apply_ui_scale(ui_scale)
-        if hasattr(self.report_widget, "apply_ui_scale"):
-            self.report_widget.apply_ui_scale(ui_scale)
 
     def clear(self) -> None:
         self.table_widget.clear()
-        self.report_widget.clear()
 
     def display_result(self, result: RunResult) -> None:
         self.table_widget.display_result(result)
-        self.report_widget.display_result(result)
 
     def display_cached_result(self, result: RunResult) -> None:
         self.table_widget.display_result(result, cached=True)
-        self.report_widget.display_result(result)
+
+
+class UnitConverterWidget(QWidget):
+    """Compact toolbar converter for quick pressure and temperature checks."""
+
+    _PRESSURE_LABEL = "Pressure"
+    _TEMPERATURE_LABEL = "Temperature"
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ToolbarUnitConverter")
+        self._ui_scale = DEFAULT_UI_SCALE
+        self._setting_units = False
+        self._setup_ui()
+        self._on_quantity_changed()
+
+    def _setup_ui(self) -> None:
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(scale_metric(8, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE))
+
+        self.heading_label = QLabel("Convert")
+        self._layout.addWidget(self.heading_label)
+
+        self.quantity_combo = NoWheelComboBox()
+        self.quantity_combo.addItem(self._PRESSURE_LABEL, self._PRESSURE_LABEL)
+        self.quantity_combo.addItem(self._TEMPERATURE_LABEL, self._TEMPERATURE_LABEL)
+        self._layout.addWidget(self.quantity_combo)
+
+        self.value_spin = NoWheelDoubleSpinBox()
+        self.value_spin.setDecimals(6)
+        self.value_spin.setRange(-1.0e12, 1.0e12)
+        self.value_spin.setValue(1.0)
+        self._layout.addWidget(self.value_spin)
+
+        self.from_unit_combo = NoWheelComboBox()
+        self.to_unit_combo = NoWheelComboBox()
+        self._layout.addWidget(self.from_unit_combo)
+        self.arrow_label = QLabel("→")
+        self._layout.addWidget(self.arrow_label)
+        self._layout.addWidget(self.to_unit_combo)
+
+        self.result_value = QLineEdit()
+        self.result_value.setReadOnly(True)
+        self.equals_label = QLabel("=")
+        self._layout.addWidget(self.equals_label)
+        self._layout.addWidget(self.result_value)
+        self._layout.addStretch(1)
+
+        self._apply_widget_widths(DEFAULT_UI_SCALE)
+
+        self.quantity_combo.currentIndexChanged.connect(self._on_quantity_changed)
+        self.value_spin.valueChanged.connect(self._update_result)
+        self.from_unit_combo.currentIndexChanged.connect(self._update_result)
+        self.to_unit_combo.currentIndexChanged.connect(self._update_result)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        self._ui_scale = ui_scale
+        self._layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._apply_widget_widths(ui_scale)
+
+    def _apply_widget_widths(self, ui_scale: float) -> None:
+        self.quantity_combo.setMinimumWidth(scale_metric(96, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.value_spin.setMinimumWidth(scale_metric(96, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.from_unit_combo.setMinimumWidth(scale_metric(84, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.to_unit_combo.setMinimumWidth(scale_metric(84, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self.result_value.setMinimumWidth(scale_metric(128, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+
+    def _populate_units(self, combo: NoWheelComboBox, units: list[object]) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        for unit in units:
+            combo.addItem(unit.value, unit)
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _coerce_unit(value, enum_type):
+        """Normalize Qt combo payloads back into the expected enum type."""
+        if isinstance(value, enum_type):
+            return value
+        return enum_type(value)
+
+    def _on_quantity_changed(self, *_args) -> None:
+        self._setting_units = True
+        try:
+            quantity = self.quantity_combo.currentData()
+            if quantity == self._TEMPERATURE_LABEL:
+                units = list(TemperatureUnit)
+                self._populate_units(self.from_unit_combo, units)
+                self._populate_units(self.to_unit_combo, units)
+                self.from_unit_combo.setCurrentIndex(self.from_unit_combo.findData(TemperatureUnit.C))
+                self.to_unit_combo.setCurrentIndex(self.to_unit_combo.findData(TemperatureUnit.F))
+                self.value_spin.setRange(-459.67, 1000000.0)
+                self.value_spin.setValue(100.0)
+                self.value_spin.setDecimals(4)
+            else:
+                units = list(PressureUnit)
+                self._populate_units(self.from_unit_combo, units)
+                self._populate_units(self.to_unit_combo, units)
+                self.from_unit_combo.setCurrentIndex(self.from_unit_combo.findData(PressureUnit.BAR))
+                self.to_unit_combo.setCurrentIndex(self.to_unit_combo.findData(PressureUnit.PSIA))
+                self.value_spin.setRange(0.0, 1000000000.0)
+                self.value_spin.setValue(1.0)
+                self.value_spin.setDecimals(6)
+        finally:
+            self._setting_units = False
+        self._update_result()
+
+    def _update_result(self, *_args) -> None:
+        if self._setting_units:
+            return
+        quantity = self.quantity_combo.currentData()
+        value = self.value_spin.value()
+        if quantity == self._TEMPERATURE_LABEL:
+            from_unit = self._coerce_unit(self.from_unit_combo.currentData(), TemperatureUnit)
+            to_unit = self._coerce_unit(self.to_unit_combo.currentData(), TemperatureUnit)
+            if from_unit is None or to_unit is None:
+                self.result_value.clear()
+                return
+            kelvin = temperature_to_k(value, from_unit)
+            converted = temperature_from_k(kelvin, to_unit)
+            self.result_value.setText(f"{converted:.6g} {_format_temperature_unit(to_unit)}")
+            return
+
+        from_unit = self._coerce_unit(self.from_unit_combo.currentData(), PressureUnit)
+        to_unit = self._coerce_unit(self.to_unit_combo.currentData(), PressureUnit)
+        if from_unit is None or to_unit is None:
+            self.result_value.clear()
+            return
+        pascal = pressure_to_pa(value, from_unit)
+        converted = pressure_from_pa(pascal, to_unit)
+        self.result_value.setText(f"{converted:.6g} {to_unit.value}")
 
 
 class ResultsPlotWidget(QWidget):
@@ -1350,6 +1586,11 @@ class ResultsPlotWidget(QWidget):
         """Keep bar-chart composition plots from wasting vertical space below the x-axis."""
         self.figure.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.20)
 
+    @staticmethod
+    def _set_mole_fraction_axis(ax) -> None:
+        """Keep composition bar charts on the physical 0..1 mole-fraction scale."""
+        ax.set_ylim(0.0, 1.0)
+
     def clear(self) -> None:
         """Clear the plot."""
         self._current_result = None
@@ -1411,6 +1652,24 @@ class ResultsPlotWidget(QWidget):
             return PressureUnit.BAR
         return config.pressure_unit
 
+    def _cce_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred CCE plot units."""
+        config: Optional[CCEConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.cce_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _dl_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred DL plot units."""
+        config: Optional[DLConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.dl_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
     def _plot_placeholder(self, message: str) -> None:
         """Render a neutral placeholder instead of a misleading plot."""
         ax = self.figure.add_subplot(111)
@@ -1453,6 +1712,7 @@ class ResultsPlotWidget(QWidget):
         ax.set_xlabel('Component')
         ax.set_ylabel('Mole Fraction')
         ax.set_title(f'PT Flash Results ({result.phase.title()})')
+        self._set_mole_fraction_axis(ax)
         ax.set_xticks(x)
         ax.set_xticklabels(display_labels, rotation=35, ha='right', rotation_mode='anchor')
         ax.legend()
@@ -1558,6 +1818,7 @@ class ResultsPlotWidget(QWidget):
         ax.set_ylabel("Mole Fraction")
         pressure_unit = self._saturation_pressure_unit()
         ax.set_title(f"{title} at {_format_pressure(result.pressure_pa, pressure_unit)}")
+        self._set_mole_fraction_axis(ax)
         ax.set_xticks(x)
         ax.set_xticklabels(display_labels, rotation=35, ha="right", rotation_mode="anchor")
         ax.legend()
@@ -1574,27 +1835,68 @@ class ResultsPlotWidget(QWidget):
         self._plot_saturation_result(result, title="Dew Point")
 
     def _plot_cce(self, result: CCEResult) -> None:
-        """Plot CCE results."""
+        """Plot CCE density trends against pressure."""
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(PLOT_CANVAS_COLOR)
+        pressure_unit, temperature_unit = self._cce_plot_units()
 
-        pressures = [s.pressure_pa / 1e5 for s in result.steps]
-        rel_volumes = [s.relative_volume for s in result.steps]
+        pressures = [pressure_from_pa(s.pressure_pa, pressure_unit) for s in result.steps]
+        liquid_pressures = [
+            pressure
+            for pressure, step in zip(pressures, result.steps, strict=True)
+            if step.liquid_density_kg_per_m3 is not None and step.liquid_density_kg_per_m3 > 0
+        ]
+        liquid_densities = [
+            step.liquid_density_kg_per_m3
+            for step in result.steps
+            if step.liquid_density_kg_per_m3 is not None and step.liquid_density_kg_per_m3 > 0
+        ]
+        vapor_pressures = [
+            pressure
+            for pressure, step in zip(pressures, result.steps, strict=True)
+            if step.vapor_density_kg_per_m3 is not None and step.vapor_density_kg_per_m3 > 0
+        ]
+        vapor_densities = [
+            step.vapor_density_kg_per_m3
+            for step in result.steps
+            if step.vapor_density_kg_per_m3 is not None and step.vapor_density_kg_per_m3 > 0
+        ]
 
-        ax.plot(pressures, rel_volumes, 'b-o', linewidth=2, markersize=4)
+        if liquid_pressures:
+            ax.plot(
+                liquid_pressures,
+                liquid_densities,
+                color="#2563eb",
+                marker="o",
+                linewidth=2,
+                markersize=4,
+                label="Liquid Density",
+            )
+        if vapor_pressures:
+            ax.plot(
+                vapor_pressures,
+                vapor_densities,
+                color="#dc2626",
+                marker="s",
+                linewidth=2,
+                markersize=4,
+                label="Vapor Density",
+            )
 
         # Mark saturation pressure
         if result.saturation_pressure_pa:
+            saturation_pressure = pressure_from_pa(result.saturation_pressure_pa, pressure_unit)
             ax.axvline(
-                result.saturation_pressure_pa / 1e5,
+                saturation_pressure,
                 color='r', linestyle='--', linewidth=1.5,
-                label=f'Psat = {result.saturation_pressure_pa / 1e5:.2f} bar'
+                label=f"Psat = {pressure_from_pa(result.saturation_pressure_pa, pressure_unit):.2f} {pressure_unit.value}"
             )
+        if liquid_pressures or vapor_pressures or result.saturation_pressure_pa:
             ax.legend()
 
-        ax.set_xlabel('Pressure (bar)')
-        ax.set_ylabel('Relative Volume')
-        ax.set_title(f'CCE at {result.temperature_k - 273.15:.1f} C')
+        ax.set_xlabel(f"Pressure ({pressure_unit.value})")
+        ax.set_ylabel('Density (kg/m³)')
+        ax.set_title(f"CCE Density at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}")
         ax.invert_xaxis()  # Pressure decreases during CCE
         self._apply_axes_theme(ax)
 
@@ -1606,23 +1908,26 @@ class ResultsPlotWidget(QWidget):
         ax_fvf = self.figure.add_subplot(212)
         ax_rs.set_facecolor(PLOT_CANVAS_COLOR)
         ax_fvf.set_facecolor(PLOT_CANVAS_COLOR)
+        pressure_unit, temperature_unit = self._dl_plot_units()
 
-        pressures = [s.pressure_pa / 1e5 for s in result.steps]
+        pressures = [pressure_from_pa(s.pressure_pa, pressure_unit) for s in result.steps]
         rs = [s.rs for s in result.steps]
         bo = [s.bo for s in result.steps]
         bt = [s.bt for s in result.steps]
 
         ax_rs.plot(pressures, rs, "g-o", linewidth=2, markersize=4, label="Rs")
-        ax_rs.set_xlabel("Pressure (bar)")
+        ax_rs.set_xlabel(f"Pressure ({pressure_unit.value})")
         ax_rs.set_ylabel("Rs")
-        ax_rs.set_title(f"Differential Liberation at {result.temperature_k - 273.15:.1f} C")
+        ax_rs.set_title(
+            f"Differential Liberation at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+        )
         ax_rs.invert_xaxis()
         ax_rs.legend()
         self._apply_axes_theme(ax_rs)
 
         ax_fvf.plot(pressures, bo, "y-o", linewidth=2, markersize=4, label="Bo")
         ax_fvf.plot(pressures, bt, "m--o", linewidth=1.5, markersize=3, label="Bt")
-        ax_fvf.set_xlabel("Pressure (bar)")
+        ax_fvf.set_xlabel(f"Pressure ({pressure_unit.value})")
         ax_fvf.set_ylabel("Formation Volume Factor")
         ax_fvf.invert_xaxis()
         ax_fvf.legend()

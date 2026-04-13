@@ -8,12 +8,15 @@ This keeps the middle pane focused on:
 from __future__ import annotations
 
 import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -30,6 +33,7 @@ from pvtapp.schemas import RunResult
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.widgets.combo_box import NoWheelComboBox
 from pvtapp.widgets.results_view import ResultsPlotWidget
+from pvtapp.widgets.text_output_view import format_eos_label
 
 
 def _fmt_dt(dt: Optional[datetime]) -> str:
@@ -46,6 +50,7 @@ class RunLogWidget(QWidget):
 
     load_inputs_requested = Signal(str)
     result_selected = Signal(object)
+    result_activated = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -85,9 +90,17 @@ class RunLogWidget(QWidget):
         self.refresh_btn.clicked.connect(self.refresh)
         self._header.addWidget(self.refresh_btn)
 
+        self.select_all_btn = QPushButton("Select All")
+        self.select_all_btn.clicked.connect(self._select_all_runs)
+        self._header.addWidget(self.select_all_btn)
+
         self.load_inputs_btn = QPushButton("Load Inputs")
         self.load_inputs_btn.clicked.connect(self._emit_load_inputs_requested)
         self._header.addWidget(self.load_inputs_btn)
+
+        self.export_btn = QPushButton("Export")
+        self.export_btn.clicked.connect(self._export_selected)
+        self._header.addWidget(self.export_btn)
 
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.clicked.connect(self._delete_selected)
@@ -100,10 +113,12 @@ class RunLogWidget(QWidget):
 
         # Run tree
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Run", "Status", "When"])
+        self.tree.setHeaderLabels(["Run", "Status", "When", "EOS"])
         self.tree.setUniformRowHeights(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setSortingEnabled(False)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tree.setToolTip("Shift-click or Ctrl-click to select multiple runs.")
         self.tree.header().setSortIndicatorShown(True)
         self.tree.header().setSortIndicator(self._sort_column, self._sort_order)
         self.tree.header().sectionClicked.connect(self._on_header_clicked)
@@ -162,6 +177,7 @@ class RunLogWidget(QWidget):
                     "when": _fmt_dt(result.completed_at or result.started_at),
                     "when_dt": result.completed_at or result.started_at,
                     "calc_type": result.config.calculation_type.value.replace("_", " ").title(),
+                    "eos": format_eos_label(result.config.eos_type),
                 }
             )
 
@@ -181,12 +197,30 @@ class RunLogWidget(QWidget):
         self._sync_action_state()
 
     def _on_selection_changed(self) -> None:
-        items = self.tree.selectedItems()
+        items = self._selected_run_items()
         if not items:
             self._set_preview(None, None)
             return
 
-        self._load_item_preview(items[0])
+        current_item = self.tree.currentItem()
+        if current_item in items:
+            target_item = current_item
+        elif self._selected_run_dir is not None:
+            target_item = next(
+                (
+                    item
+                    for item in items
+                    if str(item.data(0, Qt.ItemDataRole.UserRole)) == str(self._selected_run_dir)
+                ),
+                items[0],
+            )
+        else:
+            target_item = items[0]
+
+        if str(target_item.data(0, Qt.ItemDataRole.UserRole)) != str(self._selected_run_dir):
+            self._load_item_preview(target_item)
+            return
+        self._sync_action_state()
 
     def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         """Handle explicit user clicks even if the clicked row was already selected."""
@@ -194,6 +228,7 @@ class RunLogWidget(QWidget):
             item.setExpanded(not item.isExpanded())
             return
         self._load_item_preview(item)
+        self.result_activated.emit(self._selected_result)
 
     def _on_group_by_changed(self, _index: int) -> None:
         """Regroup the run list without changing the current sort column/order."""
@@ -232,6 +267,8 @@ class RunLogWidget(QWidget):
             return str(entry["name"]).casefold()
         if self._sort_column == 1:
             return str(entry["status"]).casefold()
+        if self._sort_column == 3:
+            return str(entry["eos"]).casefold()
         when_dt = entry["when_dt"]
         return when_dt or datetime.min
 
@@ -255,6 +292,7 @@ class RunLogWidget(QWidget):
                 str(entry["name"]),
                 str(entry["status"]),
                 str(entry["when"]),
+                str(entry["eos"]),
             ]
         )
         item.setData(0, Qt.ItemDataRole.UserRole, str(entry["path"]))
@@ -324,7 +362,8 @@ class RunLogWidget(QWidget):
         self._preview_panel.setVisible(True)
         calc_type = result.config.calculation_type.value.replace("_", " ").title()
         self.preview_title.setText(
-            f"{calc_type} — {result.run_name or result.run_id}  ({result.status.value})"
+            f"{calc_type} — {result.run_name or result.run_id} ({result.status.value}) | "
+            f"EOS: {format_eos_label(result.config.eos_type)}"
         )
         self.preview_plot.display_result(result)
         if preview_was_hidden:
@@ -336,33 +375,113 @@ class RunLogWidget(QWidget):
         self.result_selected.emit(result)
 
     def _sync_action_state(self) -> None:
+        selected_count = len(self._selected_run_items())
         has_selected_run = self._selected_run_dir is not None and self._selected_result is not None
-        self.load_inputs_btn.setEnabled(has_selected_run and self._replay_actions_enabled)
-        self.delete_btn.setEnabled(has_selected_run)
+        self.select_all_btn.setEnabled(bool(self._entries))
+        self.load_inputs_btn.setEnabled(
+            has_selected_run and selected_count == 1 and self._replay_actions_enabled
+        )
+        self.export_btn.setEnabled(selected_count > 0)
+        self.delete_btn.setEnabled(selected_count > 0)
+
+    def _selected_run_items(self) -> list[QTreeWidgetItem]:
+        """Return the currently selected concrete run rows."""
+        return [
+            item
+            for item in self.tree.selectedItems()
+            if item.data(0, Qt.ItemDataRole.UserRole)
+        ]
+
+    def _selected_run_dirs(self) -> list[Path]:
+        """Return selected run directories in tree order without duplicates."""
+        selected: list[Path] = []
+        seen: set[str] = set()
+        for item in self._selected_run_items():
+            run_dir_str = str(item.data(0, Qt.ItemDataRole.UserRole))
+            if not run_dir_str or run_dir_str in seen:
+                continue
+            seen.add(run_dir_str)
+            selected.append(Path(run_dir_str))
+        return selected
 
     def _emit_load_inputs_requested(self) -> None:
         if self._selected_run_dir is None or not self._replay_actions_enabled:
             return
         self.load_inputs_requested.emit(str(self._selected_run_dir))
 
-    def _delete_selected(self) -> None:
-        if self._selected_run_dir is None:
+    def _select_all_runs(self) -> None:
+        if not self._entries:
+            return
+        self.tree.selectAll()
+
+    def _export_selected(self) -> None:
+        run_dirs = self._selected_run_dirs()
+        if not run_dirs:
             return
 
-        run_dir = self._selected_run_dir
+        default_name = (
+            "pvt-sim-runs.zip"
+            if len(run_dirs) > 1
+            else f"{run_dirs[0].name}.zip"
+        )
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Selected Runs",
+            default_name,
+            "ZIP Files (*.zip)",
+        )
+        if not filename:
+            return
+
+        archive_path = Path(filename)
+        if archive_path.suffix.lower() != ".zip":
+            archive_path = archive_path.with_suffix(".zip")
+
+        try:
+            self._write_selected_runs_archive(run_dirs, archive_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _write_selected_runs_archive(self, run_dirs: list[Path], archive_path: Path) -> None:
+        """Bundle selected run artifact directories into a single zip archive."""
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for run_dir in run_dirs:
+                for path in sorted(run_dir.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    archive.write(path, arcname=Path(run_dir.name) / path.relative_to(run_dir))
+
+    def _delete_selected(self) -> None:
+        run_dirs = self._selected_run_dirs()
+        if not run_dirs:
+            return
+
+        if len(run_dirs) == 1:
+            title = "Delete run"
+            body = f"Delete run folder?\n\n{run_dirs[0]}"
+        else:
+            preview = "\n".join(str(path) for path in run_dirs[:5])
+            suffix = "" if len(run_dirs) <= 5 else f"\n... and {len(run_dirs) - 5} more"
+            title = "Delete runs"
+            body = f"Delete {len(run_dirs)} run folders?\n\n{preview}{suffix}"
+
         reply = QMessageBox.question(
             self,
-            "Delete run",
-            f"Delete run folder?\n\n{run_dir}",
+            title,
+            body,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        try:
-            shutil.rmtree(run_dir)
-        except Exception as e:
-            QMessageBox.critical(self, "Delete failed", str(e))
+        failures: list[str] = []
+        for run_dir in run_dirs:
+            try:
+                shutil.rmtree(run_dir)
+            except Exception as exc:
+                failures.append(f"{run_dir}: {exc}")
+        if failures:
+            QMessageBox.critical(self, "Delete failed", "\n".join(failures))
             return
 
         self._set_preview(None, None)

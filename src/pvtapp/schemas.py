@@ -352,6 +352,14 @@ class InlineComponentSpec(BaseModel):
         le=PRESSURE_MAX_PA,
         description="Critical pressure in Pa",
     )
+    critical_temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.K,
+        description="Preferred GUI display unit for the critical temperature",
+    )
+    critical_pressure_unit: PressureUnit = Field(
+        default=PressureUnit.PA,
+        description="Preferred GUI display unit for the critical pressure",
+    )
     omega: float = Field(
         ...,
         ge=-5.0,
@@ -573,6 +581,14 @@ class CCEConfig(BaseModel):
             "When provided, it overrides pressure_start_pa/pressure_end_pa/n_steps."
         ),
     )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output",
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output",
+    )
 
     @field_validator('pressure_points_pa')
     @classmethod
@@ -663,6 +679,14 @@ class DLConfig(BaseModel):
             "Optional explicit descending pressure schedule below the bubble point in Pa. "
             "When provided, it overrides pressure_end_pa/n_steps."
         ),
+    )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output",
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output",
     )
 
     @field_validator('pressure_points_pa')
@@ -989,6 +1013,8 @@ class CCEStepResult(BaseModel):
     liquid_fraction: Optional[float] = None
     vapor_fraction: Optional[float] = None
     z_factor: Optional[float] = None
+    liquid_density_kg_per_m3: Optional[float] = None
+    vapor_density_kg_per_m3: Optional[float] = None
 
 
 class CCEResult(BaseModel):

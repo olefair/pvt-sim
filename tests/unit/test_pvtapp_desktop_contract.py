@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -15,10 +16,11 @@ import pytest
 
 try:
     from PySide6.QtCore import QSettings, Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QAbstractItemView, QApplication, QMessageBox
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     QSettings = None  # type: ignore[assignment]
     Qt = None  # type: ignore[assignment]
+    QAbstractItemView = None  # type: ignore[assignment]
     QApplication = None  # type: ignore[assignment]
     QMessageBox = None  # type: ignore[assignment]
 
@@ -34,6 +36,7 @@ from pvtapp.schemas import (
     DLResult,
     DLStepResult,
     DewPointResult,
+    EOSType,
     PhaseEnvelopePoint,
     PhaseEnvelopeResult,
     PTFlashResult,
@@ -44,19 +47,28 @@ from pvtapp.schemas import (
     SeparatorResult,
     SeparatorStageResult,
     SolverDiagnostics,
+    PressureUnit,
+    TemperatureUnit,
+    pressure_from_pa,
+    temperature_from_k,
 )
 from pvtapp.style import DEFAULT_UI_SCALE, UI_SCALE_STEP, build_cato_stylesheet, scale_metric
 
 try:
     from pvtapp.main import PVTSimulatorWindow
+    from pvtapp.widgets.composition_input import CompositionInputWidget
+    from pvtapp.widgets.conditions_input import ConditionsInputWidget
     from pvtapp.widgets.diagnostics_view import DiagnosticsWidget
-    from pvtapp.widgets.results_view import ResultsPlotWidget, ResultsTableWidget
+    from pvtapp.widgets.results_view import ResultsPlotWidget, ResultsSidebarWidget, ResultsTableWidget
     from pvtapp.widgets.run_log_view import RunLogWidget
     from pvtapp.widgets.text_output_view import TextOutputWidget
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     PVTSimulatorWindow = None  # type: ignore[assignment]
+    CompositionInputWidget = None  # type: ignore[assignment]
+    ConditionsInputWidget = None  # type: ignore[assignment]
     DiagnosticsWidget = None  # type: ignore[assignment]
     ResultsPlotWidget = None  # type: ignore[assignment]
+    ResultsSidebarWidget = None  # type: ignore[assignment]
     ResultsTableWidget = None  # type: ignore[assignment]
     RunLogWidget = None  # type: ignore[assignment]
     TextOutputWidget = None  # type: ignore[assignment]
@@ -489,6 +501,15 @@ def _bubble_point_result() -> RunResult:
     )
 
 
+def _pr78_bubble_point_result() -> RunResult:
+    result = _bubble_point_result()
+    return result.model_copy(
+        update={
+            "config": result.config.model_copy(update={"eos_type": EOSType.PR78}),
+        }
+    )
+
+
 def _inline_pseudo_bubble_point_result() -> RunResult:
     config = _inline_pseudo_bubble_point_config()
     return _completed_run_result(
@@ -588,6 +609,8 @@ def _cce_result() -> RunResult:
                     liquid_fraction=1.0,
                     vapor_fraction=0.0,
                     z_factor=0.82,
+                    liquid_density_kg_per_m3=648.2,
+                    vapor_density_kg_per_m3=None,
                 ),
                 CCEStepResult(
                     pressure_pa=1.2e7,
@@ -595,6 +618,8 @@ def _cce_result() -> RunResult:
                     liquid_fraction=0.72,
                     vapor_fraction=0.28,
                     z_factor=0.91,
+                    liquid_density_kg_per_m3=583.4,
+                    vapor_density_kg_per_m3=128.6,
                 ),
             ],
         ),
@@ -770,12 +795,16 @@ def _assert_configs_equivalent(actual: RunConfig, expected: RunConfig) -> None:
         assert actual.cce_config.pressure_start_pa == pytest.approx(expected.cce_config.pressure_start_pa)
         assert actual.cce_config.pressure_end_pa == pytest.approx(expected.cce_config.pressure_end_pa)
         assert actual.cce_config.n_steps == expected.cce_config.n_steps
+        assert actual.cce_config.pressure_unit == expected.cce_config.pressure_unit
+        assert actual.cce_config.temperature_unit == expected.cce_config.temperature_unit
     elif expected.dl_config is not None:
         assert actual.dl_config is not None
         assert actual.dl_config.temperature_k == pytest.approx(expected.dl_config.temperature_k)
         assert actual.dl_config.bubble_pressure_pa == pytest.approx(expected.dl_config.bubble_pressure_pa)
         assert actual.dl_config.pressure_end_pa == pytest.approx(expected.dl_config.pressure_end_pa)
         assert actual.dl_config.n_steps == expected.dl_config.n_steps
+        assert actual.dl_config.pressure_unit == expected.dl_config.pressure_unit
+        assert actual.dl_config.temperature_unit == expected.dl_config.temperature_unit
     elif expected.cvd_config is not None:
         assert actual.cvd_config is not None
         assert actual.cvd_config.temperature_k == pytest.approx(expected.cvd_config.temperature_k)
@@ -853,6 +882,84 @@ def test_main_window_loads_saved_run_inputs_from_artifact(
     assert rebuilt is not None
     _assert_configs_equivalent(rebuilt, config)
     assert window.status_label.text() == "Loaded inputs: saved-bubble"
+
+
+def test_main_window_loads_saved_run_inputs_preserving_inline_pseudo_units(
+    window: PVTSimulatorWindow,
+    tmp_path: Path,
+) -> None:
+    config = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.199620},
+                    {"component_id": "C2", "mole_fraction": 0.100100},
+                    {"component_id": "C3", "mole_fraction": 0.185790},
+                    {"component_id": "nC4", "mole_fraction": 0.090360},
+                    {"component_id": "nC5", "mole_fraction": 0.188510},
+                    {"component_id": "PSEUDO_PLUS", "mole_fraction": 0.235630},
+                ],
+                "inline_components": [
+                    {
+                        "component_id": "PSEUDO_PLUS",
+                        "name": "Pseudo+",
+                        "formula": "Pseudo+",
+                        "molecular_weight_g_per_mol": 86.177000,
+                        "critical_temperature_k": 507.400000,
+                        "critical_pressure_pa": 3008134.215801,
+                        "critical_temperature_unit": "F",
+                        "critical_pressure_unit": "psia",
+                        "omega": 0.296000,
+                    }
+                ],
+            },
+            "calculation_type": "bubble_point",
+            "eos_type": "peng_robinson",
+            "bubble_point_config": {
+                "temperature_k": 326.76111111111106,
+                "pressure_initial_pa": 1.0e7,
+            },
+        }
+    )
+    run_dir = tmp_path / "saved-inline-pseudo"
+    run_dir.mkdir()
+    with (run_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config.model_dump(mode="json"), handle, indent=2)
+
+    window._load_saved_run_inputs(str(run_dir))
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    assert rebuilt.calculation_type == config.calculation_type
+    assert rebuilt.eos_type == config.eos_type
+    assert rebuilt.bubble_point_config is not None
+    assert rebuilt.bubble_point_config.temperature_k == pytest.approx(
+        config.bubble_point_config.temperature_k
+    )
+    assert rebuilt.bubble_point_config.pressure_initial_pa == pytest.approx(
+        config.bubble_point_config.pressure_initial_pa
+    )
+    assert rebuilt.composition.components == config.composition.components
+    assert len(rebuilt.composition.inline_components) == 1
+    rebuilt_spec = rebuilt.composition.inline_components[0]
+    expected_spec = config.composition.inline_components[0]
+    assert rebuilt_spec.molecular_weight_g_per_mol == pytest.approx(expected_spec.molecular_weight_g_per_mol)
+    assert rebuilt_spec.critical_temperature_k == pytest.approx(expected_spec.critical_temperature_k)
+    assert rebuilt_spec.critical_pressure_pa == pytest.approx(expected_spec.critical_pressure_pa)
+    assert rebuilt_spec.critical_temperature_unit == expected_spec.critical_temperature_unit
+    assert rebuilt_spec.critical_pressure_unit == expected_spec.critical_pressure_unit
+    assert rebuilt_spec.omega == pytest.approx(expected_spec.omega)
+    assert window.composition_widget.inline_tc_unit.currentText() == "F"
+    assert float(window.composition_widget.inline_tc_edit.text()) == pytest.approx(
+        temperature_from_k(507.400000, TemperatureUnit.F),
+        abs=1e-6,
+    )
+    assert window.composition_widget.inline_pc_unit.currentText() == "psia"
+    assert float(window.composition_widget.inline_pc_edit.text()) == pytest.approx(
+        pressure_from_pa(3008134.215801, PressureUnit.PSIA),
+        abs=1e-6,
+    )
 
 
 def test_main_window_loading_saved_run_inputs_does_not_start_calculation(
@@ -1217,15 +1324,67 @@ def test_results_table_scales_summary_columns_with_ui_zoom_without_shrinking_com
     assert table.composition_table.columnWidth(1) >= initial_composition_width
 
 
-def test_results_table_gives_composition_data_columns_more_room(app: QApplication) -> None:
-    table = ResultsTableWidget()
-    table.resize(340, 900)
-    table.display_result(_inline_pseudo_bubble_point_result())
-    table.show()
+def test_main_window_results_rail_uses_wider_fixed_width(window: PVTSimulatorWindow) -> None:
+    assert window.workspace.results_pane is not None
+    assert window.workspace.results_pane.minimumWidth() == 420
+    assert window.workspace.results_pane.maximumWidth() == 420
+
+
+def test_results_tables_fit_inside_right_rail_without_horizontal_overflow(
+    window: PVTSimulatorWindow,
+    app: QApplication,
+) -> None:
+    window.resize(1800, 1000)
+    window.show()
+    window.results_sidebar.display_result(_inline_pseudo_bubble_point_result())
     app.processEvents()
 
-    assert table.composition_table.columnWidth(0) < table.composition_table.columnWidth(1)
-    assert table.composition_table.columnWidth(2) >= table.composition_table.columnWidth(1) - 4
+    table = window.results_table
+
+    summary_padding = scale_metric(4, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE)
+    compact_padding = 0
+
+    def _column_span(grid) -> int:
+        return sum(grid.columnWidth(column) for column in range(grid.columnCount()))
+
+    for grid in (table.summary_table, table.composition_table, table.details_table):
+        assert grid.verticalHeader().isVisible() is False
+        assert _column_span(grid) <= grid.viewport().width() + 1
+
+    summary_metrics = table.summary_table.horizontalHeader().fontMetrics()
+    composition_metrics = table.composition_table.horizontalHeader().fontMetrics()
+
+    assert table.summary_table.columnWidth(0) >= summary_metrics.horizontalAdvance("Invariant Check") + summary_padding
+    assert table.composition_table.columnWidth(0) >= composition_metrics.horizontalAdvance("Component") + compact_padding
+    assert table.composition_table.columnWidth(1) >= composition_metrics.horizontalAdvance("Liquid (x)") + compact_padding
+    assert table.composition_table.columnWidth(2) >= composition_metrics.horizontalAdvance("Vapor (y)") + compact_padding
+
+
+def test_results_sidebar_only_hosts_results_tables(app: QApplication) -> None:
+    sidebar = ResultsSidebarWidget()
+
+    assert sidebar.layout().count() == 1
+    assert sidebar.layout().itemAt(0).widget() is sidebar.table_widget
+
+
+def test_main_window_toolbar_unit_converter_handles_pressure_and_temperature(
+    window: PVTSimulatorWindow,
+    app: QApplication,
+) -> None:
+    converter = window.unit_converter_widget
+
+    assert window.results_sidebar.layout().count() == 1
+    assert converter.parentWidget() is not window.results_sidebar
+    assert converter.result_value.text() == "14.5038 psia"
+
+    converter.value_spin.setValue(71.21154)
+    assert converter.result_value.text() == "1032.84 psia"
+
+    converter.quantity_combo.setCurrentIndex(converter.quantity_combo.findText("Temperature"))
+    assert converter.result_value.text() == "212 °F"
+
+    converter.value_spin.setValue(128.5)
+    assert converter.result_value.text() == "263.3 °F"
 
 
 def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> None:
@@ -1238,28 +1397,440 @@ def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> N
     assert "border-bottom-right-radius" in stylesheet
     assert "QGroupBox" in stylesheet
     assert "border: none;" in stylesheet
+    assert "QTableWidget#CompositionInputTable" in stylesheet
     assert "QTabWidget#HeavyFractionTabs::pane" in stylesheet
+    assert "QTabWidget#HeavyFractionTabs QStackedWidget" in stylesheet
 
 
-def test_results_tables_align_to_shared_right_edge(app: QApplication) -> None:
+def test_results_tables_align_to_shared_right_edge(
+    window: PVTSimulatorWindow,
+    app: QApplication,
+) -> None:
+    window.resize(1800, 1000)
+    window.show()
+    window.results_sidebar.display_result(_bubble_point_result())
+    app.processEvents()
+    table = window.results_table
+
+    def _slack(grid) -> int:
+        return grid.viewport().width() - sum(grid.columnWidth(column) for column in range(grid.columnCount()))
+
+    summary_slack = _slack(table.summary_table)
+    composition_slack = _slack(table.composition_table)
+    details_slack = _slack(table.details_table)
+
+    assert summary_slack >= 0
+    assert composition_slack >= 0
+    assert details_slack >= 0
+    assert max(summary_slack, composition_slack, details_slack) - min(
+        summary_slack,
+        composition_slack,
+        details_slack,
+    ) <= 2
+
+
+def test_composition_inputs_use_square_table_and_tab_gap(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.show()
+    app.processEvents()
+
+    assert widget.table.objectName() == "CompositionInputTable"
+    assert widget.plus_form.contentsMargins().top() > 0
+    assert widget.inline_form.contentsMargins().top() > 0
+
+
+def test_composition_widget_reloads_inline_pseudo_in_saved_display_units(app: QApplication) -> None:
+    widget = CompositionInputWidget()
+    widget.show()
+    app.processEvents()
+
+    composition = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.199620},
+                    {"component_id": "C2", "mole_fraction": 0.100100},
+                    {"component_id": "C3", "mole_fraction": 0.185790},
+                    {"component_id": "nC4", "mole_fraction": 0.090360},
+                    {"component_id": "nC5", "mole_fraction": 0.188510},
+                    {"component_id": "PSEUDO_PLUS", "mole_fraction": 0.235630},
+                ],
+                "inline_components": [
+                    {
+                        "component_id": "PSEUDO_PLUS",
+                        "name": "Pseudo+",
+                        "formula": "Pseudo+",
+                        "molecular_weight_g_per_mol": 86.177000,
+                        "critical_temperature_k": 507.400000,
+                        "critical_pressure_pa": 3008134.215801,
+                        "critical_temperature_unit": "F",
+                        "critical_pressure_unit": "psia",
+                        "omega": 0.296000,
+                    }
+                ],
+            },
+            "calculation_type": "bubble_point",
+            "eos_type": "peng_robinson",
+            "bubble_point_config": {
+                "temperature_k": 326.76111111111106,
+                "pressure_initial_pa": 1.0e7,
+            },
+        }
+    ).composition
+
+    widget.set_composition(composition)
+
+    assert widget.inline_tc_unit.currentText() == "F"
+    assert float(widget.inline_tc_edit.text()) == pytest.approx(
+        temperature_from_k(507.400000, TemperatureUnit.F),
+        abs=1e-6,
+    )
+    assert widget.inline_pc_unit.currentText() == "psia"
+    assert float(widget.inline_pc_edit.text()) == pytest.approx(
+        pressure_from_pa(3008134.215801, PressureUnit.PSIA),
+        abs=1e-6,
+    )
+
+    rebuilt = widget.get_composition()
+
+    assert rebuilt is not None
+    spec = rebuilt.inline_components[0]
+    assert spec.critical_temperature_k == pytest.approx(507.400000)
+    assert spec.critical_pressure_pa == pytest.approx(3008134.215801)
+    assert spec.critical_temperature_unit is TemperatureUnit.F
+    assert spec.critical_pressure_unit is PressureUnit.PSIA
+
+
+def test_cce_exact_pressures_field_exposes_full_helper_text(app: QApplication) -> None:
+    widget = ConditionsInputWidget()
+    widget.show()
+    app.processEvents()
+
+    expected_help = "Optional exact pressures in bar. You can enter them in any order."
+    assert widget.cce_pressure_points.placeholderText() == "Optional exact pressures (bar)"
+    assert widget.cce_pressure_points.toolTip() == expected_help
+
+
+def test_exact_pressure_fields_track_selected_pressure_units(app: QApplication) -> None:
+    widget = ConditionsInputWidget()
+    widget.show()
+    app.processEvents()
+
+    widget.cce_pressure_unit.setCurrentIndex(widget.cce_pressure_unit.findText("psia"))
+    widget.dl_pressure_unit.setCurrentIndex(widget.dl_pressure_unit.findText("psia"))
+    app.processEvents()
+
+    assert widget.cce_p_end_unit.text() == "psia"
+    assert widget.cce_pressure_points.placeholderText() == "Optional exact pressures (psia)"
+    assert widget.cce_pressure_points.toolTip() == (
+        "Optional exact pressures in psia. You can enter them in any order."
+    )
+    assert widget.dl_p_end_unit.text() == "psia"
+    assert widget.dl_pressure_points.placeholderText() == "Optional exact pressures below bubble (psia)"
+    assert widget.dl_pressure_points.toolTip() == (
+        "Optional exact pressures below bubble in psia. You can enter them in any order."
+    )
+
+
+def test_cce_schedule_fields_autofill_exact_pressures_preview(app: QApplication) -> None:
+    widget = ConditionsInputWidget()
+    widget.show()
+    app.processEvents()
+
+    widget.cce_pressure_unit.setCurrentIndex(widget.cce_pressure_unit.findText("psia"))
+    widget.cce_p_start.setValue(1500)
+    widget.cce_p_end.setValue(1000)
+    widget.cce_n_steps.setValue(3)
+    app.processEvents()
+
+    assert widget.cce_pressure_points.text() == "1500, 1250, 1000"
+
+
+def test_main_window_normalizes_exact_cce_schedule_to_descending_order(
+    window: PVTSimulatorWindow,
+) -> None:
+    config = _cce_config()
+    window.composition_widget.set_composition(config.composition)
+    window.conditions_widget.load_from_run_config(config)
+    window.conditions_widget.cce_pressure_points.setText("1000, 1250, 1500")
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    assert rebuilt.cce_config is not None
+    assert rebuilt.cce_config.pressure_points_pa == pytest.approx([1.5e8, 1.25e8, 1.0e8])
+    assert window.conditions_widget.cce_pressure_points.text() == "1500, 1250, 1000"
+    assert window.status_label.text() == (
+        "CCE exact pressures are shown high-to-low because constant composition "
+        "expansion runs from high pressure to low pressure."
+    )
+
+
+def test_main_window_warns_when_cce_start_end_pressures_are_inverted(
+    window: PVTSimulatorWindow,
+) -> None:
+    window.conditions_widget.set_calculation_type(CalculationType.CCE)
+    window.conditions_widget.cce_pressure_unit.setCurrentIndex(
+        window.conditions_widget.cce_pressure_unit.findText("psia")
+    )
+    window.conditions_widget.cce_p_start.setValue(1000)
+    window.conditions_widget.cce_p_end.setValue(1500)
+
+    assert window.status_label.text() == "⚠ End pressure must be lower than start pressure for CCE."
+    assert window.conditions_widget.cce_pressure_points.text() == ""
+
+
+def test_main_window_round_trips_cce_units(window: PVTSimulatorWindow) -> None:
+    config = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.70},
+                    {"component_id": "C4", "mole_fraction": 0.20},
+                    {"component_id": "C10", "mole_fraction": 0.10},
+                ]
+            },
+            "calculation_type": "cce",
+            "eos_type": "peng_robinson",
+            "cce_config": {
+                "temperature_k": 360.0,
+                "pressure_points_pa": [10342135.5, 8618446.25, 6894757.0],
+                "pressure_unit": "psia",
+                "temperature_unit": "F",
+            },
+        }
+    )
+
+    window.composition_widget.set_composition(config.composition)
+    window.conditions_widget.load_from_run_config(config)
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    _assert_configs_equivalent(rebuilt, config)
+    assert window.conditions_widget.cce_pressure_points.text() == "1500, 1250, 1000"
+
+
+def test_main_window_round_trips_dl_units(window: PVTSimulatorWindow) -> None:
+    config = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.40},
+                    {"component_id": "C3", "mole_fraction": 0.30},
+                    {"component_id": "C10", "mole_fraction": 0.30},
+                ]
+            },
+            "calculation_type": "differential_liberation",
+            "eos_type": "peng_robinson",
+            "dl_config": {
+                "temperature_k": 326.76111111111106,
+                "bubble_pressure_pa": 5200000.0,
+                "pressure_points_pa": [3447378.5, 2068427.1, 689475.7],
+                "pressure_unit": "psia",
+                "temperature_unit": "F",
+            },
+        }
+    )
+
+    window.composition_widget.set_composition(config.composition)
+    window.conditions_widget.load_from_run_config(config)
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    assert rebuilt.dl_config is not None
+    assert rebuilt.dl_config.temperature_k == pytest.approx(config.dl_config.temperature_k)
+    assert rebuilt.dl_config.bubble_pressure_pa == pytest.approx(
+        config.dl_config.bubble_pressure_pa,
+        abs=50.0,
+    )
+    assert rebuilt.dl_config.pressure_points_pa == pytest.approx(config.dl_config.pressure_points_pa)
+    assert rebuilt.dl_config.pressure_unit == config.dl_config.pressure_unit
+    assert rebuilt.dl_config.temperature_unit == config.dl_config.temperature_unit
+    assert window.conditions_widget.dl_pressure_points.text() == "500, 300, 100"
+
+
+def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None:
+    result = _cce_result()
+
     table = ResultsTableWidget()
-    table.resize(340, 900)
-    table.display_result(_bubble_point_result())
-    table.show()
-    app.processEvents()
-    table.apply_ui_scale(DEFAULT_UI_SCALE)
-    app.processEvents()
+    table.display_result(result)
+    assert table.details_section.title() == "Densities"
+    assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
+    assert table.details_table.horizontalHeaderItem(2).text() == "Vapor Density"
+    assert table.details_table.item(0, 1).text() == "648.20"
+    assert table.details_table.item(0, 2).text() == "-"
+    assert table.details_table.item(1, 2).text() == "128.60"
 
-    def _column_span(widget: ResultsTableWidget, attr: str) -> int:
-        grid = getattr(widget, attr)
-        return sum(grid.columnWidth(column) for column in range(grid.columnCount()))
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "rhoL" in report
+    assert "rhoV" in report
+    assert "648.20" in report
 
-    summary_span = _column_span(table, "summary_table")
-    composition_span = _column_span(table, "composition_table")
-    details_span = _column_span(table, "details_table")
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    ax = plot.figure.axes[0]
+    assert ax.get_ylabel() == "Density (kg/m³)"
+    assert ax.get_title() == "CCE Density at 86.9 °C"
+    assert {line.get_label() for line in ax.lines} >= {
+        "Liquid Density",
+        "Vapor Density",
+        "Psat = 155.00 bar",
+    }
 
-    assert abs(summary_span - composition_span) <= 2
-    assert abs(details_span - composition_span) <= 2
+
+def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> None:
+    config = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.70},
+                    {"component_id": "C4", "mole_fraction": 0.20},
+                    {"component_id": "C10", "mole_fraction": 0.10},
+                ]
+            },
+            "calculation_type": "cce",
+            "eos_type": "peng_robinson",
+            "cce_config": {
+                "temperature_k": 360.0,
+                "pressure_points_pa": [10342135.5, 8618446.25],
+                "pressure_unit": "psia",
+                "temperature_unit": "F",
+            },
+        }
+    )
+    result = _completed_run_result(
+        config,
+        cce_result=CCEResult(
+            temperature_k=360.0,
+            saturation_pressure_pa=9652659.8,
+            steps=[
+                CCEStepResult(
+                    pressure_pa=10342135.5,
+                    relative_volume=1.00,
+                    liquid_fraction=1.0,
+                    vapor_fraction=0.0,
+                    z_factor=0.82,
+                    liquid_density_kg_per_m3=648.2,
+                    vapor_density_kg_per_m3=None,
+                ),
+                CCEStepResult(
+                    pressure_pa=8618446.25,
+                    relative_volume=1.15,
+                    liquid_fraction=0.72,
+                    vapor_fraction=0.28,
+                    z_factor=0.91,
+                    liquid_density_kg_per_m3=583.4,
+                    vapor_density_kg_per_m3=128.6,
+                ),
+            ],
+        ),
+    )
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    summary = _summary_values(table)
+    assert summary["Temperature"] == "188.33 °F"
+    assert summary["Saturation Pressure"] == "1400.00 psia"
+    assert table.composition_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
+    assert table.details_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "T = 188.330 °F" in report
+    assert "Psat = 1400.00000 psia" in report
+    assert "P (psia)" in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    ax = plot.figure.axes[0]
+    assert ax.get_xlabel() == "Pressure (psia)"
+    assert ax.get_title() == "CCE Density at 188.3 °F"
+    assert "Psat = 1400.00 psia" in {line.get_label() for line in ax.lines}
+
+
+def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> None:
+    config = _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.40},
+                    {"component_id": "C3", "mole_fraction": 0.30},
+                    {"component_id": "C10", "mole_fraction": 0.30},
+                ]
+            },
+            "calculation_type": "differential_liberation",
+            "eos_type": "peng_robinson",
+            "dl_config": {
+                "temperature_k": 326.76111111111106,
+                "bubble_pressure_pa": 5200000.0,
+                "pressure_points_pa": [3447378.5, 2068427.1, 689475.7],
+                "pressure_unit": "psia",
+                "temperature_unit": "F",
+            },
+        }
+    )
+    result = _completed_run_result(
+        config,
+        dl_result=DLResult(
+            temperature_k=326.76111111111106,
+            bubble_pressure_pa=5200000.0,
+            rsi=620.0,
+            boi=1.48,
+            converged=True,
+            steps=[
+                DLStepResult(
+                    pressure_pa=5200000.0,
+                    rs=620.0,
+                    bo=1.48,
+                    bt=1.48,
+                    vapor_fraction=0.0,
+                    liquid_moles_remaining=1.0,
+                ),
+                DLStepResult(
+                    pressure_pa=3447378.5,
+                    rs=210.0,
+                    bo=1.18,
+                    bt=1.23,
+                    vapor_fraction=0.28,
+                    liquid_moles_remaining=0.72,
+                ),
+            ],
+        ),
+    )
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    summary = _summary_values(table)
+    assert summary["Temperature"] == "128.50 °F"
+    assert summary["Bubble Pressure"] == "754.20 psia"
+    assert table.composition_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "T = 128.500 °F" in report
+    assert "Pb = 754.19627 psia" in report
+    assert "P (psia)" in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    assert plot.figure.axes[0].get_xlabel() == "Pressure (psia)"
+    assert plot.figure.axes[0].get_title() == "Differential Liberation at 128.5 °F"
+
+
+def test_main_window_uses_generic_plot_surface(window: PVTSimulatorWindow) -> None:
+    assert window.results_plot._view_mode == "generic"
 
 
 def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication) -> None:
@@ -1360,6 +1931,7 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
 
     assert summary["Bubble Pressure"] == "12.00 MPa"
     assert summary["Temperature"] == "170.33 °F"
+    assert summary["EOS"] == "Peng-Robinson (1976)"
     assert "Solver Status" not in summary
     assert "Final Residual" not in summary
     assert table.summary_table.item(0, 0).text() == "Bubble Pressure"
@@ -1368,7 +1940,9 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
     if not getattr(plot, "_matplotlib_available", False):
         pytest.skip("matplotlib Qt backend unavailable")
     plot.display_result(result)
-    assert plot.figure.axes[0].get_title() == "Bubble Point at 12.00 MPa"
+    ax = plot.figure.axes[0]
+    assert ax.get_title() == "Bubble Point at 12.00 MPa"
+    assert ax.get_ylim() == pytest.approx((0.0, 1.0))
 
     text = TextOutputWidget()
     text.display_result(result)
@@ -1376,6 +1950,7 @@ def test_saturation_result_widgets_honor_selected_display_units(app: QApplicatio
 
     assert "T = 170.330 °F" in report
     assert "Pb = 12.00000 MPa" in report
+    assert "EOS: Peng-Robinson (1976)" in report
 
 
 def test_saturation_result_widgets_render_plus_fraction_lump_names(app: QApplication) -> None:
@@ -1496,10 +2071,12 @@ def test_saturation_result_widgets_render_inline_pseudo_display_label(app: QAppl
         pytest.skip("matplotlib Qt backend unavailable")
     plot.display_result(result)
 
-    tick_labels = [tick.get_text() for tick in plot.figure.axes[0].get_xticklabels()]
+    ax = plot.figure.axes[0]
+    tick_labels = [tick.get_text() for tick in ax.get_xticklabels()]
     assert "Pseudo+" in tick_labels
     assert "PSEUDO_PLUS" not in tick_labels
     assert plot.figure.subplotpars.bottom <= 0.22
+    assert ax.get_ylim() == pytest.approx((0.0, 1.0))
 
 
 @pytest.mark.parametrize(
@@ -1860,7 +2437,7 @@ def test_main_window_zoom_controls_rescale_shell(window: PVTSimulatorWindow) -> 
         reference_scale=DEFAULT_UI_SCALE,
     )
     assert window.text_output_widget.text.font().pointSizeF() > initial_text_font_size
-    assert window.status_label.text() == "Zoom: 120%"
+    assert window.status_label.text() == f"Zoom: {int(round(zoomed_scale * 100))}%"
 
     window._reset_zoom()
 
@@ -1883,22 +2460,25 @@ def test_main_window_results_pane_title_tracks_active_calculation(
     assert window.workspace.results_pane is not None
     assert window.workspace.results_pane._title_label.text() == "Bubble Point Results"
     assert window.results_table.run_id_label.text() == result.run_name
-    assert window.results_report_widget.text.toPlainText().startswith("Bubble Point")
+    assert window.text_output_widget.text.toPlainText().startswith("Bubble Point")
 
 
-def test_main_window_logged_run_selection_populates_cached_results_sidebar(
+def test_main_window_log_preview_does_not_auto_populate_cached_results_sidebar(
     window: PVTSimulatorWindow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = _inline_pseudo_bubble_point_result()
+    live_result = _bubble_point_result()
+    cached_result = _inline_pseudo_bubble_point_result()
+    monkeypatch.setattr(window.run_log_widget.preview_plot, "display_result", lambda _result: None)
 
-    window._on_logged_run_selected(result)
+    window._on_calculation_finished(live_result)
+    window.run_log_widget._set_preview(Path("C:/tmp/cached-run"), cached_result)
 
     assert window.workspace.results_pane is not None
     assert window.workspace.results_pane._title_label.text() == "Bubble Point Results"
-    assert window.results_table.run_id_label.text() == result.run_name
-    assert window.results_table.status_label.text() == "Cached"
-    assert window.results_table.display_is_cached is True
-    assert "Bubble Point" in window.results_report_widget.text.toPlainText()
+    assert window.results_table.run_id_label.text() == live_result.run_name
+    assert window.results_table.status_label.text() == "Completed"
+    assert window.results_table.display_is_cached is False
 
 
 def test_run_log_widget_collapses_empty_preview_until_selection(app: QApplication) -> None:
@@ -2032,6 +2612,200 @@ def test_run_log_widget_groups_by_test_type_and_keeps_child_sorting(
     assert bubble_group.child(1).text(0) == "charlie"
 
 
+def test_run_log_widget_surfaces_eos_for_saved_saturation_runs(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = "C:/tmp/pr78-bubble"
+    result = _pr78_bubble_point_result()
+
+    monkeypatch.setattr("pvtapp.widgets.run_log_view.list_runs", lambda limit=200: [{"path": run_dir}])
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_path: result if str(run_path) == str(Path(run_dir)) else None,
+    )
+
+    widget = RunLogWidget()
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    widget.show()
+    app.processEvents()
+
+    assert widget.tree.headerItem().text(3) == "EOS"
+    assert widget.tree.topLevelItemCount() == 1
+
+    item = widget.tree.topLevelItem(0)
+    assert item.text(3) == "Peng-Robinson (1978)"
+
+    widget._on_item_clicked(item, 0)
+    app.processEvents()
+
+    assert "EOS: Peng-Robinson (1978)" in widget.preview_title.text()
+
+
+def test_run_log_widget_supports_extended_selection_and_tracks_last_clicked_run(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_a = str(Path("C:/tmp/run-a"))
+    run_b = str(Path("C:/tmp/run-b"))
+    run_results = {
+        run_a: _completed_run_result(
+            _pt_flash_config().model_copy(update={"run_name": "alpha"}),
+            pt_flash_result=_pt_flash_result().pt_flash_result,
+        ).model_copy(update={"run_name": "alpha"}),
+        run_b: _completed_run_result(
+            _bubble_point_config().model_copy(update={"run_name": "bravo"}),
+            bubble_point_result=_bubble_point_result().bubble_point_result,
+        ).model_copy(update={"run_name": "bravo"}),
+    }
+
+    monkeypatch.setattr("pvtapp.widgets.run_log_view.list_runs", lambda limit=200: [{"path": run_a}, {"path": run_b}])
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_path: run_results.get(str(run_path)),
+    )
+
+    widget = RunLogWidget()
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    activated: list[object] = []
+    widget.result_activated.connect(activated.append)
+    widget.show()
+    app.processEvents()
+
+    def _item_by_name(name: str):
+        return next(
+            widget.tree.topLevelItem(index)
+            for index in range(widget.tree.topLevelItemCount())
+            if widget.tree.topLevelItem(index).text(0) == name
+        )
+
+    alpha = _item_by_name("alpha")
+    bravo = _item_by_name("bravo")
+
+    assert widget.tree.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
+
+    widget.tree.setCurrentItem(alpha)
+    alpha.setSelected(True)
+    widget._on_item_clicked(alpha, 0)
+
+    widget.tree.setCurrentItem(bravo)
+    alpha.setSelected(True)
+    bravo.setSelected(True)
+    widget._on_item_clicked(bravo, 0)
+    app.processEvents()
+
+    assert alpha.isSelected() is True
+    assert bravo.isSelected() is True
+    assert len(widget._selected_run_items()) == 2
+    assert widget._selected_run_dir == Path(run_b)
+    assert "bravo" in widget.preview_title.text()
+    assert widget.load_inputs_btn.isEnabled() is False
+    assert activated[-1] == run_results[run_b]
+
+
+def test_run_log_widget_bulk_delete_removes_all_selected_runs(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_a = tmp_path / "run-a"
+    run_b = tmp_path / "run-b"
+    run_a.mkdir()
+    run_b.mkdir()
+    (run_a / "config.json").write_text("{}", encoding="utf-8")
+    (run_b / "config.json").write_text("{}", encoding="utf-8")
+    run_results = {
+        str(run_a): _pt_flash_result(),
+        str(run_b): _bubble_point_result(),
+    }
+
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.list_runs",
+        lambda limit=200: [{"path": str(run_a)}, {"path": str(run_b)}],
+    )
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_path: run_results.get(str(run_path)),
+    )
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    widget = RunLogWidget()
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    widget.show()
+    app.processEvents()
+
+    item_a = widget.tree.topLevelItem(0)
+    item_b = widget.tree.topLevelItem(1)
+    widget.tree.setCurrentItem(item_b)
+    item_a.setSelected(True)
+    item_b.setSelected(True)
+    widget._on_item_clicked(item_b, 0)
+
+    widget._delete_selected()
+
+    assert run_a.exists() is False
+    assert run_b.exists() is False
+
+
+def test_run_log_widget_bulk_export_writes_zip_archive_for_selected_runs(
+    app: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_a = tmp_path / "run-a"
+    run_b = tmp_path / "run-b"
+    run_a.mkdir()
+    run_b.mkdir()
+    (run_a / "config.json").write_text('{"run":"a"}', encoding="utf-8")
+    (run_a / "results.json").write_text('{"result":"a"}', encoding="utf-8")
+    (run_b / "config.json").write_text('{"run":"b"}', encoding="utf-8")
+    (run_b / "results.json").write_text('{"result":"b"}', encoding="utf-8")
+    run_results = {
+        str(run_a): _pt_flash_result(),
+        str(run_b): _bubble_point_result(),
+    }
+    archive_path = tmp_path / "selected-runs.zip"
+
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.list_runs",
+        lambda limit=200: [{"path": str(run_a)}, {"path": str(run_b)}],
+    )
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.load_run_result",
+        lambda run_path: run_results.get(str(run_path)),
+    )
+    monkeypatch.setattr(
+        "pvtapp.widgets.run_log_view.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(archive_path), "ZIP Files (*.zip)"),
+    )
+
+    widget = RunLogWidget()
+    widget.preview_plot.display_result = lambda _result: None  # type: ignore[method-assign]
+    widget.show()
+    app.processEvents()
+
+    item_a = widget.tree.topLevelItem(0)
+    item_b = widget.tree.topLevelItem(1)
+    widget.tree.setCurrentItem(item_b)
+    item_a.setSelected(True)
+    item_b.setSelected(True)
+    widget._on_item_clicked(item_b, 0)
+
+    widget._export_selected()
+
+    assert archive_path.exists() is True
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+
+    assert "run-a/config.json" in names
+    assert "run-a/results.json" in names
+    assert "run-b/config.json" in names
+    assert "run-b/results.json" in names
+
+
 def test_main_window_disables_log_replay_actions_while_running(window: PVTSimulatorWindow) -> None:
     window.run_log_widget._set_preview(Path("C:/tmp/saved-run"), _pt_flash_result())
 
@@ -2070,7 +2844,7 @@ def test_main_window_log_item_click_populates_cached_results_sidebar(
     app.processEvents()
 
     assert window.results_table.status_label.text() == "Cached"
-    assert "Bubble Point" in window.results_report_widget.text.toPlainText()
+    assert window.results_table.display_is_cached is True
 
 
 def test_main_window_restores_persisted_zoom_between_sessions(
