@@ -816,6 +816,23 @@ def _state_branch_phase(state: ContinuationState) -> NDArray[np.float64]:
     return state.liquid_composition
 
 
+def _k_value_transition_jump(
+    previous: ContinuationState,
+    candidate: ContinuationState,
+) -> float:
+    """Return a scale-stable K-value continuity metric for branch tracking.
+
+    Raw ``|K_new - K_old|`` can explode on legitimate low-pressure dew branches
+    where one component has a very large but smoothly varying ``K`` value. Use a
+    log-ratio jump instead so continuity follows relative motion of the root
+    family rather than the absolute magnitude of ``K``.
+    """
+    eps = 1.0e-300
+    previous_k = np.maximum(previous.K_values, eps)
+    candidate_k = np.maximum(candidate.K_values, eps)
+    return float(np.max(np.abs(np.log(candidate_k / previous_k))))
+
+
 def _continuation_transition_metrics(
     previous: ContinuationState,
     candidate: ContinuationState,
@@ -826,7 +843,7 @@ def _continuation_transition_metrics(
         phase_component_jump=float(
             np.max(np.abs(_state_branch_phase(candidate) - _state_branch_phase(previous)))
         ),
-        k_value_jump=float(np.max(np.abs(candidate.K_values - previous.K_values))),
+        k_value_jump=_k_value_transition_jump(previous, candidate),
     )
 
 
