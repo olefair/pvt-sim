@@ -151,6 +151,37 @@ def test_trace_branch_continuation_reports_trivial_collapse_for_co2_rich_bubble(
     assert trace.termination_temperature == 310.0
 
 
+def test_trace_branch_continuation_keeps_c1_c10_low_pressure_dew_family() -> None:
+    """Asymmetric low-pressure dew tracing should not reject smooth high-K evolution."""
+    components = load_components()
+    mixture = [components["C1"], components["C10"]]
+    eos = PengRobinsonEOS(mixture)
+    z = np.array([0.5, 0.5], dtype=float)
+
+    trace = trace_branch_continuation_adaptive(
+        branch="dew",
+        temperature_start=220.0,
+        temperature_end=480.0,
+        target_points=24,
+        composition=z,
+        components=mixture,
+        eos=eos,
+        n_pressure_points=160,
+    )
+
+    temperatures = np.array([state.temperature for state in trace.states], dtype=float)
+    pressures_bar = np.array([state.pressure / 1.0e5 for state in trace.states], dtype=float)
+
+    assert trace.termination_reason is None
+    assert len(trace.states) >= 24
+    assert temperatures[0] < 320.0
+    assert temperatures[-1] == pytest.approx(480.0, abs=1.0e-9)
+    assert pressures_bar[0] < 0.02
+    assert pressures_bar[-1] > 4.0
+    assert np.all(np.diff(temperatures) > 0.0)
+    assert np.all(np.diff(pressures_bar) > 0.0)
+
+
 def test_trace_envelope_continuation_switches_c2_c3_near_critical() -> None:
     """Combined continuation should promote a critical junction and switch to dew."""
     components = load_components()
