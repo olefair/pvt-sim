@@ -1412,6 +1412,15 @@ class CompositionInputWidget(QWidget):
         editor_height = font_height + max(4, editor_padding)
         return max(self.table.verticalHeader().minimumSectionSize(), font_height + 10, editor_height, combo_height)
 
+    def _widest_component_selector_width(self) -> int:
+        """Return the widest visible component picker width needed by the current rows."""
+        width = 0
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 0)
+            if isinstance(combo, ClickSelectComboBox):
+                width = max(width, combo.minimumSizeHint().width(), combo.sizeHint().width())
+        return width
+
     def _sync_column_widths(self) -> None:
         """Keep the component column readable while letting mole fractions breathe."""
         viewport_width = self.table.viewport().width()
@@ -1420,6 +1429,7 @@ class CompositionInputWidget(QWidget):
         if viewport_width <= 0:
             return
 
+        mole_fraction_min_width = self._scaled_metric(MOLE_FRACTION_COLUMN_MIN_WIDTH)
         header_metrics = self.table.horizontalHeader().fontMetrics()
         header_width = header_metrics.horizontalAdvance("Component")
         component_width = max(
@@ -1435,7 +1445,17 @@ class CompositionInputWidget(QWidget):
             ),
         )
 
-        mole_fraction_min_width = self._scaled_metric(MOLE_FRACTION_COLUMN_MIN_WIDTH)
+        widest_selector_width = self._widest_component_selector_width()
+        if widest_selector_width > 0:
+            max_component_width = max(
+                self._scaled_metric(COMPONENT_COLUMN_MIN_WIDTH),
+                viewport_width - mole_fraction_min_width,
+            )
+            component_width = max(
+                component_width,
+                min(widest_selector_width, max_component_width),
+            )
+
         available_for_fraction = max(mole_fraction_min_width, viewport_width - component_width)
         if viewport_width < component_width + mole_fraction_min_width:
             component_width = max(self._scaled_metric(COMPONENT_COLUMN_MIN_WIDTH), viewport_width - mole_fraction_min_width)

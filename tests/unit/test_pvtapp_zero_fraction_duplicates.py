@@ -11,11 +11,13 @@ import pytest
 try:
     from PySide6.QtCore import Qt, QSettings
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QLineEdit, QStyleOptionViewItem
+    from PySide6.QtWidgets import QApplication, QLineEdit, QStyle, QStyleOptionComboBox, QStyleOptionViewItem
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     QApplication = None  # type: ignore[assignment]
     QLineEdit = None  # type: ignore[assignment]
     QTest = None  # type: ignore[assignment]
+    QStyle = None  # type: ignore[assignment]
+    QStyleOptionComboBox = None  # type: ignore[assignment]
     QStyleOptionViewItem = None  # type: ignore[assignment]
     Qt = None  # type: ignore[assignment]
     QSettings = None  # type: ignore[assignment]
@@ -564,8 +566,10 @@ def test_column_width_policy_keeps_component_readable_and_shows_full_mole_fracti
 
     header_metrics = widget.table.horizontalHeader().fontMetrics()
     mole_header_width = header_metrics.horizontalAdvance("Mole Fraction") + 16
+    combo = widget.table.cellWidget(0, 0)
+    assert combo is not None
 
-    assert 96 <= widget.table.columnWidth(0) <= 140
+    assert widget.table.columnWidth(0) >= max(96, combo.minimumSizeHint().width())
     assert widget.table.columnWidth(1) >= max(MOLE_FRACTION_COLUMN_MIN_WIDTH, mole_header_width)
     assert widget.table.columnWidth(0) + widget.table.columnWidth(1) >= widget.table.viewport().width() - 2
 
@@ -583,3 +587,38 @@ def test_component_dropdown_button_is_wider_without_expanding_column_excessively
     assert "border-radius: 0px" in combo.styleSheet()
     assert "border-top-right-radius: 0px" in combo.styleSheet()
     assert "border-bottom-right-radius: 0px" in combo.styleSheet()
+
+
+def test_inline_pseudo_component_label_remains_fully_visible_when_table_has_spare_width(
+    app: QApplication,
+) -> None:
+    widget = CompositionInputWidget()
+    widget.resize(420, 600)
+    widget.table.setRowCount(0)
+    widget._add_component_row("C1", 0.6)
+    widget._add_component_row("", 0.4)
+
+    combo = widget.table.cellWidget(1, 0)
+    assert combo is not None
+    combo.setCurrentText("PSEUDO+")
+
+    widget.show()
+    app.processEvents()
+    widget._sync_column_widths()
+    app.processEvents()
+
+    row = widget._find_special_row(HEAVY_MODE_INLINE)
+    assert row is not None
+    combo = widget.table.cellWidget(row, 0)
+    assert combo is not None
+
+    option = QStyleOptionComboBox()
+    combo.initStyleOption(option)
+    content_rect = combo.style().subControlRect(
+        QStyle.ComplexControl.CC_ComboBox,
+        option,
+        QStyle.SubControl.SC_ComboBoxEditField,
+        combo,
+    )
+
+    assert content_rect.width() >= combo.fontMetrics().horizontalAdvance(combo.currentText())
