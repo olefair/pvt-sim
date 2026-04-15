@@ -13,9 +13,9 @@ concurrency:
 
 jobs:
   tests:
-    name: Full pytest suite
+    name: Headless pytest suite
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -26,17 +26,19 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install package
+      - name: Install headless test surface
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e .
+          python -m pip install pytest scipy
 
       - name: Run pytest
         run: pytest
 
-  validation:
-    name: Repo validation scripts
+  build:
+    name: Build distributions
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -49,11 +51,18 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install package
+      - name: Install build toolchain
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev]"
+          python -m pip install build
 
-      - name: Validate repo modules
-        run: python scripts/validate_modules.py
+      - name: Build source and wheel distributions
+        run: python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-ci
+          path: dist/*

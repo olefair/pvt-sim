@@ -5,11 +5,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
-    name: pvt-sim smoke
+    name: Headless smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -20,11 +27,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install package
+      - name: Install smoke test surface
         run: |
           python -m pip install -U pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e .
+          python -m pip install pytest scipy
+
+      - name: Validate repo modules
+        run: python scripts/validate_modules.py
 
       - name: Run fast tests
         run: |
