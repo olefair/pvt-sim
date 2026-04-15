@@ -1,0 +1,41 @@
+name: nightly
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validation:
+    name: Extended validation suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PVTSIM_RUN_SLOW: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install validation test surface
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e .
+          python -m pip install pytest scipy
+
+      - name: Run extended validation tests
+        run: pytest tests/validation tests/contracts/test_robustness.py tests/unit/test_envelope_continuation.py -q

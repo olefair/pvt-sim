@@ -277,20 +277,37 @@ MI-PVT cross-check lane separated cleanly.
 
 ## Continuous Integration
 
-### Pre-commit Hooks
-- Type checking (mypy)
-- Linting (ruff)
-- Unit tests (fast subset)
+The current CI surface should match the repo's verified reality rather than the
+longer-term aspiration.
 
-### PR Checks
-- Full unit test suite
-- Integration tests
-- Coverage report (target: >90%)
+### Pull Request / Push Smoke
+- `python scripts/validate_modules.py`
+- fast headless smoke subset covering flash, selected runtime workflows, CLI
+  validation, and core invariants
+- `pvtsim validate` / `pvtsim run --no-artifacts` on the canonical example
+  configs
+
+### Pull Request Headless CI
+- default `pytest` path for the headless kernel/runtime surface
+- `python -m build` to verify source and wheel packaging still work
+
+### Advisory CI Lanes
+- `black --check`, `flake8`, and `mypy` run as advisory checks until the
+  existing repo-wide backlog is reduced enough to make them blocking
+- Windows GUI contract coverage runs with
+  `pytest --run-gui-contracts -m gui_contract` and remains advisory until the
+  desktop surface is stable enough to require on every pull request
+
+### Scheduled Extended Validation
+- scheduled validation targets `tests/validation/` plus robustness coverage
+- `PVTSIM_RUN_SLOW=1` is enabled in that lane so slow continuation-path checks
+  run there instead of on every routine pull request
 
 ### Release Validation
-- Full regression suite
-- Performance benchmarks
-- Documentation build
+- full regression / literature / external-reference signoff remains a separate
+  release gate from routine CI
+- a docs build is not wired yet because the repo does not currently ship a
+  Sphinx project scaffold
 
 ---
 
