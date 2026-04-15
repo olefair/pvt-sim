@@ -77,23 +77,32 @@ def _build_cvd_run_result() -> RunResult:
                 CVDStepResult(
                     pressure_pa=5.652e6,
                     liquid_dropout=0.00,
+                    gas_produced=0.00,
                     cumulative_gas_produced=0.00,
                     moles_remaining=1.0,
                     z_two_phase=0.92,
+                    liquid_density_kg_per_m3=None,
+                    vapor_density_kg_per_m3=120.0,
                 ),
                 CVDStepResult(
                     pressure_pa=5.30e6,
                     liquid_dropout=0.04,
+                    gas_produced=0.12,
                     cumulative_gas_produced=0.12,
                     moles_remaining=0.88,
                     z_two_phase=0.89,
+                    liquid_density_kg_per_m3=510.0,
+                    vapor_density_kg_per_m3=105.0,
                 ),
                 CVDStepResult(
                     pressure_pa=5.0e6,
                     liquid_dropout=0.07,
+                    gas_produced=0.08,
                     cumulative_gas_produced=0.20,
                     moles_remaining=0.80,
                     z_two_phase=0.86,
+                    liquid_density_kg_per_m3=535.0,
+                    vapor_density_kg_per_m3=96.0,
                 ),
             ],
         ),
@@ -106,6 +115,9 @@ def test_cvd_results_table_displays_summary_instead_of_error(app: QApplication) 
 
     assert widget.summary_table.item(0, 0).text() == "Temperature"
     assert widget.summary_table.item(1, 0).text() == "Dew Pressure"
+    assert widget.composition_table.horizontalHeaderItem(2).text() == "Gas Produced"
+    assert widget.composition_table.horizontalHeaderItem(4).text() == "Moles Remaining"
+    assert widget.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
     assert widget.composition_table.rowCount() == 3
 
 
@@ -118,6 +130,12 @@ def test_cvd_plot_widget_renders_a_plot(app: QApplication) -> None:
 
     assert len(widget.figure.axes) >= 1
     assert "CVD" in widget.figure.axes[0].get_title()
+    assert {action.text() for action in widget.series_menu.actions()} >= {
+        "Liquid Dropout",
+        "Gas Produced",
+        "Cumulative Gas",
+        "Z-factor",
+    }
 
 
 def test_cvd_text_output_reports_dropout(app: QApplication) -> None:
@@ -127,4 +145,5 @@ def test_cvd_text_output_reports_dropout(app: QApplication) -> None:
     text = widget.text.toPlainText()
     assert "CVD" in text
     assert "Liquid Dropout" in text
+    assert "Gas Prod." in text
     assert "Cum. Gas" in text

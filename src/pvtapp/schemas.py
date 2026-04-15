@@ -1062,6 +1062,7 @@ class DLStepResult(BaseModel):
 
     pressure_pa: float
     rs: float
+    bg: Optional[float] = None
     bo: float
     bt: float
     vapor_fraction: float
@@ -1084,9 +1085,12 @@ class CVDStepResult(BaseModel):
 
     pressure_pa: float
     liquid_dropout: float
+    gas_produced: Optional[float] = None
     cumulative_gas_produced: float
     moles_remaining: Optional[float] = None
     z_two_phase: Optional[float] = None
+    liquid_density_kg_per_m3: Optional[float] = None
+    vapor_density_kg_per_m3: Optional[float] = None
 
 
 class CVDResult(BaseModel):
@@ -1109,6 +1113,10 @@ class SeparatorStageResult(BaseModel):
     vapor_fraction: Optional[float] = None
     liquid_moles: Optional[float] = None
     vapor_moles: Optional[float] = None
+    liquid_density_kg_per_m3: Optional[float] = None
+    vapor_density_kg_per_m3: Optional[float] = None
+    liquid_z_factor: Optional[float] = None
+    vapor_z_factor: Optional[float] = None
     converged: bool
 
 

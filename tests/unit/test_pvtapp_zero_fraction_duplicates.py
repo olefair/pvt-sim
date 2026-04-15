@@ -401,6 +401,7 @@ def test_standard_component_picker_only_lists_resolvable_components() -> None:
         assert resolve_component_id(component_id)
 
 
+@pytest.mark.gui_contract
 def test_component_table_grows_to_show_new_rows_without_internal_scroll(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -429,6 +430,7 @@ def test_component_table_grows_to_show_new_rows_without_internal_scroll(app: QAp
     assert last_rect.bottom() <= widget.table.viewport().height()
 
 
+@pytest.mark.gui_contract
 def test_component_selector_ignores_mouse_wheel_changes(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -452,6 +454,7 @@ def test_component_selector_ignores_mouse_wheel_changes(app: QApplication) -> No
     assert combo.currentText() == "C1"
 
 
+@pytest.mark.gui_contract
 def test_heavy_fraction_tabs_ignore_mouse_wheel_changes(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.heavy_tabs.setCurrentIndex(1)
@@ -470,6 +473,7 @@ def test_heavy_fraction_tabs_ignore_mouse_wheel_changes(app: QApplication) -> No
     assert widget.heavy_tabs.currentIndex() == 1
 
 
+@pytest.mark.gui_contract
 def test_heavy_fraction_tabs_fill_width_without_scroll_buttons(app: QApplication) -> None:
     widget = CompositionInputWidget()
 
@@ -478,6 +482,7 @@ def test_heavy_fraction_tabs_fill_width_without_scroll_buttons(app: QApplication
     assert widget.heavy_tabs.tabBar().elideMode() == Qt.TextElideMode.ElideNone
 
 
+@pytest.mark.gui_contract
 def test_mole_fraction_cells_are_left_aligned_like_component_names(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -491,6 +496,7 @@ def test_mole_fraction_cells_are_left_aligned_like_component_names(app: QApplica
     assert alignment & Qt.AlignmentFlag.AlignVCenter
 
 
+@pytest.mark.gui_contract
 def test_mole_fraction_editor_uses_compact_visible_line_edit(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -511,6 +517,7 @@ def test_mole_fraction_editor_uses_compact_visible_line_edit(app: QApplication) 
     assert "background: transparent" not in editor.styleSheet()
 
 
+@pytest.mark.gui_contract
 def test_pressing_enter_in_mole_fraction_editor_advances_to_next_fraction_row(
     app: QApplication,
 ) -> None:
@@ -541,6 +548,7 @@ def test_pressing_enter_in_mole_fraction_editor_advances_to_next_fraction_row(
     assert widget.table.currentItem() == widget.table.item(1, 1)
 
 
+@pytest.mark.gui_contract
 def test_mole_fraction_rows_scale_with_table_font(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -555,6 +563,7 @@ def test_mole_fraction_rows_scale_with_table_font(app: QApplication) -> None:
     assert row_height >= widget.table.fontMetrics().height() + 6
 
 
+@pytest.mark.gui_contract
 def test_column_width_policy_keeps_component_readable_and_shows_full_mole_fraction_header(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.resize(360, 600)
@@ -574,6 +583,7 @@ def test_column_width_policy_keeps_component_readable_and_shows_full_mole_fracti
     assert widget.table.columnWidth(0) + widget.table.columnWidth(1) >= widget.table.viewport().width() - 2
 
 
+@pytest.mark.gui_contract
 def test_component_dropdown_button_is_wider_without_expanding_column_excessively(app: QApplication) -> None:
     widget = CompositionInputWidget()
     widget.table.setRowCount(0)
@@ -589,6 +599,7 @@ def test_component_dropdown_button_is_wider_without_expanding_column_excessively
     assert "border-bottom-right-radius: 0px" in combo.styleSheet()
 
 
+@pytest.mark.gui_contract
 def test_inline_pseudo_component_label_remains_fully_visible_when_table_has_spare_width(
     app: QApplication,
 ) -> None:

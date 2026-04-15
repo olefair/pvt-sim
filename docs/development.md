@@ -175,7 +175,8 @@ confused:
 Current verification surfaces:
 
 - `python .\scripts\validate_modules.py`
-- `pytest`
+- `pytest` for the default high-signal kernel/runtime surface
+- `pytest --run-gui-contracts` for optional desktop layout/style contract checks
 - `pvtsim validate <config>`
 - manual CLI/GUI validation against literature data, MI PVT, lab reports, and
   physical invariants
@@ -183,3 +184,8 @@ Current verification surfaces:
 `pytest` is necessary but not sufficient proof of thermodynamic correctness. Use
 the validation plan and external reference cases when judging whether the
 simulator is actually right.
+
+The default `pytest` path intentionally deselects tests marked `gui_contract`.
+Those checks cover desktop layout, styling, zoom, and other presentation
+contracts that are useful when changing the GUI shell but are lower signal than
+kernel correctness and runtime-surface wiring for routine verification.

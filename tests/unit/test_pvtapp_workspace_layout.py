@@ -8,6 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+pytestmark = pytest.mark.gui_contract
+
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel, QSplitter, QWidget

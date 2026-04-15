@@ -75,4 +75,5 @@ testpaths = ["tests"]
 markers = [
   "slow: longer-running tests",
   "nightly: extended validation suite",
+  "gui_contract: optional desktop layout/style/presentation contract checks",
 ]

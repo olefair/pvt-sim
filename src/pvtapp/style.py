@@ -311,6 +311,9 @@ QTabWidget#HeavyFractionTabs QStackedWidget {{
   background: transparent;
   border: none;
 }}
+QTabBar#HeavyFractionTabBar {{
+  background: transparent;
+}}
 QTabBar::tab {{
   background: {palette['surface_elevated_bg']};
   padding: {px(5)}px {px(8)}px;

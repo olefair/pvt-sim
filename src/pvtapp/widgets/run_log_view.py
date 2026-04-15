@@ -379,7 +379,7 @@ class RunLogWidget(QWidget):
         has_selected_run = self._selected_run_dir is not None and self._selected_result is not None
         self.select_all_btn.setEnabled(bool(self._entries))
         self.load_inputs_btn.setEnabled(
-            has_selected_run and selected_count == 1 and self._replay_actions_enabled
+            has_selected_run and selected_count <= 1 and self._replay_actions_enabled
         )
         self.export_btn.setEnabled(selected_count > 0)
         self.delete_btn.setEnabled(selected_count > 0)
