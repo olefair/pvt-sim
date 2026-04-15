@@ -511,3 +511,192 @@ class TestValidationInvariants:
         assert "composition_sum_z" in names
         assert "phase_fraction_bounds" in names
         assert "material_balance_max" in names
+
+
+# ---------------------------------------------------------------------------
+# 8. Input validation (absorbed from contracts/test_robustness.py)
+# ---------------------------------------------------------------------------
+
+class TestFlashInputValidation:
+    """Comprehensive input-validation edge cases for pt_flash."""
+
+    def test_empty_component_list(self):
+        with pytest.raises(ValidationError, match="Component list cannot be empty"):
+            pt_flash(2e6, 250, np.array([1.0]), [], None)
+
+    def test_mismatched_composition_length(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="Composition length must match"):
+            pt_flash(2e6, 250, np.array([0.3, 0.3, 0.4]), binary, c1_c4_pr)
+
+    def test_composition_not_summing_to_one(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="must sum to 1.0"):
+            pt_flash(2e6, 250, np.array([0.3, 0.3]), binary, c1_c4_pr)
+
+    def test_negative_composition(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="non-negative"):
+            pt_flash(2e6, 250, np.array([-0.1, 1.1]), binary, c1_c4_pr)
+
+    def test_nan_in_composition(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="NaN or Inf"):
+            pt_flash(2e6, 250, np.array([np.nan, 0.5]), binary, c1_c4_pr)
+
+    def test_inf_in_composition(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="NaN or Inf"):
+            pt_flash(2e6, 250, np.array([np.inf, 0.5]), binary, c1_c4_pr)
+
+    def test_zero_pressure(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="[Pp]ressure.*positive"):
+            pt_flash(0, 250, np.array([0.5, 0.5]), binary, c1_c4_pr)
+
+    def test_negative_temperature(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="[Tt]emperature.*positive"):
+            pt_flash(2e6, -100, np.array([0.5, 0.5]), binary, c1_c4_pr)
+
+    def test_zero_temperature(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="[Tt]emperature.*positive"):
+            pt_flash(2e6, 0, np.array([0.5, 0.5]), binary, c1_c4_pr)
+
+    def test_invalid_bip_matrix_shape(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="Binary interaction matrix"):
+            pt_flash(2e6, 250, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                     binary_interaction=np.zeros((3, 3)))
+
+    def test_invalid_tolerance(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="[Tt]olerance"):
+            pt_flash(2e6, 250, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                     tolerance=-0.01)
+        with pytest.raises(ValidationError, match="[Tt]olerance"):
+            pt_flash(2e6, 250, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                     tolerance=2.0)
+
+    def test_invalid_max_iterations(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="max_iterations"):
+            pt_flash(2e6, 250, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                     max_iterations=0)
+
+    def test_error_message_includes_parameter(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError) as exc_info:
+            pt_flash(2e6, 250, np.array([0.3, 0.3]), binary, c1_c4_pr)
+        assert 'composition' in str(exc_info.value).lower() or hasattr(exc_info.value, 'parameter')
+
+    def test_error_message_includes_value(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError) as exc_info:
+            pt_flash(2e6, 250, np.array([0.3, 0.3]), binary, c1_c4_pr)
+        error_msg = str(exc_info.value)
+        assert '0.6' in error_msg or 'sum' in error_msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# 9. Numerical robustness (absorbed from contracts/test_robustness.py)
+# ---------------------------------------------------------------------------
+
+class TestFlashNumericalRobustness:
+    """Numerical edge cases: trace components, extreme conditions, graceful
+    degradation under tight iteration budgets."""
+
+    def test_trace_component_handling(self, components):
+        from pvtcore.core.errors import ConvergenceStatus
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.999999, 0.000001])
+        result = pt_flash(2e6, 250, z, comp_list, eos)
+
+        assert result.status != ConvergenceStatus.NUMERIC_ERROR
+        assert np.all(np.isfinite(result.liquid_composition))
+        assert np.all(np.isfinite(result.vapor_composition))
+        assert np.isfinite(result.vapor_fraction)
+
+    def test_near_pure_component(self, components):
+        from pvtcore.core.errors import ConvergenceStatus
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.9999, 0.0001])
+        result = pt_flash(2e6, 200, z, comp_list, eos)
+
+        assert result.status in (ConvergenceStatus.CONVERGED, ConvergenceStatus.STAGNATED)
+        assert np.all(np.isfinite(result.K_values))
+
+    def test_very_high_pressure(self, components):
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(1000e5, 300, z, comp_list, eos)
+        assert result.phase == "liquid"
+        assert result.vapor_fraction == 0.0
+
+    def test_very_low_pressure(self, components):
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(0.01e5, 400, z, comp_list, eos)
+        assert result.phase == "vapor"
+        assert result.vapor_fraction == 1.0
+
+    def test_near_critical_temperature(self, components):
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(5e6, 191, z, comp_list, eos)
+        assert result.status is not None
+        assert np.all(np.isfinite(result.liquid_composition))
+
+    def test_extreme_k_value_ratio(self, components):
+        comp_list = [components["C1"], components["C10"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(50e5, 350, z, comp_list, eos)
+        assert result.status is not None
+        if result.phase == "two-phase":
+            assert result.K_values[0] > result.K_values[1]
+
+    def test_max_iterations_graceful_degradation(self, components):
+        from pvtcore.core.errors import ConvergenceStatus
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(2e6, 250, z, comp_list, eos, max_iterations=2)
+
+        assert result is not None
+        assert result.status in (
+            ConvergenceStatus.CONVERGED,
+            ConvergenceStatus.MAX_ITERS,
+            ConvergenceStatus.STAGNATED,
+        )
+        if result.history is not None:
+            assert result.history.n_iterations <= 2
+
+    def test_composition_normalization(self, components):
+        from pvtcore.core.errors import ConvergenceStatus
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.500001, 0.499999])
+        result = pt_flash(2e6, 250, z, comp_list, eos)
+        assert result.status == ConvergenceStatus.CONVERGED
+
+    def test_convergence_returns_valid_status(self, components):
+        from pvtcore.core.errors import ConvergenceStatus
+        comp_list = [components["C1"], components["C4"]]
+        eos = PengRobinsonEOS(comp_list)
+        z = np.array([0.5, 0.5])
+        result = pt_flash(2e6, 250, z, comp_list, eos)
+        assert isinstance(result.status, ConvergenceStatus)
+        assert result.status in [
+            ConvergenceStatus.CONVERGED,
+            ConvergenceStatus.MAX_ITERS,
+            ConvergenceStatus.DIVERGED,
+            ConvergenceStatus.STAGNATED,
+            ConvergenceStatus.NUMERIC_ERROR,
+        ]

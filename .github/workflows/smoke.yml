@@ -41,10 +41,10 @@ jobs:
       - name: Run fast tests
         run: |
           pytest tests/unit/test_flash.py \
+                 tests/unit/test_saturation.py \
                  tests/unit/test_pvtapp_phase_envelope_workflow.py \
                  tests/unit/test_pvtapp_cce_workflow.py \
                  tests/unit/test_cli_validate.py \
-                 tests/contracts/test_invariants.py \
                  -q
 
       - name: Validate phase-envelope example
