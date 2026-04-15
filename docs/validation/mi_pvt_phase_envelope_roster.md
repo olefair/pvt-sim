@@ -1,11 +1,11 @@
-# MI PVT Phase-Envelope Roster
+# MI PVT Phase-Envelope Proxy Roster
 
-This document is the recommended MI PVT case roster for validating the phase
-envelope module across the fluid families a practical PVT simulator should be
-expected to handle.
+This document is the recommended MI PVT case roster for optional proxy / visual
+sanity checks on the MI-compatible subset only.
 
-Use this when generating MI PVT reference envelopes for the repo validation
-surface.
+Use this when generating MI PVT reference envelopes for legacy course-facing
+comparisons. It is not the primary signoff surface for full phase-envelope
+validation across the repo's fluid families.
 
 ## Assumptions
 
@@ -49,6 +49,8 @@ So the correct approach is:
 - use MI PVT only for an **MI-compatible proxy subset**
 - keep the broader repo validation surface for full-component and sour-fluid
   coverage outside MI PVT
+- do not use MI PVT as the only signoff surface for `C7+`, `H2S`, sour, or
+  pseudo-component envelope behavior
 
 Current runtime reality:
 
@@ -58,7 +60,7 @@ Current runtime reality:
 - heavy-bin MI captures should still be collected now, but some of them will
   remain archived-only until the runtime feed surface can represent them
 
-## Actual MI-Compatible Run List
+## Actual MI-Compatible Proxy Run List
 
 If you are generating MI PVT envelopes manually, use these cases. They are the
 correct MI-facing capture surface.

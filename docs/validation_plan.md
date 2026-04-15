@@ -104,20 +104,30 @@ Binary system at specified conditions:
 
 ### 5. Phase Envelope
 
-**Validation Source:** MI PVT output for identical composition, used as a secondary graphical cross-check
+**Primary Validation Source:** equation-authority saturation checks plus honest
+external or commercial multicomponent envelope references
 
-Test fluid: Homework composition (from course materials)
+**Secondary Only:** MI PVT proxy output for MI-compatible compositions, used as
+an optional visual sanity check
 
-| Point | T (°F) | P (psia) | MI PVT | PVT-SIM | Error |
-|-------|--------|----------|--------|---------|-------|
+Primary signoff fluid: one honest reference-backed multicomponent case,
+preferably a characterized heavy-end or `C1-C6 + C7+` gas-condensate /
+volatile-oil feed
+
+| Point | T (°F) | P (psia) | Reference | PVT-SIM | Error |
+|-------|--------|----------|-----------|---------|-------|
 | Cricondenbar | TBD | TBD | | | < 1% |
 | Cricondentherm | TBD | TBD | | | < 1°F |
 | Critical | TBD | TBD | | | < 1% |
 
-**Test:** Generate phase envelope, compare key points and overall graphical behavior.
-**Boundary:** Do not use MI PVT as the authoritative scalar baseline for bubble-point or dew-point pressures.
+**Test:** Generate phase envelope, compare key points and overall graphical
+behavior against the reference-backed case; use MI PVT only as supplemental
+context when the feed can be represented honestly.
+**Boundary:** Do not use MI PVT as the authoritative scalar baseline for
+bubble-point or dew-point pressures, and do not treat MI-only proxy cases as
+signoff for `C7+`, `H2S`, sour, or pseudo-component envelope behavior.
 **Detailed signoff matrix:** `docs/validation/phase_envelope_validation_matrix.md`
-**Recommended MI PVT case roster:** `docs/validation/mi_pvt_phase_envelope_roster.md`
+**Optional MI PVT proxy roster:** `docs/validation/mi_pvt_phase_envelope_roster.md`
 **Optional automated ThermoPack lane:** `tests/validation/thermopack/`
 **External backend policy:** `docs/validation/external_validation_engine.md`
 
@@ -129,7 +139,8 @@ Course-derived interpretation for this repo:
 
 Commercial/software cross-check policy:
 
-- MI PVT remains a manual secondary surface for course-compatible cases.
+- MI PVT remains an optional manual proxy surface for course-compatible cases;
+  it is not a release gate for fluid families it cannot represent honestly.
 - The active automated external engine is limited to permissive backends under
   `docs/validation/external_validation_engine.md`.
 - ThermoPack is the primary external EOS/VLE comparison lane under

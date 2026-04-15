@@ -11,8 +11,9 @@ The key rule is simple:
   rounding level
 - experimental and literature data are judged against measurement-quality
   tolerances
-- MI PVT remains a secondary graphical cross-check for envelopes, not the
-  scalar truth source for bubble or dew pressures
+- MI PVT is an optional, non-gating visual sanity check for MI-compatible
+  proxy cases only; it is not a release authority for `C7+`, `H2S`, sour, or
+  pseudo-component envelope behavior
 
 ## Signoff Criteria
 
@@ -29,8 +30,9 @@ all of the following are true:
   intersection after two unrelated scans
 - standalone bubble-point and dew-point solves agree with same-equation
   reference solves at the appropriate scalar tolerances
-- MI PVT overlays match key envelope features within the stated graphical
-  tolerances once identical fluid definition and EOS settings are locked
+- each runtime family being called release-ready has at least one honest
+  reference-backed envelope case; heavy-end, sour, and pseudo-component
+  families cannot be signed off from an MI-compatible proxy alone
 
 ## Validation Classes
 
@@ -40,7 +42,8 @@ all of the following are true:
 | Independent equation benchmark | Highest for repo saturation solvers | `tests/validation/test_saturation_equation_benchmarks.py` | Case-specific numerical tolerance from the reference solve; no branch ambiguity accepted | The production bubble/dew solvers satisfy the governing fugacity equations |
 | Literature / experimental VLE | Highest for physical fidelity where available | NIST vapor pressure, literature tie-line cases | Pressure typically within 2-3%; composition within 0.01 absolute mole fraction unless the dataset justifies tighter bounds | The EOS plus component data are physically credible for that regime |
 | Continuation topology gate | Highest for envelope tracer structure | `tests/validation/test_phase_envelope_release_gates.py` | Deterministic repeated runs, continuous branch tracking, controlled switch, no flat tails, no branch teleportation | The continuation tracer is numerically stable enough to trust structurally |
-| MI PVT envelope cross-check | Secondary graphical authority | Homework envelope composition, MI PVT overlays | Cricondenbar and critical pressure within 1%; cricondentherm within 1 deg F; overall branch shape qualitatively consistent | The resulting envelope looks right against a trusted commercial surface |
+| External multicomponent envelope reference | Highest available for full-envelope physical fidelity | Characterized `C1-C6 + C7+` gas-condensate / volatile-oil reference, sour / acid-gas envelope reference | Key points within reference-specific tolerance; branch shape consistent after interpolation; no post-critical right tail | The traced envelope is physically credible on a realistic fluid family |
+| Optional MI PVT proxy sanity check | Low / legacy visual authority | Homework proxy fluid that MI PVT can actually represent | Qualitative shape sanity only; non-gating | Legacy manual comparison on the MI-compatible subset |
 | MI PVT DL / workflow cross-check | Secondary workflow authority | March 31, 2026 MI PVT oil DL exercise | Trend agreement required; scalar targets are secondary unless the exact MI settings and fluid characterization are frozen | The flash-driven workflow reproduces the intended classroom process chain |
 
 ## Course-Derived Anchors
@@ -157,17 +160,27 @@ all of these gates are passing:
 - the critical handoff is supported by branch collapse, not a spurious jump
 - no flat constant-pressure tails appear after the true boundary disappears
 
-3. MI PVT graphical agreement
+3. Reference-backed multicomponent coverage
 
-- bubble and dew branches overlay the MI PVT envelope qualitatively
-- cricondenbar pressure error is below 1%
-- critical pressure error is below 1%
-- cricondentherm temperature error is below 1 deg F
+- at least one characterized heavy-end or `C1-C6 + C7+` envelope case is
+  release-gated against an honest external or commercial reference
+- any runtime family such as `gas_condensate_heavy`, `volatile_oil`, or
+  `sour_oil` is not treated as signed off until it has a non-MI reference case
+- no MI-compatible proxy case is allowed to be the sole release gate for a
+  family that MI PVT cannot represent honestly
 
 4. Runtime agreement
 
 - the desktop runtime path and the kernel continuation path agree when given
   the same fluid, EOS, and settings
+
+5. Optional MI PVT proxy sanity check
+
+- if an MI-compatible proxy case is run, its overall branch shape should be
+  qualitatively consistent
+- absence of an MI PVT proxy run is not a release blocker
+- disagreement against MI PVT alone does not override stronger equation-based
+  or reference-backed evidence
 
 ## Current Executable Mapping
 
@@ -185,12 +198,15 @@ Current repo surfaces that implement parts of this matrix:
   - runtime fixed-grid envelope checks on the minimum practical field-fluid
     roster, including `C7+` entry surfaces, against the standalone saturation
     workflows already validated by the saturation benchmark lane
+- `tests/validation/test_thermopack_phase_envelope.py`
+  - optional approved-backend external envelope comparison lane for surrogate-
+    heavy / heavy-tail cases
 - `tests/validation/test_vs_mi_pvt.py`
-  - secondary MI PVT cross-check harness
+  - optional MI PVT proxy sanity-check harness; non-gating for release signoff
 - `tests/validation/test_phase_envelope_release_gates.py`
   - continuation topology and determinism gates
 
-Recommended MI PVT envelope-generation roster:
+Optional MI PVT proxy roster:
 
 - `docs/validation/mi_pvt_phase_envelope_roster.md`
 
@@ -198,9 +214,12 @@ Recommended MI PVT envelope-generation roster:
 
 Still needed before the continuation tracer can be treated as fully signed off:
 
-- MI PVT phase-envelope exports for the current homework/default fluid with
-  key points filled into the repo harness
+- one reference-backed characterized heavy-end envelope case that exercises the
+  continuation path through an honest `C1-C6 + C7+` or equivalent heavy-entry
+  runtime surface
 - at least one richer multicomponent envelope benchmark with an external
-  literature or commercial reference, not just a classroom workbook
-- one characterized heavy-end case that exercises the continuation path after
-  the runtime heavy-end surface is finalized
+  literature or non-MI commercial reference, not just a classroom workbook
+- one sour / acid-gas envelope case with `H2S` or equivalent acid loading once
+  the runtime surface and reference definition are frozen
+- optional MI PVT proxy captures may still be archived for course-compatible
+  fluids, but they are not release blockers

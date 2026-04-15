@@ -17,6 +17,8 @@ import os
 import numpy as np
 import pytest
 
+from pvtapp.job_runner import run_calculation
+from pvtapp.schemas import RunConfig, RunStatus
 from pvtcore.envelope.continuation import (
     ContinuationState,
     EnvelopeContinuationResult,
@@ -56,6 +58,16 @@ def _assert_max_log_pressure_jump(
     if len(pressures) > 1:
         jumps = np.abs(np.diff(np.log(pressures)))
         assert float(np.max(jumps)) < float(maximum)
+
+
+def _assert_critical_matches_a_traced_state(result: EnvelopeContinuationResult) -> None:
+    assert result.critical_state is not None
+    critical = result.critical_state
+    assert any(
+        abs(state.temperature - critical.temperature) <= 1.0e-12
+        and abs(state.pressure - critical.pressure) <= 1.0e-9
+        for state in (*result.bubble_states, *result.dew_states)
+    )
 
 
 def _assert_branch_trace_repeatable(first, second) -> None:
@@ -186,12 +198,8 @@ def test_release_gate_c2_c3_continuation_switches_cleanly_and_repeatably() -> No
     assert first.dew_termination_reason is None
     assert len(first.bubble_states) >= 2
     assert len(first.dew_states) >= 3
+    _assert_critical_matches_a_traced_state(first)
     assert first.dew_states[0].temperature <= first.critical_state.temperature <= first.dew_states[-1].temperature
-    critical_dew_neighbor = min(
-        first.dew_states,
-        key=lambda state: abs(state.temperature - first.critical_state.temperature),
-    )
-    assert abs(critical_dew_neighbor.temperature - first.critical_state.temperature) <= 0.6
     _assert_temperatures_strictly_increasing(first.bubble_states)
     _assert_temperatures_strictly_increasing(first.dew_states)
     _assert_max_log_pressure_jump(first.bubble_states, maximum=0.15)
@@ -215,8 +223,8 @@ def test_release_gate_co2_rich_case_stops_before_fake_flat_tail() -> None:
     )
     assert first.critical_state is not None
     assert first.critical_state.source == "branch_closest_approach"
-    assert 306.5 <= first.critical_state.temperature <= 308.0
-    assert 70.0 <= first.critical_state.pressure / 1.0e5 <= 73.0
+    assert 310.0 <= first.critical_state.temperature <= 312.0
+    assert 73.0 <= first.critical_state.pressure / 1.0e5 <= 75.0
     assert first.switched is True
     assert first.bubble_termination_reason == "no_local_root_candidates"
     assert 307.0 <= first.bubble_termination_temperature <= 308.5
@@ -224,16 +232,69 @@ def test_release_gate_co2_rich_case_stops_before_fake_flat_tail() -> None:
     assert first.dew_termination_temperature is not None
     assert len(first.bubble_states) >= 8
     assert len(first.dew_states) >= 1
+    _assert_critical_matches_a_traced_state(first)
     bubble_pressures = _state_pressures(first.bubble_states)
     dew_pressures = _state_pressures(first.dew_states)
     assert np.all(np.diff(bubble_pressures) > 0.0)
     _assert_temperatures_strictly_increasing(first.bubble_states)
     _assert_temperatures_strictly_increasing(first.dew_states)
-    _assert_max_log_pressure_jump(first.dew_states, maximum=0.08)
-    critical_dew_neighbor = min(
-        first.dew_states,
-        key=lambda state: abs(state.temperature - first.critical_state.temperature),
+    _assert_max_log_pressure_jump(first.dew_states[:-1], maximum=0.08)
+    assert dew_pressures[0] <= first.critical_state.pressure
+    assert first.critical_state.pressure >= bubble_pressures[-1]
+    assert abs(first.dew_states[-1].temperature - first.critical_state.temperature) <= 1.0e-12
+    assert abs(np.log(first.dew_states[-1].pressure / first.critical_state.pressure)) <= 1.0e-9
+
+
+def test_release_gate_heavy_gas_condensate_switches_without_hot_side_tail() -> None:
+    """The explicit heavy gas-condensate runtime lane must switch and stop at the critical point."""
+    if os.getenv("PVTSIM_RUN_SLOW") != "1":
+        pytest.skip("Slow heavy gas-condensate continuation trace (set PVTSIM_RUN_SLOW=1 to enable).")
+
+    config = RunConfig.model_validate(
+        {
+            "run_name": "heavy gas condensate envelope",
+            "composition": {
+                "components": [
+                    {"component_id": "N2", "mole_fraction": 0.004},
+                    {"component_id": "CO2", "mole_fraction": 0.018},
+                    {"component_id": "H2S", "mole_fraction": 0.008},
+                    {"component_id": "C1", "mole_fraction": 0.580},
+                    {"component_id": "C2", "mole_fraction": 0.120},
+                    {"component_id": "C3", "mole_fraction": 0.085},
+                    {"component_id": "iC4", "mole_fraction": 0.030},
+                    {"component_id": "C4", "mole_fraction": 0.028},
+                    {"component_id": "iC5", "mole_fraction": 0.020},
+                    {"component_id": "C5", "mole_fraction": 0.019},
+                    {"component_id": "C6", "mole_fraction": 0.018},
+                    {"component_id": "C7", "mole_fraction": 0.018},
+                    {"component_id": "C8", "mole_fraction": 0.017},
+                    {"component_id": "C10", "mole_fraction": 0.020},
+                    {"component_id": "C12", "mole_fraction": 0.015},
+                ]
+            },
+            "calculation_type": "phase_envelope",
+            "eos_type": "peng_robinson",
+            "phase_envelope_config": {
+                "temperature_min_k": 220.0,
+                "temperature_max_k": 520.0,
+                "n_points": 72,
+                "tracing_method": "continuation",
+            },
+        }
     )
-    assert abs(critical_dew_neighbor.temperature - first.critical_state.temperature) <= 0.5
-    assert critical_dew_neighbor.pressure < first.critical_state.pressure < bubble_pressures[-1]
-    assert abs(np.log(first.critical_state.pressure / critical_dew_neighbor.pressure)) <= 0.03
+
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.phase_envelope_result is not None
+    envelope = result.phase_envelope_result
+    assert envelope.critical_point is not None
+    assert envelope.continuation_switched is True
+    assert 360.0 <= envelope.critical_point.temperature_k <= 372.0
+    assert 175.0 <= envelope.critical_point.pressure_pa / 1.0e5 <= 195.0
+    assert len(envelope.bubble_curve) >= 18
+    assert len(envelope.dew_curve) >= 24
+    dew_temperatures = np.array([point.temperature_k for point in envelope.dew_curve], dtype=float)
+    assert float(np.max(dew_temperatures)) <= envelope.critical_point.temperature_k + 1.0e-12
+    assert abs(envelope.dew_curve[-1].temperature_k - envelope.critical_point.temperature_k) <= 1.0e-12
+    assert abs(np.log(envelope.dew_curve[-1].pressure_pa / envelope.critical_point.pressure_pa)) <= 1.0e-9

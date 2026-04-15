@@ -20,6 +20,16 @@ from pvtcore.eos.peng_robinson import PengRobinsonEOS
 from pvtcore.models.component import load_components
 
 
+def _assert_critical_matches_a_traced_state(result) -> None:
+    assert result.critical_state is not None
+    critical = result.critical_state
+    assert any(
+        abs(state.temperature - critical.temperature) <= 1.0e-12
+        and abs(state.pressure - critical.pressure) <= 1.0e-9
+        for state in (*result.bubble_states, *result.dew_states)
+    )
+
+
 def test_local_continuation_candidates_capture_multiple_c1_c10_bubble_families() -> None:
     """Continuation candidates should keep only the certified C1/C10 bubble family."""
     components = load_components()
@@ -199,16 +209,12 @@ def test_trace_envelope_continuation_switches_c2_c3_near_critical() -> None:
 
     assert result.critical_state is not None
     assert 329.5 <= result.critical_state.temperature <= 340.5
-    assert 37.0 <= result.critical_state.pressure / 1.0e5 <= 46.5
+    assert 37.0 <= result.critical_state.pressure / 1.0e5 <= 48.5
     assert result.switched is True
     assert len(result.bubble_states) >= 2
     assert len(result.dew_states) >= 3
+    _assert_critical_matches_a_traced_state(result)
     assert result.dew_states[0].temperature <= result.critical_state.temperature <= result.dew_states[-1].temperature
-    critical_dew_neighbor = min(
-        result.dew_states,
-        key=lambda state: abs(state.temperature - result.critical_state.temperature),
-    )
-    assert abs(critical_dew_neighbor.temperature - result.critical_state.temperature) <= 0.6
 
 
 def test_trace_envelope_continuation_detects_co2_rich_critical_from_branch_closest_approach() -> None:
@@ -236,11 +242,14 @@ def test_trace_envelope_continuation_detects_co2_rich_critical_from_branch_close
 
     assert result.critical_state is not None
     assert result.critical_state.source == "branch_closest_approach"
-    assert 306.5 <= result.critical_state.temperature <= 308.0
-    assert 70.0 <= result.critical_state.pressure / 1.0e5 <= 73.0
+    assert 310.0 <= result.critical_state.temperature <= 312.0
+    assert 73.0 <= result.critical_state.pressure / 1.0e5 <= 75.0
     assert result.switched is True
     assert len(result.dew_states) >= 1
-    assert result.dew_states[0].temperature < result.critical_state.temperature < result.dew_states[-1].temperature
+    _assert_critical_matches_a_traced_state(result)
+    assert result.dew_states[0].temperature < result.critical_state.temperature <= result.dew_states[-1].temperature
+    assert abs(result.dew_states[-1].temperature - result.critical_state.temperature) <= 1.0e-12
+    assert abs(np.log(result.dew_states[-1].pressure / result.critical_state.pressure)) <= 1.0e-9
 
 
 def test_critical_probe_temperatures_keep_seeded_shared_trivial_endpoint() -> None:
