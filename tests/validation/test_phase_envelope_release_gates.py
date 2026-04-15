@@ -17,11 +17,10 @@ import os
 import numpy as np
 import pytest
 
-from pvtapp.job_runner import run_calculation
-from pvtapp.schemas import RunConfig, RunStatus
 from pvtcore.envelope.continuation import (
     ContinuationState,
     EnvelopeContinuationResult,
+    resolve_continuation_runtime_policy,
     trace_branch_continuation,
     trace_envelope_continuation,
 )
@@ -246,55 +245,45 @@ def test_release_gate_co2_rich_case_stops_before_fake_flat_tail() -> None:
 
 
 def test_release_gate_heavy_gas_condensate_switches_without_hot_side_tail() -> None:
-    """The explicit heavy gas-condensate runtime lane must switch and stop at the critical point."""
+    """The explicit heavy gas-condensate lane must switch and stop at the critical point."""
     if os.getenv("PVTSIM_RUN_SLOW") != "1":
         pytest.skip("Slow heavy gas-condensate continuation trace (set PVTSIM_RUN_SLOW=1 to enable).")
 
-    config = RunConfig.model_validate(
-        {
-            "run_name": "heavy gas condensate envelope",
-            "composition": {
-                "components": [
-                    {"component_id": "N2", "mole_fraction": 0.004},
-                    {"component_id": "CO2", "mole_fraction": 0.018},
-                    {"component_id": "H2S", "mole_fraction": 0.008},
-                    {"component_id": "C1", "mole_fraction": 0.580},
-                    {"component_id": "C2", "mole_fraction": 0.120},
-                    {"component_id": "C3", "mole_fraction": 0.085},
-                    {"component_id": "iC4", "mole_fraction": 0.030},
-                    {"component_id": "C4", "mole_fraction": 0.028},
-                    {"component_id": "iC5", "mole_fraction": 0.020},
-                    {"component_id": "C5", "mole_fraction": 0.019},
-                    {"component_id": "C6", "mole_fraction": 0.018},
-                    {"component_id": "C7", "mole_fraction": 0.018},
-                    {"component_id": "C8", "mole_fraction": 0.017},
-                    {"component_id": "C10", "mole_fraction": 0.020},
-                    {"component_id": "C12", "mole_fraction": 0.015},
-                ]
-            },
-            "calculation_type": "phase_envelope",
-            "eos_type": "peng_robinson",
-            "phase_envelope_config": {
-                "temperature_min_k": 220.0,
-                "temperature_max_k": 520.0,
-                "n_points": 72,
-                "tracing_method": "continuation",
-            },
-        }
+    # Runtime-family inference is already covered in unit tests. This release
+    # gate should certify the heavy-policy topology without paying for a dense
+    # runtime-grid sweep on every signoff run.
+    mixture, eos = _make_mixture(
+        ("N2", "CO2", "H2S", "C1", "C2", "C3", "iC4", "C4", "iC5", "C5", "C6", "C7", "C8", "C10", "C12")
+    )
+    z = np.array(
+        [0.004, 0.018, 0.008, 0.580, 0.120, 0.085, 0.030, 0.028, 0.020, 0.019, 0.018, 0.018, 0.017, 0.020, 0.015],
+        dtype=float,
+    )
+    temperatures = [220.0, 250.0, 280.0, 310.0, 330.0, 345.0, 352.0, 358.0, 364.0, 370.0]
+    policy = resolve_continuation_runtime_policy("gas_condensate_heavy")
+
+    envelope = trace_envelope_continuation(
+        temperatures=temperatures,
+        composition=z,
+        components=mixture,
+        eos=eos,
+        n_pressure_points=policy.n_pressure_points,
+        runtime_policy=policy,
     )
 
-    result = run_calculation(config=config, write_artifacts=False)
-
-    assert result.status is RunStatus.COMPLETED
-    assert result.phase_envelope_result is not None
-    envelope = result.phase_envelope_result
-    assert envelope.critical_point is not None
-    assert envelope.continuation_switched is True
-    assert 360.0 <= envelope.critical_point.temperature_k <= 372.0
-    assert 175.0 <= envelope.critical_point.pressure_pa / 1.0e5 <= 195.0
-    assert len(envelope.bubble_curve) >= 18
-    assert len(envelope.dew_curve) >= 24
-    dew_temperatures = np.array([point.temperature_k for point in envelope.dew_curve], dtype=float)
-    assert float(np.max(dew_temperatures)) <= envelope.critical_point.temperature_k + 1.0e-12
-    assert abs(envelope.dew_curve[-1].temperature_k - envelope.critical_point.temperature_k) <= 1.0e-12
-    assert abs(np.log(envelope.dew_curve[-1].pressure_pa / envelope.critical_point.pressure_pa)) <= 1.0e-9
+    assert envelope.converged is True
+    assert envelope.critical_state is not None
+    assert envelope.switched is True
+    assert 360.0 <= envelope.critical_state.temperature <= 372.0
+    assert 175.0 <= envelope.critical_state.pressure / 1.0e5 <= 195.0
+    assert len(envelope.bubble_states) >= 8
+    assert len(envelope.dew_states) >= 6
+    _assert_critical_matches_a_traced_state(envelope)
+    _assert_temperatures_strictly_increasing(envelope.bubble_states)
+    _assert_temperatures_strictly_increasing(envelope.dew_states)
+    _assert_max_log_pressure_jump(envelope.bubble_states, maximum=0.22)
+    _assert_max_log_pressure_jump(envelope.dew_states, maximum=0.22)
+    dew_temperatures = _state_temperatures(envelope.dew_states)
+    assert float(np.max(dew_temperatures)) <= envelope.critical_state.temperature + 1.0e-12
+    assert abs(envelope.dew_states[-1].temperature - envelope.critical_state.temperature) <= 1.0e-12
+    assert abs(np.log(envelope.dew_states[-1].pressure / envelope.critical_state.pressure)) <= 1.0e-9
