@@ -177,7 +177,14 @@ def test_dl_workflow_happy_path() -> None:
     assert result.status == RunStatus.COMPLETED
     assert result.dl_result is not None
     assert result.dl_result.converged is True
+    assert result.dl_result.residual_oil_density_kg_per_m3 is not None
+    assert result.dl_result.residual_oil_density_kg_per_m3 > 0.0
     assert len(result.dl_result.steps) > 0
+    assert all(step.oil_density_kg_per_m3 is not None for step in result.dl_result.steps)
+    assert all(step.oil_viscosity_pa_s is not None for step in result.dl_result.steps)
+    assert all(step.gas_z_factor is not None for step in result.dl_result.steps)
+    assert all(step.cumulative_gas_produced is not None for step in result.dl_result.steps)
+    assert any(step.gas_viscosity_pa_s is not None for step in result.dl_result.steps[1:])
 
 
 def test_dl_workflow_supports_explicit_pressure_list() -> None:
@@ -209,6 +216,10 @@ def test_cvd_workflow_happy_path() -> None:
     assert result.cvd_result is not None
     assert result.cvd_result.converged is True
     assert len(result.cvd_result.steps) > 0
+    assert all(
+        step.liquid_viscosity_pa_s is not None or step.vapor_viscosity_pa_s is not None
+        for step in result.cvd_result.steps
+    )
 
 
 def test_separator_workflow_happy_path() -> None:
@@ -218,4 +229,8 @@ def test_separator_workflow_happy_path() -> None:
     assert result.status == RunStatus.COMPLETED
     assert result.separator_result is not None
     assert result.separator_result.bo > 0
+    assert result.separator_result.stock_tank_oil_mw_g_per_mol is not None
+    assert result.separator_result.stock_tank_oil_specific_gravity is not None
+    assert result.separator_result.total_gas_moles is not None
+    assert result.separator_result.shrinkage is not None
     assert len(result.separator_result.stages) >= 2

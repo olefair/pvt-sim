@@ -17,7 +17,11 @@ from ..models.component import Component
 from ..eos.base import CubicEOS
 from ..stability.wilson import wilson_k_values, is_trivial_solution
 from ..stability import is_stable
-from .rachford_rice import solve_rachford_rice, rachford_rice_function
+from .rachford_rice import (
+    calculate_phase_compositions,
+    solve_rachford_rice,
+    rachford_rice_function,
+)
 from ..core.errors import (
     ConvergenceError, PhaseError, ValidationError,
     ConvergenceStatus, IterationHistory
@@ -84,6 +88,36 @@ class FlashResult:
     def is_single_phase(self) -> bool:
         """Check if result is single-phase (liquid or vapor)."""
         return self.phase in ('liquid', 'vapor')
+
+
+def _seed_rachford_rice_boundary_split(
+    K_values: np.ndarray,
+    composition: np.ndarray,
+    *,
+    seed_epsilon: float = 1.0e-6,
+) -> tuple[float, np.ndarray, np.ndarray] | None:
+    """Seed a near-boundary split when RR cannot bracket an interior root.
+
+    Some near-dew or near-bubble heavy-end states are already unstable by
+    Michelsen stability, but the initial RR function remains same-sign over the
+    physical interval. Seeding just inside the closer endpoint lets the SSI loop
+    repair the K-values instead of collapsing the state to a false single phase.
+    """
+    try:
+        f_zero = float(rachford_rice_function(seed_epsilon, K_values, composition))
+        f_one = float(rachford_rice_function(1.0 - seed_epsilon, K_values, composition))
+        if not (np.isfinite(f_zero) and np.isfinite(f_one)):
+            return None
+
+        nv = 1.0 - seed_epsilon if abs(f_one) <= abs(f_zero) else seed_epsilon
+        x, y = calculate_phase_compositions(nv, K_values, composition)
+    except (FloatingPointError, OverflowError, ValidationError, ZeroDivisionError):
+        return None
+
+    if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
+        return None
+
+    return nv, x, y
 
 
 def pt_flash(
@@ -394,47 +428,52 @@ def pt_flash(
         # Step 1: Solve Rachford-Rice equation
         try:
             nv, x, y = solve_rachford_rice(K, composition)
-        except ValidationError as e:
-            # System became single-phase during iteration
-            # Determine which phase based on average K
-            avg_K = np.sum(composition * K)
-            if avg_K > 1.0:
-                phase = 'vapor'
-                nv = 1.0
-                x = np.zeros(n_components)
-                y = composition.copy()
+        except (ValidationError, ConvergenceError):
+            boundary_seed = _seed_rachford_rice_boundary_split(K, composition)
+            if boundary_seed is not None:
+                nv, x, y = boundary_seed
             else:
-                phase = 'liquid'
-                nv = 0.0
-                x = composition.copy()
-                y = np.zeros(n_components)
+                # RR can still fail when the iterate has collapsed to a true
+                # single phase; keep the legacy classification as the final
+                # fallback after boundary recovery is unavailable.
+                avg_K = np.sum(composition * K)
+                if avg_K > 1.0:
+                    phase = 'vapor'
+                    nv = 1.0
+                    x = np.zeros(n_components)
+                    y = composition.copy()
+                else:
+                    phase = 'liquid'
+                    nv = 0.0
+                    x = composition.copy()
+                    y = np.zeros(n_components)
 
-            phi_L = eos.fugacity_coefficient(
-                pressure, temperature, x if phase == 'liquid' else composition,
-                'liquid', binary_interaction
-            ) if phase == 'liquid' or nv == 0.0 else np.zeros(n_components)
+                phi_L = eos.fugacity_coefficient(
+                    pressure, temperature, x if phase == 'liquid' else composition,
+                    'liquid', binary_interaction
+                ) if phase == 'liquid' or nv == 0.0 else np.zeros(n_components)
 
-            phi_V = eos.fugacity_coefficient(
-                pressure, temperature, y if phase == 'vapor' else composition,
-                'vapor', binary_interaction
-            ) if phase == 'vapor' or nv == 1.0 else np.zeros(n_components)
+                phi_V = eos.fugacity_coefficient(
+                    pressure, temperature, y if phase == 'vapor' else composition,
+                    'vapor', binary_interaction
+                ) if phase == 'vapor' or nv == 1.0 else np.zeros(n_components)
 
-            return _finalize(FlashResult(
-                status=ConvergenceStatus.CONVERGED,
-                iterations=iteration + 1,
-                vapor_fraction=nv,
-                liquid_composition=x,
-                vapor_composition=y,
-                K_values=K,
-                liquid_fugacity=phi_L,
-                vapor_fugacity=phi_V,
-                phase=phase,
-                pressure=pressure,
-                temperature=temperature,
-                feed_composition=composition,
-                residual=0.0,
-                history=history
-            ))
+                return _finalize(FlashResult(
+                    status=ConvergenceStatus.CONVERGED,
+                    iterations=iteration + 1,
+                    vapor_fraction=nv,
+                    liquid_composition=x,
+                    vapor_composition=y,
+                    K_values=K,
+                    liquid_fugacity=phi_L,
+                    vapor_fugacity=phi_V,
+                    phase=phase,
+                    pressure=pressure,
+                    temperature=temperature,
+                    feed_composition=composition,
+                    residual=0.0,
+                    history=history
+                ))
 
         # Check for edge cases
         if nv <= 1e-10:

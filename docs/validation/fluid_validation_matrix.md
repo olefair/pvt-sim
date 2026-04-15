@@ -19,6 +19,7 @@ This matrix was grounded against the current repo on 2026-04-12 using:
 - `src/pvtcore/validation/pete665_assignment.py`
 - `tests/unit/test_pete665_assignment.py`
 - `tests/unit/test_pvtapp_runtime_contract.py`
+- `tests/validation/test_heavy_end_pt_flash_runtime_matrix.py`
 - `tests/validation/test_phase_envelope_runtime_matrix.py`
 - `docs/validation/pete665_assignment_baseline.md`
 - `docs/validation/phase_envelope_validation_matrix.md`
@@ -109,7 +110,7 @@ should not be conflated with this two-fluid cross-module matrix.
 | Raw feed acceptance | exact assignment JSON accepted on dedicated path; desktop/general path tolerance differences noted | runtime config accepted through general app path | `P0` | `examples/pete665_assignment_case.json`, `RunConfig`, runtime contract tests |
 | Feed identity / alias preservation | inline `PSEUDO_PLUS` must survive load -> build -> runtime artifacts | `C7+` policy and resolved preset must survive load -> build -> runtime artifacts | `P0` | `pete665_assignment.py`, `plus_fraction_policy.py`, runtime contract tests |
 | Runtime component build | DB components plus inline pseudo must build deterministically | characterized `C7+` path must build deterministically | `P0` | `_prepare_fluid_inputs`, assignment tests, runtime contract tests |
-| PT flash | secondary structural check only | useful structural check | `P1` | same runtime path, no external authority required for first matrix |
+| PT flash | secondary structural check only | useful structural check; representative heavy-end runtime matrix now exists for dry-gas, gas-condensate, CO2-rich-gas, volatile-oil, black-oil, and sour-oil families, plus saved-run replay on representative gas/oil anchors | `P1` | same runtime path, no external authority required for first matrix |
 | Bubble point | primary assignment scalar workflow | secondary check only | `P0` | assignment runner and standalone bubble workflow |
 | Dew point | secondary structural check | primary gas scalar workflow | `P0` | standalone dew workflow and runtime contract expectations |
 | CCE | primary assignment experiment workflow | secondary check only | `P0` | assignment runner exact schedule vs general runtime behavior |
@@ -147,7 +148,7 @@ Run these first:
 1. standalone dew-point run
 2. standalone bubble-point run as a secondary structural check
 3. CVD run
-4. optional PT-flash spot check
+4. heavy-end PT-flash matrix across representative gas and oil families
 5. artifact-backed replay of a saved gas run
 
 What this checkpoint should prove:

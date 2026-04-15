@@ -65,6 +65,7 @@ from pvtapp.style import DEFAULT_UI_SCALE, UI_SCALE_STEP, build_cato_stylesheet,
 
 try:
     from pvtapp.main import PVTSimulatorWindow
+    from pvtapp.job_runner import run_calculation
     from pvtapp.widgets.composition_input import CompositionInputWidget
     from pvtapp.widgets.conditions_input import ConditionsInputWidget
     from pvtapp.widgets.diagnostics_view import DiagnosticsWidget
@@ -73,6 +74,7 @@ try:
     from pvtapp.widgets.text_output_view import TextOutputWidget
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
     PVTSimulatorWindow = None  # type: ignore[assignment]
+    run_calculation = None  # type: ignore[assignment]
     CompositionInputWidget = None  # type: ignore[assignment]
     ConditionsInputWidget = None  # type: ignore[assignment]
     DiagnosticsWidget = None  # type: ignore[assignment]
@@ -680,6 +682,8 @@ def _cce_result() -> RunResult:
                     z_factor=0.82,
                     liquid_density_kg_per_m3=648.2,
                     vapor_density_kg_per_m3=None,
+                    liquid_viscosity_pa_s=0.0018,
+                    vapor_viscosity_pa_s=None,
                 ),
                 CCEStepResult(
                     pressure_pa=1.2e7,
@@ -689,6 +693,8 @@ def _cce_result() -> RunResult:
                     z_factor=0.91,
                     liquid_density_kg_per_m3=583.4,
                     vapor_density_kg_per_m3=128.6,
+                    liquid_viscosity_pa_s=0.0009,
+                    vapor_viscosity_pa_s=0.00002,
                 ),
             ],
         ),
@@ -704,6 +710,7 @@ def _dl_result() -> RunResult:
             bubble_pressure_pa=1.5e7,
             rsi=620.0,
             boi=1.48,
+            residual_oil_density_kg_per_m3=782.0,
             converged=True,
             steps=[
                 DLStepResult(
@@ -713,6 +720,12 @@ def _dl_result() -> RunResult:
                     bo=1.48,
                     bt=1.48,
                     vapor_fraction=0.0,
+                    oil_density_kg_per_m3=648.2,
+                    oil_viscosity_pa_s=0.0015,
+                    gas_gravity=None,
+                    gas_z_factor=None,
+                    gas_viscosity_pa_s=None,
+                    cumulative_gas_produced=0.0,
                     liquid_moles_remaining=1.0,
                 ),
                 DLStepResult(
@@ -722,6 +735,12 @@ def _dl_result() -> RunResult:
                     bo=1.18,
                     bt=1.23,
                     vapor_fraction=0.28,
+                    oil_density_kg_per_m3=701.4,
+                    oil_viscosity_pa_s=0.0011,
+                    gas_gravity=0.8123,
+                    gas_z_factor=0.9456,
+                    gas_viscosity_pa_s=0.000018,
+                    cumulative_gas_produced=410.0,
                     liquid_moles_remaining=0.72,
                 ),
             ],
@@ -748,6 +767,8 @@ def _cvd_result() -> RunResult:
                     z_two_phase=0.92,
                     liquid_density_kg_per_m3=None,
                     vapor_density_kg_per_m3=120.0,
+                    liquid_viscosity_pa_s=None,
+                    vapor_viscosity_pa_s=0.000015,
                 ),
                 CVDStepResult(
                     pressure_pa=5.0e6,
@@ -758,6 +779,8 @@ def _cvd_result() -> RunResult:
                     z_two_phase=0.86,
                     liquid_density_kg_per_m3=530.0,
                     vapor_density_kg_per_m3=96.0,
+                    liquid_viscosity_pa_s=0.00055,
+                    vapor_viscosity_pa_s=0.000013,
                 ),
             ],
         ),
@@ -775,6 +798,10 @@ def _separator_result() -> RunResult:
             bg=0.0042,
             api_gravity=39.5,
             stock_tank_oil_density=790.0,
+            stock_tank_oil_mw_g_per_mol=174.25,
+            stock_tank_oil_specific_gravity=0.8254,
+            total_gas_moles=0.470000,
+            shrinkage=0.8264,
             converged=True,
             stages=[
                 SeparatorStageResult(
@@ -1350,7 +1377,7 @@ def test_main_window_recommend_setup_surfaces_family_and_eos(
             "eos_type": "peng_robinson",
             "cvd_config": {
                 "temperature_k": 320.0,
-                "dew_pressure_pa": 3906.418983182879,
+                "dew_pressure_pa": 5598.741130684053,
                 "pressure_end_pa": 1500.0,
                 "n_steps": 5,
             },
@@ -1867,13 +1894,17 @@ def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None
     table.display_result(result)
     table.show()
     app.processEvents()
-    assert table.details_section.title() == "Densities"
+    assert table.details_section.title() == "Phase Properties"
     assert table.composition_table.horizontalHeaderItem(3).text() == "Vapor Frac."
     assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
     assert table.details_table.horizontalHeaderItem(2).text() == "Vapor Density"
+    assert table.details_table.horizontalHeaderItem(3).text() == "Liquid Viscosity"
+    assert table.details_table.horizontalHeaderItem(4).text() == "Vapor Viscosity"
     assert table.details_table.item(0, 1).text() == "648.20"
     assert table.details_table.item(0, 2).text() == "-"
+    assert table.details_table.item(0, 3).text() == "1.8000"
     assert table.details_table.item(1, 2).text() == "128.60"
+    assert table.details_table.item(1, 4).text() == "0.0200"
     assert not table.sections_scroll.verticalScrollBar().isVisible()
 
     details_widths = [
@@ -1882,14 +1913,17 @@ def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None
     ]
     unused_width = table.details_table.viewport().width() - sum(details_widths)
     assert unused_width <= 20
-    assert max(details_widths) - min(details_widths) <= 12
+    assert max(details_widths) - min(details_widths) <= 40
 
     text = TextOutputWidget()
     text.display_result(result)
     report = text.text.toPlainText()
     assert "rhoL" in report
     assert "rhoV" in report
+    assert "muL" in report
+    assert "muV" in report
     assert "648.20" in report
+    assert "1.8000" in report
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -1903,6 +1937,8 @@ def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None
         "Liquid Density",
         "Vapor Density",
         "Relative Volume",
+        "Liquid Viscosity",
+        "Vapor Viscosity",
     }
     assert {line.get_label() for line in ax.lines} >= {
         "Liquid Density",
@@ -1995,6 +2031,8 @@ def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> N
                     z_factor=0.82,
                     liquid_density_kg_per_m3=648.2,
                     vapor_density_kg_per_m3=None,
+                    liquid_viscosity_pa_s=0.0018,
+                    vapor_viscosity_pa_s=None,
                 ),
                 CCEStepResult(
                     pressure_pa=8618446.25,
@@ -2004,6 +2042,8 @@ def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> N
                     z_factor=0.91,
                     liquid_density_kg_per_m3=583.4,
                     vapor_density_kg_per_m3=128.6,
+                    liquid_viscosity_pa_s=0.0009,
+                    vapor_viscosity_pa_s=0.00002,
                 ),
             ],
         ),
@@ -2016,6 +2056,9 @@ def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> N
     assert summary["Saturation Pressure"] == "1400.00 psia"
     assert table.composition_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
     assert table.details_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
+    assert table.details_table.horizontalHeaderItem(3).text() == "Liquid Viscosity"
+    assert table.details_table.item(0, 3).text() == "1.8000"
+    assert table.details_table.item(1, 4).text() == "0.0200"
 
     text = TextOutputWidget()
     text.display_result(result)
@@ -2023,6 +2066,8 @@ def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> N
     assert "T = 188.330 °F" in report
     assert "Psat = 1400.00000 psia" in report
     assert "P (psia)" in report
+    assert "muL" in report
+    assert "muV" in report
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -2062,6 +2107,7 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
             bubble_pressure_pa=5200000.0,
             rsi=620.0,
             boi=1.48,
+            residual_oil_density_kg_per_m3=782.0,
             converged=True,
             steps=[
                 DLStepResult(
@@ -2071,6 +2117,12 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
                     bo=1.48,
                     bt=1.48,
                     vapor_fraction=0.0,
+                    oil_density_kg_per_m3=648.2,
+                    oil_viscosity_pa_s=0.0015,
+                    gas_gravity=None,
+                    gas_z_factor=None,
+                    gas_viscosity_pa_s=None,
+                    cumulative_gas_produced=0.0,
                     liquid_moles_remaining=1.0,
                 ),
                 DLStepResult(
@@ -2080,6 +2132,12 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
                     bo=1.18,
                     bt=1.23,
                     vapor_fraction=0.28,
+                    oil_density_kg_per_m3=701.4,
+                    oil_viscosity_pa_s=0.0011,
+                    gas_gravity=0.8123,
+                    gas_z_factor=0.9456,
+                    gas_viscosity_pa_s=0.000018,
+                    cumulative_gas_produced=410.0,
                     liquid_moles_remaining=0.72,
                 ),
             ],
@@ -2091,11 +2149,24 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
     summary = _summary_values(table)
     assert summary["Temperature"] == "128.50 °F"
     assert summary["Bubble Pressure"] == "754.20 psia"
+    assert summary["Residual Oil Density"] == "782.00 kg/m³"
     assert table.composition_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
     assert table.composition_table.horizontalHeaderItem(1).text() == "RsD"
     assert table.composition_table.horizontalHeaderItem(2).text() == "RsDi"
     assert table.composition_table.horizontalHeaderItem(4).text() == "Bg"
+    assert table.composition_table.horizontalHeaderItem(6).text() == "Cum. Gas"
     assert table.composition_table.item(1, 4).text() == "0.0048"
+    assert table.composition_table.item(1, 6).text() == "410.0000"
+    assert table.details_table.horizontalHeaderItem(2).text() == "Oil Density"
+    assert table.details_table.horizontalHeaderItem(3).text() == "Oil Viscosity"
+    assert table.details_table.horizontalHeaderItem(4).text() == "Gas Gravity"
+    assert table.details_table.horizontalHeaderItem(5).text() == "Gas Z"
+    assert table.details_table.horizontalHeaderItem(6).text() == "Gas Viscosity"
+    assert table.details_table.item(1, 2).text() == "701.40"
+    assert table.details_table.item(1, 3).text() == "1.1000"
+    assert table.details_table.item(1, 4).text() == "0.8123"
+    assert table.details_table.item(1, 5).text() == "0.9456"
+    assert table.details_table.item(1, 6).text() == "0.0180"
 
     text = TextOutputWidget()
     text.display_result(result)
@@ -2103,7 +2174,13 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
     assert "T = 128.500 °F" in report
     assert "Pb = 754.19627 psia" in report
     assert "RsDi = 620.00000" in report
+    assert "Residual oil density = 782.00 kg/m³" in report
     assert "P (psia)" in report
+    assert "CumGas" in report
+    assert "OilMu" in report
+    assert "GasSG" in report
+    assert "GasZ" in report
+    assert "GasMu" in report
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -2117,6 +2194,8 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
         "Bo",
         "Bg",
         "BtD",
+        "Oil Viscosity",
+        "Gas Viscosity",
     }
 
 
@@ -2135,12 +2214,17 @@ def test_cvd_result_surface_exposes_additional_runtime_series(app: QApplication)
     assert table.composition_table.item(1, 4).text() == "0.800000"
     assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
     assert table.details_table.item(1, 1).text() == "530.00"
+    assert table.details_table.horizontalHeaderItem(3).text() == "Liquid Viscosity"
+    assert table.details_table.item(1, 3).text() == "0.5500"
+    assert table.details_table.item(0, 4).text() == "0.0150"
 
     text = TextOutputWidget()
     text.display_result(result)
     report = text.text.toPlainText()
     assert "Gas Prod." in report
     assert "530.00" in report
+    assert "muL" in report
+    assert "muV" in report
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -2153,6 +2237,8 @@ def test_cvd_result_surface_exposes_additional_runtime_series(app: QApplication)
         "Z-factor",
         "Liquid Density",
         "Vapor Density",
+        "Liquid Viscosity",
+        "Vapor Viscosity",
     }
     assert "Pd = 56.52 bar" in {
         line.get_label()
@@ -2166,18 +2252,27 @@ def test_separator_result_surface_exposes_additional_runtime_series(app: QApplic
 
     table = ResultsTableWidget()
     table.display_result(result)
+    summary = _summary_values(table)
     assert table.composition_table.horizontalHeaderItem(4).text() == "Liquid Moles"
     assert table.composition_table.horizontalHeaderItem(5).text() == "Vapor Moles"
     assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
     assert table.details_table.horizontalHeaderItem(3).text() == "ZL"
     assert table.details_table.item(0, 1).text() == "640.00"
     assert table.details_table.item(0, 3).text() == "0.2400"
+    assert summary["Stock-tank MW"] == "174.250 g/mol"
+    assert summary["Stock-tank SG"] == "0.8254"
+    assert summary["Total Gas Moles"] == "0.470000"
+    assert summary["Shrinkage"] == "0.8264"
 
     text = TextOutputWidget()
     text.display_result(result)
     report = text.text.toPlainText()
     assert "rhoL" in report
     assert "ZL" in report
+    assert "Stock-tank MW = 174.25000 g/mol" in report
+    assert "Stock-tank SG = 0.82540" in report
+    assert "Total gas moles = 0.470000" in report
+    assert "Shrinkage = 0.82640" in report
 
     plot = ResultsPlotWidget()
     if not getattr(plot, "_matplotlib_available", False):
@@ -2245,6 +2340,184 @@ def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication)
 
     assert "T = 170.330 °F" in report
     assert "P = 8.00000 MPa" in report
+
+
+def test_pt_flash_result_widgets_render_reported_thermodynamic_surface(app: QApplication) -> None:
+    config = _pt_flash_config()
+    result = _completed_run_result(
+        config,
+        pt_flash_result=PTFlashResult(
+            converged=True,
+            phase="two-phase",
+            vapor_fraction=0.35,
+            liquid_composition={"C1": 0.25, "LUMP1_C7_C9": 0.75},
+            vapor_composition={"C1": 0.92, "LUMP1_C7_C9": 0.08},
+            K_values={"C1": 3.68, "LUMP1_C7_C9": 0.11},
+            liquid_fugacity={"C1": 1.0, "LUMP1_C7_C9": 2.0},
+            vapor_fugacity={"C1": 1.1, "LUMP1_C7_C9": 2.1},
+            reported_surface_status="available",
+            reported_component_basis="reconstructed_scn",
+            reported_liquid_composition={"C1": 0.25, "SCN7": 0.35, "SCN8": 0.40},
+            reported_vapor_composition={"C1": 0.92, "SCN7": 0.05, "SCN8": 0.03},
+            reported_k_values={"C1": 3.68, "SCN7": 0.16, "SCN8": 0.08},
+            reported_liquid_fugacity={"C1": 1.0, "SCN7": 1.8, "SCN8": 1.9},
+            reported_vapor_fugacity={"C1": 1.1, "SCN7": 1.2, "SCN8": 1.3},
+            diagnostics=SolverDiagnostics(
+                status=ConvergenceStatusEnum.CONVERGED,
+                iterations=4,
+                final_residual=1.0e-12,
+            ),
+        ),
+    )
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    summary = _summary_values(table)
+    composition_labels = {
+        table.composition_table.item(row, 0).text()
+        for row in range(table.composition_table.rowCount())
+    }
+    detail_labels = {
+        table.details_table.item(row, 0).text()
+        for row in range(table.details_table.rowCount())
+    }
+
+    assert summary["Reported Surface"] == "Available"
+    assert summary["Reported Basis"] == "Reconstructed SCN thermodynamics"
+    assert summary["Rendered Basis"] == "Reconstructed SCN thermodynamics"
+    assert "SCN7" in composition_labels
+    assert "SCN8" in composition_labels
+    assert "LUMP1_C7_C9" not in composition_labels
+    assert "SCN7" in detail_labels
+    assert "LUMP1_C7_C9" not in detail_labels
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+
+    assert "Reported surface: Available" in report
+    assert "Reported basis: Reconstructed SCN thermodynamics" in report
+    assert "Rendered basis: Reconstructed SCN thermodynamics" in report
+    assert "SCN7" in report
+    assert "LUMP1_C7_C9" not in report
+
+
+def test_pt_flash_result_widgets_render_runtime_reconstructed_surface_for_plus_fraction_run(
+    app: QApplication,
+) -> None:
+    config = _run_config(
+        {
+            "run_name": "PT Flash - runtime reconstructed SCN surface",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5.0e6,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    run_result = run_calculation(config, write_artifacts=False)
+
+    assert run_result.status == RunStatus.COMPLETED
+    assert run_result.pt_flash_result is not None
+
+    table = ResultsTableWidget()
+    table.display_result(run_result)
+    summary = _summary_values(table)
+    composition_labels = {
+        table.composition_table.item(row, 0).text()
+        for row in range(table.composition_table.rowCount())
+    }
+    detail_labels = {
+        table.details_table.item(row, 0).text()
+        for row in range(table.details_table.rowCount())
+    }
+
+    assert summary["Reported Surface"] == "Available"
+    assert summary["Reported Basis"] == "Reconstructed SCN thermodynamics"
+    assert summary["Rendered Basis"] == "Reconstructed SCN thermodynamics"
+    assert "SCN7" in composition_labels
+    assert "LUMP1_C7_C8" not in composition_labels
+    assert "SCN7" in detail_labels
+    assert "LUMP1_C7_C8" not in detail_labels
+
+    text = TextOutputWidget()
+    text.display_result(run_result)
+    report = text.text.toPlainText()
+
+    assert "Reported surface: Available" in report
+    assert "Reported basis: Reconstructed SCN thermodynamics" in report
+    assert "Rendered basis: Reconstructed SCN thermodynamics" in report
+    assert "SCN7" in report
+    assert "LUMP1_C7_C8" not in report
+
+
+def test_pt_flash_result_widgets_surface_status_for_single_phase_runtime(
+    app: QApplication,
+) -> None:
+    config = _run_config(
+        {
+            "run_name": "PT Flash - single phase reported-surface status",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5.0e7,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    run_result = run_calculation(config, write_artifacts=False)
+
+    assert run_result.status == RunStatus.COMPLETED
+    assert run_result.pt_flash_result is not None
+
+    table = ResultsTableWidget()
+    table.display_result(run_result)
+    summary = _summary_values(table)
+
+    assert summary["Reported Surface"] == "Withheld for single-phase runtime"
+    assert summary["Rendered Basis"] == "Runtime thermodynamic basis"
+    assert "two-phase" in summary["Reported Surface Note"].lower()
+
+    text = TextOutputWidget()
+    text.display_result(run_result)
+    report = text.text.toPlainText()
+
+    assert "Reported surface: Withheld for single-phase runtime" in report
+    assert "Reported surface note:" in report
+    assert "Rendered basis: Runtime thermodynamic basis" in report
 
 
 def test_saturation_result_widgets_honor_selected_display_units(app: QApplication) -> None:
@@ -2407,6 +2680,100 @@ def test_saturation_result_widgets_render_plus_fraction_lump_names(app: QApplica
     assert "LUMP2_C10_C12" in report
 
 
+def test_saturation_result_widgets_prefer_delumped_reporting_basis(app: QApplication) -> None:
+    config = _bubble_point_plus_fraction_config()
+    result = _completed_run_result(
+        config,
+        bubble_point_result=BubblePointResult(
+            converged=True,
+            pressure_pa=11466642.931388617,
+            temperature_k=360.0,
+            iterations=24,
+            residual=1.0e-8,
+            stable_liquid=True,
+            liquid_composition={
+                "N2": 0.0021,
+                "CO2": 0.0187,
+                "C1": 0.3478,
+                "LUMP1_C7_C9": 0.6314,
+            },
+            vapor_composition={
+                "N2": 0.0073866627,
+                "CO2": 0.0229572188,
+                "C1": 0.7619977163,
+                "LUMP1_C7_C9": 0.2076584022,
+            },
+            k_values={
+                "N2": 3.517458,
+                "CO2": 1.227659,
+                "C1": 2.190332,
+                "LUMP1_C7_C9": 0.067258,
+            },
+            reported_component_basis="delumped_scn",
+            reported_liquid_composition={
+                "N2": 0.0021,
+                "CO2": 0.0187,
+                "C1": 0.3478,
+                "SCN7": 0.2100,
+                "SCN8": 0.2107,
+                "SCN9": 0.2107,
+            },
+            reported_vapor_composition={
+                "N2": 0.0073866627,
+                "CO2": 0.0229572188,
+                "C1": 0.7619977163,
+                "SCN7": 0.0900000000,
+                "SCN8": 0.0700000000,
+                "SCN9": 0.0476584022,
+            },
+            reported_k_values={
+                "N2": 3.517458,
+                "CO2": 1.227659,
+                "C1": 2.190332,
+                "SCN7": 0.102258,
+                "SCN8": 0.066445,
+                "SCN9": 0.045218,
+            },
+            diagnostics=SolverDiagnostics(
+                status=ConvergenceStatusEnum.CONVERGED,
+                iterations=24,
+                final_residual=1.0e-8,
+            ),
+        ),
+    )
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    summary = _summary_values(table)
+    components = {
+        table.composition_table.item(row, 0).text()
+        for row in range(table.composition_table.rowCount())
+    }
+
+    assert summary["Reported Basis"] == "Delumped SCN detail"
+    assert summary["Rendered Basis"] == "Delumped SCN detail"
+    assert "SCN7" in components
+    assert "SCN8" in components
+    assert "LUMP1_C7_C9" not in components
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+
+    assert "Reported basis: Delumped SCN detail" in report
+    assert "Rendered basis: Delumped SCN detail" in report
+    assert "SCN7" in report
+    assert "LUMP1_C7_C9" not in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    tick_labels = [tick.get_text() for tick in plot.figure.axes[0].get_xticklabels()]
+    assert "SCN7" in tick_labels
+    assert "LUMP1_C7_C9" not in tick_labels
+
+
 def test_saturation_result_widgets_render_inline_pseudo_display_label(app: QApplication) -> None:
     result = _inline_pseudo_bubble_point_result()
 
@@ -2554,7 +2921,7 @@ def test_saturation_result_widgets_render_inline_pseudo_display_label(app: QAppl
                     "eos_type": "peng_robinson",
                     "cvd_config": {
                         "temperature_k": 320.0,
-                        "dew_pressure_pa": 3906.418983182879,
+                        "dew_pressure_pa": 5598.741130684053,
                         "pressure_end_pa": 1500.0,
                         "n_steps": 5,
                     },
@@ -2562,12 +2929,12 @@ def test_saturation_result_widgets_render_inline_pseudo_display_label(app: QAppl
             ),
             CVDResult(
                 temperature_k=320.0,
-                dew_pressure_pa=3906.418983182879,
+                dew_pressure_pa=5598.741130684053,
                 initial_z=0.92,
                 converged=True,
                 steps=[
                     CVDStepResult(
-                        pressure_pa=3906.418983182879,
+                        pressure_pa=5598.741130684053,
                         liquid_dropout=0.00,
                         cumulative_gas_produced=0.00,
                         moles_remaining=1.0,

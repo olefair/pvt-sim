@@ -38,9 +38,10 @@ Bounded support now exists in two forms:
 - `pvtapp` exposes a standalone desktop-plus-runtime TBP run mode through `CalculationType.TBP`, `RunConfig(calculation_type="tbp", tbp_config={...})`, and `run_calculation(...)`, with saved artifact and result rendering support.
 - `pvtapp` plus-fraction runtime configs now also admit optional `tbp_cuts` plus Pedersen `fit_to_tbp` selection for non-standalone thermo runs.
 - TBP run artifacts now preserve a derived aggregate heavy-end bridge context so the runtime-visible `z+` / `MW+` intent remains auditable outside the standalone assay screen.
+- `RunResult` artifacts now also preserve a reusable heavy-end runtime characterization package whenever plus-fraction preparation occurs. That package records the SCN split, Pedersen fit metadata, runtime component basis, and, for lumped runs, the explicit lumping method plus the lump membership and delumping weights that the runtime actually used.
 - The current TBP slice now also admits interval/gapped cuts and optional/estimated boiling-point endpoints in the standalone assay workflow.
 
-This does **not** yet mean full-spectrum TBP characterization maturity. The new runtime-backed piece is a bounded Pedersen `fit_to_tbp` path; the standalone TBP desktop support is still a cut-table assay workflow, the standalone bridge remains aggregate-only, and broader downstream TBP-specific characterization / validation work still remains.
+This does **not** yet mean full-spectrum TBP characterization maturity. The runtime-backed piece is still a bounded Pedersen `fit_to_tbp` path; the standalone TBP desktop support is still a cut-table assay workflow, but its result artifacts now preserve the reusable runtime characterization package instead of only aggregate `C<n>+` values. The default heavy-end runtime lumping path is now `Whitson`, while broader downstream TBP-specific characterization / validation work still remains.
 
 ## Example
 

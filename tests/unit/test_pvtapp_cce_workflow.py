@@ -57,6 +57,10 @@ def test_cce_workflow_happy_path() -> None:
     assert pressures[-1] == pytest.approx(config.cce_config.pressure_end_pa)
     assert all(pressures[i] >= pressures[i + 1] for i in range(len(pressures) - 1))
     assert all(step.relative_volume > 0 for step in cce.steps)
+    assert all(
+        step.liquid_viscosity_pa_s is not None or step.vapor_viscosity_pa_s is not None
+        for step in cce.steps
+    )
 
     if cce.saturation_pressure_pa is not None:
         assert cce.saturation_pressure_pa > 0

@@ -19,7 +19,11 @@ from pvtapp.schemas import (
     SaturationPointConfig,
     CCEConfig,
     DLConfig,
+    StabilityAnalysisConfig,
     TemperatureUnit,
+    describe_pt_flash_reported_surface_status,
+    describe_reported_component_basis,
+    describe_runtime_component_basis,
     pressure_from_pa,
     temperature_from_k,
 )
@@ -51,6 +55,12 @@ def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int
     return f"{temperature_from_k(value_k, unit):.{precision}f} {_format_temperature_unit(unit)}"
 
 
+def _format_optional_measurement(value: Optional[float], *, precision: int, unit: str) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.{precision}f} {unit}"
+
+
 def _pt_flash_units(config: Optional[PTFlashConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
         return PressureUnit.BAR, TemperatureUnit.C
@@ -70,6 +80,12 @@ def _cce_units(config: Optional[CCEConfig]) -> tuple[PressureUnit, TemperatureUn
 
 
 def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
+
+
+def _stability_units(config: Optional[StabilityAnalysisConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
         return PressureUnit.BAR, TemperatureUnit.C
     return config.pressure_unit, config.temperature_unit
@@ -151,6 +167,30 @@ class TextOutputWidget(QWidget):
                 if plus_fraction.sg_plus_60f is not None:
                     lines.append(f"SG+ = {plus_fraction.sg_plus_60f:.6f}")
                 lines.append("")
+                if result.runtime_characterization is not None:
+                    runtime = result.runtime_characterization
+                    lines.append("Runtime characterization")
+                    lines.append("----------------------")
+                    basis_label = describe_runtime_component_basis(runtime.runtime_component_basis)
+                    lines.append(f"Basis = {basis_label or runtime.runtime_component_basis}")
+                    lines.append(f"Split = {runtime.split_method}")
+                    if runtime.lumping_method is not None:
+                        lines.append(f"Lumping = {runtime.lumping_method}")
+                    lines.append(f"Runtime components = {len(runtime.runtime_component_ids)}")
+                    lines.append(f"SCNs = {len(runtime.scn_distribution)}")
+                    if runtime.lump_distribution:
+                        lines.append(f"Lumps = {len(runtime.lump_distribution)}")
+                    if runtime.delumping_basis is not None:
+                        lines.append(f"Delumping = {runtime.delumping_basis}")
+                    if runtime.pedersen_fit is not None:
+                        lines.append(
+                            f"Pedersen A/B = {runtime.pedersen_fit.A:.6f}, {runtime.pedersen_fit.B:.6f}"
+                        )
+                        if runtime.pedersen_fit.tbp_cut_rms_relative_error is not None:
+                            lines.append(
+                                f"Cut Fit RMS = {runtime.pedersen_fit.tbp_cut_rms_relative_error:.6f}"
+                            )
+                    lines.append("")
 
         # Calculation-specific
         if result.pt_flash_result is not None and cfg.pt_flash_config is not None:
@@ -166,17 +206,159 @@ class TextOutputWidget(QWidget):
             r = result.pt_flash_result
             lines.append(f"Phase: {r.phase}")
             lines.append(f"Vapor fraction: {r.vapor_fraction:.6f}")
+            lines.append(
+                f"Liquid density: {_format_optional_measurement(r.liquid_density_kg_per_m3, precision=2, unit='kg/m³')}"
+            )
+            lines.append(
+                f"Vapor density: {_format_optional_measurement(r.vapor_density_kg_per_m3, precision=2, unit='kg/m³')}"
+            )
+            lines.append(
+                f"Liquid viscosity: {_format_optional_measurement(r.liquid_viscosity_cp, precision=4, unit='cP')}"
+            )
+            lines.append(
+                f"Vapor viscosity: {_format_optional_measurement(r.vapor_viscosity_cp, precision=4, unit='cP')}"
+            )
+            lines.append(
+                f"Interfacial tension: {_format_optional_measurement(r.interfacial_tension_mn_per_m, precision=4, unit='mN/m')}"
+            )
+            reported_surface_label = describe_pt_flash_reported_surface_status(
+                r.reported_surface_status
+            )
+            reported_basis_label = describe_reported_component_basis(r.reported_component_basis)
+            if reported_surface_label is not None:
+                lines.append(f"Reported surface: {reported_surface_label}")
+                if r.reported_surface_reason:
+                    lines.append(f"Reported surface note: {r.reported_surface_reason}")
+            if reported_basis_label is not None:
+                lines.append(f"Reported basis: {reported_basis_label}")
+                lines.append(
+                    "Rendered basis: "
+                    + (
+                        reported_basis_label
+                        if r.has_reported_thermodynamic_surface
+                        else "Runtime thermodynamic basis"
+                    )
+                )
+            elif reported_surface_label is not None:
+                lines.append("Rendered basis: Runtime thermodynamic basis")
             lines.append("")
 
             lines.append("Liquid composition (x)")
-            for cid, x in sorted(r.liquid_composition.items()):
+            for cid, x in sorted(r.display_liquid_composition.items()):
                 lines.append(f"{cid:<8s} {x:>12.6f}")
             lines.append("")
 
             lines.append("Vapor composition (y)")
-            for cid, y in sorted(r.vapor_composition.items()):
+            for cid, y in sorted(r.display_vapor_composition.items()):
                 lines.append(f"{cid:<8s} {y:>12.6f}")
             lines.append("")
+
+        elif result.stability_analysis_result is not None:
+            r = result.stability_analysis_result
+            pressure_unit, temperature_unit = _stability_units(cfg.stability_analysis_config)
+            lines.append("Stability analysis")
+            lines.append("------------------")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"P = {_format_pressure(r.pressure_pa, pressure_unit)}")
+            lines.append(f"Stable = {r.stable}")
+            lines.append(f"Minimum TPD = {r.tpd_min:.6e}")
+            lines.append(f"Phase regime = {r.phase_regime}")
+            lines.append(f"Physical state hint = {r.physical_state_hint}")
+            lines.append(f"Hint basis = {r.physical_state_hint_basis}")
+            lines.append(f"Hint confidence = {r.physical_state_hint_confidence}")
+            lines.append(f"Requested feed phase = {r.requested_feed_phase.value}")
+            lines.append(f"Resolved feed phase = {r.resolved_feed_phase}")
+            lines.append(f"Reference root used = {r.reference_root_used}")
+            if r.best_unstable_trial_kind is not None:
+                lines.append(f"Best unstable trial = {r.best_unstable_trial_kind}")
+            lines.append("")
+
+            lines.append("Interpretation provenance")
+            lines.append("------------------------")
+            if r.liquid_root_z is not None:
+                lines.append(f"Liquid root Z = {r.liquid_root_z:.6f}")
+            if r.vapor_root_z is not None:
+                lines.append(f"Vapor root Z = {r.vapor_root_z:.6f}")
+            if r.root_gap is not None:
+                lines.append(f"Root gap = {r.root_gap:.6e}")
+            if r.gibbs_gap is not None:
+                lines.append(f"Gibbs gap = {r.gibbs_gap:.6e}")
+            if r.average_reduced_pressure is not None:
+                lines.append(f"Average reduced pressure = {r.average_reduced_pressure:.6f}")
+            if r.bubble_pressure_hint_pa is not None:
+                lines.append(f"Bubble pressure hint = {_format_pressure(r.bubble_pressure_hint_pa, pressure_unit)}")
+            if r.dew_pressure_hint_pa is not None:
+                lines.append(f"Dew pressure hint = {_format_pressure(r.dew_pressure_hint_pa, pressure_unit)}")
+            if r.bubble_boundary_reason is not None:
+                lines.append(f"Bubble boundary reason = {r.bubble_boundary_reason}")
+            if r.dew_boundary_reason is not None:
+                lines.append(f"Dew boundary reason = {r.dew_boundary_reason}")
+            lines.append("")
+
+            vapor_comp = {} if r.vapor_like_trial is None else r.vapor_like_trial.composition
+            liquid_comp = {} if r.liquid_like_trial is None else r.liquid_like_trial.composition
+            components = sorted(set(r.feed_composition) | set(vapor_comp) | set(liquid_comp))
+            lines.append("Feed / trial compositions")
+            lines.append("------------------------")
+            lines.append("Component        Feed(z)    Vapor-like   Liquid-like")
+            for cid in components:
+                vapor_value = "-" if cid not in vapor_comp else f"{vapor_comp.get(cid, 0.0):.6f}"
+                liquid_value = "-" if cid not in liquid_comp else f"{liquid_comp.get(cid, 0.0):.6f}"
+                lines.append(
+                    f"{cid:<12s} "
+                    f"{r.feed_composition.get(cid, 0.0):>10.6f} "
+                    f"{vapor_value:>12s} "
+                    f"{liquid_value:>12s}"
+                )
+            lines.append("")
+
+            for trial_label, trial in (
+                ("Vapor-like trial", r.vapor_like_trial),
+                ("Liquid-like trial", r.liquid_like_trial),
+            ):
+                if trial is None:
+                    continue
+                lines.append(trial_label)
+                lines.append("-" * len(trial_label))
+                lines.append(f"Trial phase = {trial.trial_phase}")
+                lines.append(f"TPD = {trial.tpd:.6e}")
+                lines.append(f"Converged = {trial.converged}")
+                lines.append(f"Early exit unstable = {trial.early_exit_unstable}")
+                lines.append(f"Iterations = {trial.iterations}")
+                lines.append(f"Total iterations = {trial.total_iterations}")
+                lines.append(f"Phi calls = {trial.n_phi_calls}")
+                lines.append(f"EOS failures = {trial.n_eos_failures}")
+                lines.append(
+                    f"Best seed = {trial.best_seed.seed_label} (index {trial.best_seed_index})"
+                )
+                lines.append(
+                    f"Seed attempts = {trial.seed_attempts}/{trial.candidate_seed_count}"
+                )
+                if trial.message:
+                    lines.append(f"Message = {trial.message}")
+                if trial.diagnostic_messages:
+                    lines.append("Diagnostics:")
+                    for message in trial.diagnostic_messages:
+                        if message:
+                            lines.append(f"  - {message}")
+                if trial.seed_results:
+                    lines.append("")
+                    lines.append(
+                        "Seed              TPD        Conv  Early  Iter   Phi  EOSFail  Message"
+                    )
+                    for seed in trial.seed_results:
+                        message = "-" if not seed.message else seed.message
+                        lines.append(
+                            f"{seed.seed_label:<16s} "
+                            f"{seed.tpd:>10.3e} "
+                            f"{('Y' if seed.converged else 'N'):>5s} "
+                            f"{('Y' if seed.early_exit_unstable else 'N'):>5s} "
+                            f"{seed.iterations:>5d} "
+                            f"{seed.n_phi_calls:>5d} "
+                            f"{seed.n_eos_failures:>8d} "
+                            f"{message}"
+                        )
+                lines.append("")
 
         elif result.bubble_point_result is not None:
             r = result.bubble_point_result
@@ -191,16 +373,31 @@ class TextOutputWidget(QWidget):
             lines.append(f"Stable liquid: {r.stable_liquid}")
             lines.append(f"Iterations: {r.iterations}")
             lines.append(f"Residual: {r.residual:.5e}")
+            reported_basis_label = describe_reported_component_basis(r.reported_component_basis)
+            if reported_basis_label is not None:
+                lines.append(f"Reported basis: {reported_basis_label}")
+                lines.append(
+                    "Rendered basis: "
+                    + (
+                        reported_basis_label
+                        if r.has_reported_surface
+                        else "Runtime thermodynamic basis"
+                    )
+                )
             if r.certificate is not None:
                 lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
             lines.append("Component       x            y            K")
-            for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
+            for cid in sorted(
+                set(r.display_liquid_composition)
+                | set(r.display_vapor_composition)
+                | set(r.display_k_values)
+            ):
                 lines.append(
                     f"{cid:<8s} "
-                    f"{r.liquid_composition.get(cid, 0.0):>12.6f} "
-                    f"{r.vapor_composition.get(cid, 0.0):>12.6f} "
-                    f"{r.k_values.get(cid, 0.0):>12.6f}"
+                    f"{r.display_liquid_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.display_vapor_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.display_k_values.get(cid, 0.0):>12.6f}"
                 )
             lines.append("")
 
@@ -217,16 +414,31 @@ class TextOutputWidget(QWidget):
             lines.append(f"Stable vapor: {r.stable_vapor}")
             lines.append(f"Iterations: {r.iterations}")
             lines.append(f"Residual: {r.residual:.5e}")
+            reported_basis_label = describe_reported_component_basis(r.reported_component_basis)
+            if reported_basis_label is not None:
+                lines.append(f"Reported basis: {reported_basis_label}")
+                lines.append(
+                    "Rendered basis: "
+                    + (
+                        reported_basis_label
+                        if r.has_reported_surface
+                        else "Runtime thermodynamic basis"
+                    )
+                )
             if r.certificate is not None:
                 lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
             lines.append("Component       x            y            K")
-            for cid in sorted(set(r.liquid_composition) | set(r.vapor_composition) | set(r.k_values)):
+            for cid in sorted(
+                set(r.display_liquid_composition)
+                | set(r.display_vapor_composition)
+                | set(r.display_k_values)
+            ):
                 lines.append(
                     f"{cid:<8s} "
-                    f"{r.liquid_composition.get(cid, 0.0):>12.6f} "
-                    f"{r.vapor_composition.get(cid, 0.0):>12.6f} "
-                    f"{r.k_values.get(cid, 0.0):>12.6f}"
+                    f"{r.display_liquid_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.display_vapor_composition.get(cid, 0.0):>12.6f} "
+                    f"{r.display_k_values.get(cid, 0.0):>12.6f}"
                 )
             lines.append("")
 
@@ -306,11 +518,72 @@ class TextOutputWidget(QWidget):
                 lines.append("Runtime bridge")
                 lines.append("--------------")
                 lines.append("Source = TBP assay")
-                lines.append("Status = Aggregate only")
+                status_label = (
+                    "Characterized SCN"
+                    if ctx.bridge_status == "characterized_scn"
+                    else "Aggregate only"
+                )
+                lines.append(f"Status = {status_label}")
                 lines.append(f"Label  = {ctx.plus_fraction_label}")
                 lines.append(f"z+     = {ctx.z_plus:.6f}")
                 lines.append(f"MW+    = {ctx.mw_plus_g_per_mol:.6f} g/mol")
                 lines.append(f"SG+    = {'-' if ctx.sg_plus_60f is None else f'{ctx.sg_plus_60f:.6f}'}")
+                if ctx.characterization_method is not None:
+                    lines.append(f"Method = {ctx.characterization_method}")
+                if ctx.runtime_component_basis is not None:
+                    lines.append(f"Basis  = {ctx.runtime_component_basis}")
+                if ctx.pedersen_fit is not None:
+                    lines.append(
+                        f"Pedersen A/B = {ctx.pedersen_fit.A:.6f}, {ctx.pedersen_fit.B:.6f}"
+                    )
+                    if ctx.pedersen_fit.tbp_cut_rms_relative_error is not None:
+                        lines.append(
+                            f"Cut Fit RMS = {ctx.pedersen_fit.tbp_cut_rms_relative_error:.6f}"
+                        )
+                if ctx.cut_mappings:
+                    lines.append("")
+                    lines.append("Cut mapping")
+                    lines.append("-----------")
+                    lines.append("Cut         Range      Obs z    Char z    Rel Err    SCNs")
+                    for mapping in ctx.cut_mappings[:20]:
+                        carbon_range = (
+                            f"{mapping.carbon_number}"
+                            if mapping.carbon_number_end == mapping.carbon_number
+                            else f"{mapping.carbon_number}-{mapping.carbon_number_end}"
+                        )
+                        rel_error = (
+                            "-"
+                            if mapping.normalized_relative_error is None
+                            else f"{mapping.normalized_relative_error:.4f}"
+                        )
+                        scn_members = ",".join(str(member) for member in mapping.scn_members)
+                        lines.append(
+                            f"{mapping.cut_name:<8s} "
+                            f"{carbon_range:<10s} "
+                            f"{mapping.observed_normalized_mole_fraction:>7.4f} "
+                            f"{mapping.characterized_normalized_mole_fraction:>9.4f} "
+                            f"{rel_error:>10s} "
+                            f"{scn_members}"
+                        )
+                    if len(ctx.cut_mappings) > 20:
+                        lines.append(f"... ({len(ctx.cut_mappings) - 20} more)")
+                if ctx.scn_distribution:
+                    lines.append("")
+                    lines.append("Derived SCN characterization (sample)")
+                    lines.append("-----------------------------------")
+                    lines.append("SCN        Assay z   Norm z      MW      SG    Tb(K)   omega")
+                    for entry in ctx.scn_distribution[:20]:
+                        lines.append(
+                            f"{entry.component_id:<8s} "
+                            f"{entry.assay_mole_fraction:>8.5f} "
+                            f"{entry.normalized_mole_fraction:>8.5f} "
+                            f"{entry.molecular_weight_g_per_mol:>8.3f} "
+                            f"{entry.specific_gravity_60f:>7.4f} "
+                            f"{entry.boiling_point_k:>8.2f} "
+                            f"{entry.omega:>8.4f}"
+                        )
+                    if len(ctx.scn_distribution) > 20:
+                        lines.append(f"... ({len(ctx.scn_distribution) - 20} more)")
                 for note in ctx.notes:
                     lines.append(f"Note: {note}")
                 lines.append("")
@@ -324,12 +597,16 @@ class TextOutputWidget(QWidget):
             if r.saturation_pressure_pa is not None:
                 lines.append(f"Psat = {_format_pressure(r.saturation_pressure_pa, pressure_unit)}")
             lines.append("")
-            lines.append(f"P ({pressure_unit.value})        RelVol      rhoL      rhoV        z")
+            lines.append(
+                f"P ({pressure_unit.value})        RelVol      rhoL      rhoV      muL      muV        z"
+            )
             for step in r.steps[:80]:
                 z = step.z_factor
                 z_txt = f"{z:.5f}" if z is not None else ""
                 liquid_density = step.liquid_density_kg_per_m3
                 vapor_density = step.vapor_density_kg_per_m3
+                liquid_viscosity = step.liquid_viscosity_cp
+                vapor_viscosity = step.vapor_viscosity_cp
                 liquid_txt = (
                     f"{liquid_density:.2f}"
                     if liquid_density is not None and liquid_density > 0
@@ -340,10 +617,24 @@ class TextOutputWidget(QWidget):
                     if vapor_density is not None and vapor_density > 0
                     else "-"
                 )
+                liquid_viscosity_txt = (
+                    f"{liquid_viscosity:.4f}"
+                    if liquid_viscosity is not None and liquid_viscosity > 0
+                    else "-"
+                )
+                vapor_viscosity_txt = (
+                    f"{vapor_viscosity:.4f}"
+                    if vapor_viscosity is not None and vapor_viscosity > 0
+                    else "-"
+                )
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
                     f"{step.relative_volume:>10.5f} "
-                    f"{liquid_txt:>9s} {vapor_txt:>9s} {z_txt:>8s}"
+                    f"{liquid_txt:>9s} "
+                    f"{vapor_txt:>9s} "
+                    f"{liquid_viscosity_txt:>8s} "
+                    f"{vapor_viscosity_txt:>8s} "
+                    f"{z_txt:>8s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
@@ -358,13 +649,23 @@ class TextOutputWidget(QWidget):
             lines.append(f"Pb = {_format_pressure(r.bubble_pressure_pa, pressure_unit)}")
             lines.append(f"RsDi = {r.rsi:.5f}")
             lines.append(f"Boi = {r.boi:.5f}")
+            lines.append(
+                "Residual oil density = "
+                f"{_format_optional_measurement(r.residual_oil_density_kg_per_m3, precision=2, unit='kg/m³')}"
+            )
             lines.append(f"Converged: {r.converged}")
             lines.append("")
             lines.append(
-                f"P ({pressure_unit.value})        RsD       RsDi         Bo         Bg        BtD     VaporFrac"
+                f"P ({pressure_unit.value})        RsD       RsDi         Bo         Bg        BtD    CumGas   VaporFrac      rhoL    OilMu    GasSG     GasZ    GasMu"
             )
             for step in r.steps[:80]:
                 bg_txt = "-" if step.bg is None else f"{step.bg:.5f}"
+                cumulative_gas = "-" if step.cumulative_gas_produced is None else f"{step.cumulative_gas_produced:.5f}"
+                oil_density = "-" if step.oil_density_kg_per_m3 is None else f"{step.oil_density_kg_per_m3:.2f}"
+                oil_viscosity = "-" if step.oil_viscosity_cp is None else f"{step.oil_viscosity_cp:.4f}"
+                gas_gravity = "-" if step.gas_gravity is None else f"{step.gas_gravity:.4f}"
+                gas_z = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.4f}"
+                gas_viscosity = "-" if step.gas_viscosity_cp is None else f"{step.gas_viscosity_cp:.4f}"
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
                     f"{step.rs:>10.5f} "
@@ -372,7 +673,13 @@ class TextOutputWidget(QWidget):
                     f"{step.bo:>10.5f} "
                     f"{bg_txt:>10s} "
                     f"{step.bt:>10.5f} "
-                    f"{step.vapor_fraction:>12.5f}"
+                    f"{cumulative_gas:>9s} "
+                    f"{step.vapor_fraction:>11.5f} "
+                    f"{oil_density:>9s} "
+                    f"{oil_viscosity:>8s} "
+                    f"{gas_gravity:>8s} "
+                    f"{gas_z:>8s} "
+                    f"{gas_viscosity:>8s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
@@ -386,7 +693,9 @@ class TextOutputWidget(QWidget):
             lines.append(f"Pd = {_pa_to_bar(r.dew_pressure_pa):.5f} bar")
             lines.append(f"Initial Z = {r.initial_z:.5f}")
             lines.append("")
-            lines.append("P (bar)     Liquid Dropout   Gas Prod.   Cum. Gas     Z      rhoL      rhoV")
+            lines.append(
+                "P (bar)     Liquid Dropout   Gas Prod.   Cum. Gas     Z      rhoL      rhoV      muL      muV"
+            )
             for step in r.steps[:80]:
                 z_two_phase = "" if step.z_two_phase is None else f"{step.z_two_phase:.5f}"
                 gas_produced = "" if step.gas_produced is None else f"{step.gas_produced:.5f}"
@@ -400,6 +709,16 @@ class TextOutputWidget(QWidget):
                     if step.vapor_density_kg_per_m3 is None or step.vapor_density_kg_per_m3 <= 0
                     else f"{step.vapor_density_kg_per_m3:.2f}"
                 )
+                liquid_viscosity = (
+                    ""
+                    if step.liquid_viscosity_cp is None or step.liquid_viscosity_cp <= 0
+                    else f"{step.liquid_viscosity_cp:.4f}"
+                )
+                vapor_viscosity = (
+                    ""
+                    if step.vapor_viscosity_cp is None or step.vapor_viscosity_cp <= 0
+                    else f"{step.vapor_viscosity_cp:.4f}"
+                )
                 lines.append(
                     f"{_pa_to_bar(step.pressure_pa):>10.5f} "
                     f"{step.liquid_dropout:>16.5f} "
@@ -407,7 +726,9 @@ class TextOutputWidget(QWidget):
                     f"{step.cumulative_gas_produced:>10.5f} "
                     f"{z_two_phase:>8s} "
                     f"{liquid_density:>9s} "
-                    f"{vapor_density:>9s}"
+                    f"{vapor_density:>9s} "
+                    f"{liquid_viscosity:>8s} "
+                    f"{vapor_viscosity:>8s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
@@ -424,6 +745,14 @@ class TextOutputWidget(QWidget):
             lines.append(f"Bg = {r.bg:.5f}")
             lines.append(f"API = {r.api_gravity:.3f}")
             lines.append(f"Stock-tank oil density = {r.stock_tank_oil_density:.5f}")
+            if r.stock_tank_oil_mw_g_per_mol is not None:
+                lines.append(f"Stock-tank MW = {r.stock_tank_oil_mw_g_per_mol:.5f} g/mol")
+            if r.stock_tank_oil_specific_gravity is not None:
+                lines.append(f"Stock-tank SG = {r.stock_tank_oil_specific_gravity:.5f}")
+            if r.total_gas_moles is not None:
+                lines.append(f"Total gas moles = {r.total_gas_moles:.6f}")
+            if r.shrinkage is not None:
+                lines.append(f"Shrinkage = {r.shrinkage:.5f}")
             lines.append("")
             lines.append(
                 "Stage         P (bar)      T (K)    VaporFrac   LiquidMol    VaporMol      rhoL      rhoV       ZL       ZV"

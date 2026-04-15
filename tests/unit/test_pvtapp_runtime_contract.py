@@ -9,6 +9,7 @@ import pytest
 
 from pvtapp.job_runner import (
     ProgressCallback,
+    _prepare_fluid_inputs,
     build_rerun_config,
     load_run_config,
     load_run_result,
@@ -16,7 +17,13 @@ from pvtapp.job_runner import (
     run_calculation,
     validate_runtime_config,
 )
-from pvtapp.schemas import RunConfig, RunStatus
+from pvtapp.schemas import (
+    ConvergenceStatusEnum,
+    PTFlashResult,
+    RunConfig,
+    RunStatus,
+    SolverDiagnostics,
+)
 
 
 def _pt_flash_config(*, eos_type: str = "peng_robinson") -> RunConfig:
@@ -221,6 +228,31 @@ def _gas_plus_fraction_composition_payload() -> dict:
     }
 
 
+def _co2_rich_gas_plus_fraction_composition_payload() -> dict:
+    return {
+        "components": [
+            {"component_id": "N2", "mole_fraction": 0.00816326530612245},
+            {"component_id": "CO2", "mole_fraction": 0.46938775510204084},
+            {"component_id": "H2S", "mole_fraction": 0.010204081632653062},
+            {"component_id": "C1", "mole_fraction": 0.29591836734693877},
+            {"component_id": "C2", "mole_fraction": 0.07142857142857144},
+            {"component_id": "C3", "mole_fraction": 0.04591836734693878},
+            {"component_id": "iC4", "mole_fraction": 0.020408163265306124},
+            {"component_id": "C4", "mole_fraction": 0.01836734693877551},
+            {"component_id": "iC5", "mole_fraction": 0.012244897959183675},
+            {"component_id": "C5", "mole_fraction": 0.012244897959183675},
+            {"component_id": "C6", "mole_fraction": 0.011224489795918367},
+        ],
+        "plus_fraction": {
+            "label": "C7+",
+            "cut_start": 7,
+            "z_plus": 0.024489795918367346,
+            "mw_plus_g_per_mol": 115.39738333333332,
+            "sg_plus_60f": 0.7436666666666666,
+        },
+    }
+
+
 def _assert_resolved_plus_fraction(
     config: RunConfig,
     *,
@@ -229,6 +261,7 @@ def _assert_resolved_plus_fraction(
     split_mw_model: str,
     max_carbon_number: int,
     lumping_n_groups: int,
+    lumping_method: str = "whitson",
 ) -> None:
     plus_fraction = config.composition.plus_fraction
     assert plus_fraction is not None
@@ -240,6 +273,7 @@ def _assert_resolved_plus_fraction(
     assert plus_fraction.max_carbon_number == max_carbon_number
     assert plus_fraction.lumping_enabled is True
     assert plus_fraction.lumping_n_groups == lumping_n_groups
+    assert plus_fraction.lumping_method == lumping_method
 
 
 def test_validate_runtime_config_accepts_peng_robinson() -> None:
@@ -325,6 +359,85 @@ def test_validate_runtime_config_accepts_plus_fraction_characterization_inputs()
     )
 
     validate_runtime_config(config)
+
+
+def test_prepare_fluid_inputs_returns_first_class_runtime_package_for_plus_fraction() -> None:
+    prepared = _prepare_fluid_inputs(_bubble_point_plus_fraction_config())
+
+    assert prepared.characterization_result is not None
+    assert prepared.runtime_characterization is not None
+    assert prepared.characterization_result.component_ids == prepared.component_ids
+    assert prepared.runtime_characterization.runtime_component_ids == prepared.component_ids
+    assert prepared.runtime_characterization.runtime_component_basis == "lumped"
+    assert prepared.detailed_reconstruction is not None
+    assert prepared.detailed_reconstruction_unavailable_reason is None
+    assert prepared.runtime_characterization.detailed_reconstruction is not None
+    assert prepared.runtime_characterization.detailed_reconstruction_unavailable_reason is None
+    assert prepared.detailed_reconstruction.component_basis == "light_ends_plus_scn"
+    assert prepared.detailed_reconstruction.components[0].component_id == "N2"
+    assert any(entry.component_id == "SCN7" for entry in prepared.detailed_reconstruction.components)
+    assert len(prepared.detailed_reconstruction.components) > len(prepared.component_ids)
+    assert len(prepared.detailed_reconstruction.binary_interaction_matrix) == len(
+        prepared.detailed_reconstruction.components
+    )
+    assert all(
+        len(row) == len(prepared.detailed_reconstruction.components)
+        for row in prepared.detailed_reconstruction.binary_interaction_matrix
+    )
+
+
+def test_prepare_fluid_inputs_omits_detailed_reconstruction_without_plus_fraction() -> None:
+    prepared = _prepare_fluid_inputs(_pt_flash_config())
+
+    assert prepared.characterization_result is None
+    assert prepared.runtime_characterization is None
+    assert prepared.detailed_reconstruction is None
+    assert prepared.detailed_reconstruction_unavailable_reason is None
+
+
+def test_prepare_fluid_inputs_preserves_detailed_bip_provenance_for_plus_fraction() -> None:
+    config = _bubble_point_plus_fraction_config().model_copy(
+        update={"binary_interaction": {"C1-C7+": 0.0125}}
+    )
+
+    prepared = _prepare_fluid_inputs(config)
+
+    assert prepared.detailed_reconstruction is not None
+    reconstruction = prepared.detailed_reconstruction
+    component_ids = [entry.component_id for entry in reconstruction.components]
+    c1_index = component_ids.index("C1")
+    scn_indices = [
+        index
+        for index, component_id in enumerate(component_ids)
+        if component_id.startswith("SCN")
+    ]
+
+    assert reconstruction.component_basis == "light_ends_plus_scn"
+    assert reconstruction.bip_provenance.default_kij == pytest.approx(0.0)
+    assert "C1-C7+" in reconstruction.bip_provenance.override_pairs
+    assert scn_indices
+    for scn_index in scn_indices:
+        assert reconstruction.binary_interaction_matrix[c1_index][scn_index] == pytest.approx(0.0125)
+        assert reconstruction.binary_interaction_matrix[scn_index][c1_index] == pytest.approx(0.0125)
+
+
+def test_run_calculation_reuses_prepared_fluid_context_for_plus_fraction(monkeypatch) -> None:
+    import pvtcore.characterization as characterization
+
+    original = characterization.characterize_fluid
+    calls = 0
+
+    def wrapped(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(characterization, "characterize_fluid", wrapped)
+
+    result = run_calculation(config=_bubble_point_plus_fraction_config(), write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert calls == 1
 
 
 def test_validate_runtime_config_accepts_pedersen_fit_to_tbp_inputs() -> None:
@@ -482,6 +595,7 @@ def test_run_calculation_executes_pt_flash_with_plus_fraction_characterization()
     assert result.status == RunStatus.COMPLETED
     assert result.pt_flash_result is not None
     assert result.error_message is None
+    assert result.runtime_characterization is not None
     _assert_resolved_plus_fraction(
         result.config,
         resolved_preset="volatile_oil",
@@ -490,6 +604,178 @@ def test_run_calculation_executes_pt_flash_with_plus_fraction_characterization()
         max_carbon_number=20,
         lumping_n_groups=6,
     )
+    runtime = result.runtime_characterization
+    pt_flash_result = result.pt_flash_result
+    assert runtime.runtime_component_basis == "lumped"
+    assert runtime.lumping_method == "whitson"
+    assert pt_flash_result.phase == "two-phase"
+    assert pt_flash_result.reported_surface_status == "available"
+    assert pt_flash_result.reported_surface_reason is None
+    assert pt_flash_result.reported_component_basis == "reconstructed_scn"
+    assert pt_flash_result.has_reported_thermodynamic_surface is True
+    assert pt_flash_result.reported_liquid_composition is not None
+    assert pt_flash_result.reported_vapor_composition is not None
+    assert pt_flash_result.reported_k_values is not None
+    assert pt_flash_result.reported_liquid_fugacity is not None
+    assert pt_flash_result.reported_vapor_fugacity is not None
+    first_lump_id = next(
+        component_id
+        for component_id in runtime.runtime_component_ids
+        if component_id.startswith("LUMP")
+    )
+    assert first_lump_id in pt_flash_result.liquid_composition
+    assert first_lump_id not in pt_flash_result.reported_liquid_composition
+    assert "SCN7" in pt_flash_result.reported_liquid_composition
+    assert "SCN7" in pt_flash_result.reported_vapor_composition
+    assert "SCN7" in pt_flash_result.reported_liquid_fugacity
+    assert "SCN7" in pt_flash_result.reported_vapor_fugacity
+    assert sum(pt_flash_result.reported_liquid_composition.values()) == pytest.approx(1.0, abs=1e-12)
+    assert sum(pt_flash_result.reported_vapor_composition.values()) == pytest.approx(1.0, abs=1e-12)
+    for component_id, reported_k in pt_flash_result.reported_k_values.items():
+        reported_x = pt_flash_result.reported_liquid_composition[component_id]
+        reported_y = pt_flash_result.reported_vapor_composition[component_id]
+        reported_phi_l = pt_flash_result.reported_liquid_fugacity[component_id]
+        reported_phi_v = pt_flash_result.reported_vapor_fugacity[component_id]
+        assert reported_k == pytest.approx(reported_phi_l / reported_phi_v, rel=1e-8, abs=1e-10)
+        if reported_x > 1.0e-12:
+            assert reported_k == pytest.approx(reported_y / reported_x, rel=1e-5, abs=1e-8)
+
+
+@pytest.mark.parametrize("eos_type", ["peng_robinson", "pr78", "srk"])
+def test_run_calculation_executes_plus_fraction_pt_flash_reconstruction_across_supported_eos(
+    eos_type: str,
+) -> None:
+    config = RunConfig.model_validate(
+        {
+            "run_name": f"PT Flash - plus fraction {eos_type}",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": eos_type,
+            "pt_flash_config": {
+                "pressure_pa": 5.0e6,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.pt_flash_result is not None
+    assert result.pt_flash_result.phase == "two-phase"
+    assert result.pt_flash_result.reported_surface_status == "available"
+    assert result.pt_flash_result.reported_component_basis == "reconstructed_scn"
+    assert result.pt_flash_result.has_reported_thermodynamic_surface is True
+
+
+def test_run_calculation_withholds_reconstructed_pt_flash_surface_for_single_phase_lumped_runtime() -> None:
+    config = RunConfig.model_validate(
+        {
+            "run_name": "PT Flash - single phase plus fraction policy",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5.0e7,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.pt_flash_result is not None
+    assert result.runtime_characterization is not None
+    assert result.runtime_characterization.runtime_component_basis == "lumped"
+    assert result.pt_flash_result.phase == "liquid"
+    assert result.pt_flash_result.reported_surface_status == "withheld_single_phase_runtime"
+    assert result.pt_flash_result.reported_surface_reason is not None
+    assert result.pt_flash_result.reported_component_basis is None
+    assert result.pt_flash_result.reported_liquid_composition is None
+    assert result.pt_flash_result.reported_vapor_composition is None
+    assert result.pt_flash_result.reported_k_values is None
+    assert result.pt_flash_result.reported_liquid_fugacity is None
+    assert result.pt_flash_result.reported_vapor_fugacity is None
+    assert result.pt_flash_result.has_reported_thermodynamic_surface is False
+
+
+def test_run_calculation_keeps_runtime_pt_flash_when_reconstructed_surface_fails(
+    monkeypatch,
+) -> None:
+    import pvtapp.job_runner as job_runner
+
+    def _boom(**_kwargs):
+        raise RuntimeError("reconstruction failed")
+
+    monkeypatch.setattr(job_runner, "_build_reconstructed_pt_flash_reporting", _boom)
+
+    config = RunConfig.model_validate(
+        {
+            "run_name": "PT Flash - reconstruction failure fallback",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5.0e6,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.pt_flash_result is not None
+    assert result.pt_flash_result.phase == "two-phase"
+    assert result.pt_flash_result.reported_surface_status == "failed_reconstruction"
+    assert result.pt_flash_result.reported_surface_reason is not None
+    assert "reconstruction failed" in result.pt_flash_result.reported_surface_reason
+    assert result.pt_flash_result.reported_component_basis is None
+    assert result.pt_flash_result.has_reported_thermodynamic_surface is False
+    assert any(component_id.startswith("LUMP") for component_id in result.pt_flash_result.liquid_composition)
 
 
 def test_run_calculation_executes_pt_flash_with_pedersen_fit_to_tbp_characterization() -> None:
@@ -503,6 +789,17 @@ def test_run_calculation_executes_pt_flash_with_pedersen_fit_to_tbp_characteriza
     assert result.config.composition.plus_fraction.pedersen_solve_ab_from == "fit_to_tbp"
     assert result.config.composition.plus_fraction.tbp_cuts is not None
     assert len(result.config.composition.plus_fraction.tbp_cuts) == 3
+    assert result.runtime_characterization is not None
+    runtime = result.runtime_characterization
+    assert runtime.source == "plus_fraction_runtime"
+    assert runtime.split_method == "pedersen"
+    assert runtime.runtime_component_basis == "scn_unlumped"
+    assert runtime.pedersen_fit is not None
+    assert runtime.pedersen_fit.solve_ab_from == "fit_to_tbp"
+    assert runtime.cut_mappings
+    assert runtime.cut_mappings[0].cut_name == "C7"
+    assert runtime.scn_distribution
+    assert runtime.runtime_component_ids[:3] == ["C1", "C2", "C3"]
 
 
 @pytest.mark.parametrize("split_method", ["katz", "lohrenz"])
@@ -567,9 +864,30 @@ def test_run_calculation_executes_standalone_tbp_runtime() -> None:
     assert [cut.name for cut in result.tbp_result.cuts] == ["C7", "C8", "C9"]
     assert all(cut.boiling_point_k is not None for cut in result.tbp_result.cuts)
     assert result.tbp_result.characterization_context is not None
-    assert result.tbp_result.characterization_context.plus_fraction_label == "C7+"
-    assert result.tbp_result.characterization_context.bridge_status == "aggregate_only"
-    assert result.tbp_result.characterization_context.notes
+    context = result.tbp_result.characterization_context
+    assert context.plus_fraction_label == "C7+"
+    assert context.bridge_status == "characterized_scn"
+    assert context.characterization_method == "pedersen_fit_to_tbp"
+    assert context.runtime_component_basis == "scn_unlumped"
+    assert context.pedersen_fit is not None
+    assert context.pedersen_fit.solve_ab_from == "fit_to_tbp"
+    assert context.pedersen_fit.tbp_cut_rms_relative_error is not None
+    assert context.scn_distribution
+    assert len(context.scn_distribution) == 3
+    assert context.scn_distribution[0].component_id == "SCN7"
+    assert context.cut_mappings
+    assert context.cut_mappings[0].cut_name == "C7"
+    assert context.notes
+    assert result.runtime_characterization is not None
+    runtime = result.runtime_characterization
+    assert runtime.source == "tbp_assay"
+    assert runtime.runtime_component_basis == "scn_unlumped"
+    assert runtime.scn_distribution
+    assert len(runtime.scn_distribution) == 3
+    assert runtime.cut_mappings
+    assert runtime.cut_mappings[0].cut_name == "C7"
+    assert runtime.pedersen_fit is not None
+    assert runtime.pedersen_fit.solve_ab_from == "fit_to_tbp"
     assert result.pt_flash_result is None
     assert result.cce_result is None
 
@@ -595,6 +913,77 @@ def test_run_calculation_persists_tbp_run_artifacts(tmp_path: Path) -> None:
     assert loaded_result.tbp_result.cuts[0].boiling_point_k is not None
     assert loaded_result.tbp_result.characterization_context is not None
     assert loaded_result.tbp_result.characterization_context.plus_fraction_label == "C7+"
+    assert loaded_result.tbp_result.characterization_context.bridge_status == "characterized_scn"
+    assert loaded_result.tbp_result.characterization_context.pedersen_fit is not None
+    assert loaded_result.runtime_characterization is not None
+    assert loaded_result.runtime_characterization.source == "tbp_assay"
+    assert loaded_result.runtime_characterization.scn_distribution
+
+
+def test_run_calculation_persists_detailed_reconstruction_payload_for_plus_fraction(tmp_path: Path) -> None:
+    config = _bubble_point_plus_fraction_config().model_copy(update={"run_id": "pfrecon01"})
+
+    result = run_calculation(config=config, output_dir=tmp_path, write_artifacts=True)
+
+    assert result.status == RunStatus.COMPLETED
+    run_dirs = sorted(tmp_path.iterdir())
+    assert len(run_dirs) == 1
+    loaded_result = load_run_result(run_dirs[0])
+
+    assert loaded_result is not None
+    assert loaded_result.runtime_characterization is not None
+    reconstruction = loaded_result.runtime_characterization.detailed_reconstruction
+    assert reconstruction is not None
+    assert reconstruction.component_basis == "light_ends_plus_scn"
+    assert any(entry.component_id == "SCN7" for entry in reconstruction.components)
+    assert len(reconstruction.components) > len(loaded_result.runtime_characterization.runtime_component_ids)
+    assert len(reconstruction.binary_interaction_matrix) == len(reconstruction.components)
+
+
+def test_run_calculation_persists_reconstructed_pt_flash_surface_artifacts(tmp_path: Path) -> None:
+    config = RunConfig.model_validate(
+        {
+            "run_name": "PT Flash - persisted reconstructed SCN surface",
+            "run_id": "ptflashrecon01",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.35},
+                    {"component_id": "C2", "mole_fraction": 0.20},
+                    {"component_id": "C3", "mole_fraction": 0.15},
+                ],
+                "plus_fraction": {
+                    "label": "C7+",
+                    "cut_start": 7,
+                    "z_plus": 0.30,
+                    "mw_plus_g_per_mol": 150.0,
+                    "sg_plus_60f": 0.82,
+                    "max_carbon_number": 20,
+                },
+            },
+            "calculation_type": "pt_flash",
+            "eos_type": "peng_robinson",
+            "pt_flash_config": {
+                "pressure_pa": 5.0e6,
+                "temperature_k": 350.0,
+            },
+        }
+    )
+
+    result = run_calculation(config=config, output_dir=tmp_path, write_artifacts=True)
+
+    assert result.status == RunStatus.COMPLETED
+    run_dirs = sorted(tmp_path.iterdir())
+    assert len(run_dirs) == 1
+    loaded_result = load_run_result(run_dirs[0])
+
+    assert loaded_result is not None
+    assert loaded_result.pt_flash_result is not None
+    assert loaded_result.pt_flash_result.reported_surface_status == "available"
+    assert loaded_result.pt_flash_result.reported_component_basis == "reconstructed_scn"
+    assert loaded_result.pt_flash_result.reported_liquid_composition is not None
+    assert loaded_result.pt_flash_result.reported_liquid_fugacity is not None
+    assert "SCN7" in loaded_result.pt_flash_result.reported_liquid_composition
+    assert "SCN7" in loaded_result.pt_flash_result.reported_liquid_fugacity
 
 
 def test_run_calculation_executes_bubble_point_with_plus_fraction_characterization() -> None:
@@ -607,8 +996,34 @@ def test_run_calculation_executes_bubble_point_with_plus_fraction_characterizati
     assert result.error_message is None
     assert result.bubble_point_result.pressure_pa == pytest.approx(11466642.931388617, abs=3.0e4)
     assert result.bubble_point_result.certificate is not None
-    assert "LUMP1_C7_C9" in result.bubble_point_result.vapor_composition
-    assert result.bubble_point_result.vapor_composition["LUMP1_C7_C9"] > 0.0
+    assert result.runtime_characterization is not None
+    runtime = result.runtime_characterization
+    assert runtime.runtime_component_basis == "lumped"
+    assert runtime.lumping_method == "whitson"
+    assert runtime.lump_distribution
+    assert runtime.delumping_basis == "feed_scn_distribution"
+    assert runtime.lump_distribution[0].members
+    first_lump_id = runtime.lump_distribution[0].component_id
+    assert first_lump_id in result.bubble_point_result.vapor_composition
+    assert result.bubble_point_result.vapor_composition[first_lump_id] > 0.0
+    assert result.bubble_point_result.reported_component_basis == "delumped_scn"
+    assert result.bubble_point_result.reported_vapor_composition is not None
+    assert result.bubble_point_result.reported_k_values is not None
+    assert "SCN7" in result.bubble_point_result.reported_vapor_composition
+    assert first_lump_id not in result.bubble_point_result.reported_vapor_composition
+    assert sum(result.bubble_point_result.reported_vapor_composition.values()) == pytest.approx(1.0, abs=1e-12)
+    assert sum(result.bubble_point_result.reported_k_values.values()) > 0.0
+    raw_heavy_total = sum(
+        value
+        for component_id, value in result.bubble_point_result.vapor_composition.items()
+        if component_id.startswith("LUMP")
+    )
+    reported_heavy_total = sum(
+        value
+        for component_id, value in result.bubble_point_result.reported_vapor_composition.items()
+        if component_id.startswith("SCN")
+    )
+    assert reported_heavy_total == pytest.approx(raw_heavy_total, abs=1e-12)
 
 
 def test_run_calculation_executes_dew_point_with_plus_fraction_characterization() -> None:
@@ -619,10 +1034,32 @@ def test_run_calculation_executes_dew_point_with_plus_fraction_characterization(
     assert result.status == RunStatus.COMPLETED
     assert result.dew_point_result is not None
     assert result.error_message is None
-    assert result.dew_point_result.pressure_pa == pytest.approx(3906.418983182879, abs=25.0)
+    assert result.dew_point_result.pressure_pa == pytest.approx(5598.741130684053, abs=25.0)
     assert result.dew_point_result.certificate is not None
-    assert "LUMP1_C7_C12" in result.dew_point_result.liquid_composition
-    assert result.dew_point_result.liquid_composition["LUMP1_C7_C12"] > 0.0
+    assert result.runtime_characterization is not None
+    runtime = result.runtime_characterization
+    assert runtime.lumping_method == "whitson"
+    assert runtime.lump_distribution
+    first_lump_id = runtime.lump_distribution[0].component_id
+    assert first_lump_id in result.dew_point_result.liquid_composition
+    assert result.dew_point_result.liquid_composition[first_lump_id] > 0.0
+    assert result.dew_point_result.reported_component_basis == "delumped_scn"
+    assert result.dew_point_result.reported_liquid_composition is not None
+    assert result.dew_point_result.reported_k_values is not None
+    assert "SCN7" in result.dew_point_result.reported_liquid_composition
+    assert first_lump_id not in result.dew_point_result.reported_liquid_composition
+    assert sum(result.dew_point_result.reported_liquid_composition.values()) == pytest.approx(1.0, abs=1e-12)
+    raw_heavy_total = sum(
+        value
+        for component_id, value in result.dew_point_result.liquid_composition.items()
+        if component_id.startswith("LUMP")
+    )
+    reported_heavy_total = sum(
+        value
+        for component_id, value in result.dew_point_result.reported_liquid_composition.items()
+        if component_id.startswith("SCN")
+    )
+    assert reported_heavy_total == pytest.approx(raw_heavy_total, abs=1e-12)
 
 
 def test_run_calculation_auto_resolves_bubble_point_plus_fraction_policy() -> None:
@@ -713,7 +1150,7 @@ def test_run_calculation_auto_resolves_dew_point_plus_fraction_policy() -> None:
 
     assert result.status == RunStatus.COMPLETED
     assert result.dew_point_result is not None
-    assert result.dew_point_result.pressure_pa == pytest.approx(3906.418983182879, abs=25.0)
+    assert result.dew_point_result.pressure_pa == pytest.approx(5598.741130684053, abs=25.0)
     plus_fraction = result.config.composition.plus_fraction
     assert plus_fraction is not None
     assert plus_fraction.characterization_preset.value == "auto"
@@ -723,6 +1160,37 @@ def test_run_calculation_auto_resolves_dew_point_plus_fraction_policy() -> None:
     assert plus_fraction.max_carbon_number == 18
     assert plus_fraction.lumping_enabled is True
     assert plus_fraction.lumping_n_groups == 2
+
+
+def test_run_calculation_auto_resolves_pt_flash_co2_rich_plus_fraction_policy() -> None:
+    result = run_calculation(
+        RunConfig.model_validate(
+            {
+                "run_name": "PT Flash - auto co2 rich gas policy",
+                "composition": _co2_rich_gas_plus_fraction_composition_payload(),
+                "calculation_type": "pt_flash",
+                "eos_type": "peng_robinson",
+                "pt_flash_config": {
+                    "pressure_pa": 1.0e5,
+                    "temperature_k": 290.0,
+                },
+            }
+        ),
+        write_artifacts=False,
+    )
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.pt_flash_result is not None
+    plus_fraction = result.config.composition.plus_fraction
+    assert plus_fraction is not None
+    assert plus_fraction.characterization_preset.value == "auto"
+    assert plus_fraction.resolved_characterization_preset.value == "co2_rich_gas"
+    assert plus_fraction.split_method == "pedersen"
+    assert plus_fraction.split_mw_model == "paraffin"
+    assert plus_fraction.max_carbon_number == 11
+    assert plus_fraction.lumping_enabled is True
+    assert plus_fraction.lumping_n_groups == 4
+    assert plus_fraction.lumping_method == "whitson"
 
 
 def test_run_calculation_executes_cce_with_auto_plus_fraction_characterization() -> None:
@@ -747,6 +1215,10 @@ def test_run_calculation_executes_cce_with_auto_plus_fraction_characterization()
     assert result.cce_result is not None
     assert result.error_message is None
     assert len(result.cce_result.steps) == 6
+    assert all(
+        step.liquid_viscosity_pa_s is not None or step.vapor_viscosity_pa_s is not None
+        for step in result.cce_result.steps
+    )
     _assert_resolved_plus_fraction(
         result.config,
         resolved_preset="volatile_oil",
@@ -779,6 +1251,8 @@ def test_run_calculation_executes_dl_with_auto_plus_fraction_characterization() 
     assert result.dl_result is not None
     assert result.error_message is None
     assert len(result.dl_result.steps) == 6
+    assert all(step.oil_viscosity_pa_s is not None for step in result.dl_result.steps)
+    assert any(step.gas_viscosity_pa_s is not None for step in result.dl_result.steps[1:])
     _assert_resolved_plus_fraction(
         result.config,
         resolved_preset="volatile_oil",
@@ -798,7 +1272,7 @@ def test_run_calculation_executes_cvd_with_auto_plus_fraction_characterization()
             "eos_type": "peng_robinson",
             "cvd_config": {
                 "temperature_k": 320.0,
-                "dew_pressure_pa": 3906.418983182879,
+                "dew_pressure_pa": 5598.741130684053,
                 "pressure_end_pa": 1500.0,
                 "n_steps": 5,
             },
@@ -811,6 +1285,10 @@ def test_run_calculation_executes_cvd_with_auto_plus_fraction_characterization()
     assert result.cvd_result is not None
     assert result.error_message is None
     assert len(result.cvd_result.steps) == 5
+    assert all(
+        step.liquid_viscosity_pa_s is not None or step.vapor_viscosity_pa_s is not None
+        for step in result.cvd_result.steps
+    )
     _assert_resolved_plus_fraction(
         result.config,
         resolved_preset="gas_condensate",
@@ -908,6 +1386,8 @@ def test_run_calculation_executes_pt_flash_for_pr78() -> None:
     assert result.status == RunStatus.COMPLETED
     assert result.pt_flash_result is not None
     assert result.error_message is None
+    assert result.pt_flash_result.reported_surface_status is None
+    assert result.pt_flash_result.reported_surface_reason is None
 
 
 def test_run_calculation_executes_pt_flash_for_srk() -> None:
@@ -918,6 +1398,73 @@ def test_run_calculation_executes_pt_flash_for_srk() -> None:
     assert result.status == RunStatus.COMPLETED
     assert result.pt_flash_result is not None
     assert result.error_message is None
+    assert result.pt_flash_result.reported_surface_status is None
+    assert result.pt_flash_result.reported_surface_reason is None
+
+
+def test_pt_flash_result_keeps_runtime_surface_until_reported_thermodynamics_are_complete() -> None:
+    result = PTFlashResult(
+        converged=True,
+        phase="two-phase",
+        vapor_fraction=0.35,
+        liquid_composition={"C1": 0.25, "LUMP1_C7_C9": 0.75},
+        vapor_composition={"C1": 0.92, "LUMP1_C7_C9": 0.08},
+        K_values={"C1": 3.68, "LUMP1_C7_C9": 0.11},
+        liquid_fugacity={"C1": 1.0, "LUMP1_C7_C9": 2.0},
+        vapor_fugacity={"C1": 1.1, "LUMP1_C7_C9": 2.1},
+        reported_component_basis="delumped_scn",
+        reported_liquid_composition={"C1": 0.25, "SCN7": 0.35, "SCN8": 0.40},
+        reported_vapor_composition={"C1": 0.92, "SCN7": 0.05, "SCN8": 0.03},
+        reported_k_values={"C1": 3.68, "SCN7": 0.16, "SCN8": 0.08},
+        diagnostics=SolverDiagnostics(
+            status=ConvergenceStatusEnum.CONVERGED,
+            iterations=4,
+            final_residual=1.0e-12,
+        ),
+    )
+
+    assert result.has_reported_thermodynamic_surface is False
+    assert result.display_liquid_composition == result.liquid_composition
+    assert result.display_vapor_composition == result.vapor_composition
+    assert result.display_k_values == result.K_values
+    assert result.display_liquid_fugacity == result.liquid_fugacity
+    assert result.display_vapor_fugacity == result.vapor_fugacity
+    assert "LUMP1_C7_C9" in result.display_liquid_composition
+    assert "SCN7" not in result.display_liquid_composition
+
+
+def test_pt_flash_result_prefers_full_reported_thermodynamic_surface_when_available() -> None:
+    result = PTFlashResult(
+        converged=True,
+        phase="two-phase",
+        vapor_fraction=0.35,
+        liquid_composition={"C1": 0.25, "LUMP1_C7_C9": 0.75},
+        vapor_composition={"C1": 0.92, "LUMP1_C7_C9": 0.08},
+        K_values={"C1": 3.68, "LUMP1_C7_C9": 0.11},
+        liquid_fugacity={"C1": 1.0, "LUMP1_C7_C9": 2.0},
+        vapor_fugacity={"C1": 1.1, "LUMP1_C7_C9": 2.1},
+        reported_surface_status="available",
+        reported_component_basis="reconstructed_scn",
+        reported_liquid_composition={"C1": 0.25, "SCN7": 0.35, "SCN8": 0.40},
+        reported_vapor_composition={"C1": 0.92, "SCN7": 0.05, "SCN8": 0.03},
+        reported_k_values={"C1": 3.68, "SCN7": 0.16, "SCN8": 0.08},
+        reported_liquid_fugacity={"C1": 1.0, "SCN7": 1.8, "SCN8": 1.9},
+        reported_vapor_fugacity={"C1": 1.1, "SCN7": 1.2, "SCN8": 1.3},
+        diagnostics=SolverDiagnostics(
+            status=ConvergenceStatusEnum.CONVERGED,
+            iterations=4,
+            final_residual=1.0e-12,
+        ),
+    )
+
+    assert result.has_reported_thermodynamic_surface is True
+    assert result.display_liquid_composition == result.reported_liquid_composition
+    assert result.display_vapor_composition == result.reported_vapor_composition
+    assert result.display_k_values == result.reported_k_values
+    assert result.display_liquid_fugacity == result.reported_liquid_fugacity
+    assert result.display_vapor_fugacity == result.reported_vapor_fugacity
+    assert "SCN7" in result.display_liquid_composition
+    assert "LUMP1_C7_C9" not in result.display_liquid_composition
 
 
 class _CancelAfterDispatchCallback(ProgressCallback):

@@ -60,6 +60,7 @@ Current workflow surface exposed in the GUI/runtime, verified from
 `src/pvtapp/capabilities.py`:
 
 - `PT Flash`
+- `Stability Analysis`
 - `Bubble Point`
 - `Dew Point`
 - `Phase Envelope`

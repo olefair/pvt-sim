@@ -14,7 +14,7 @@ The focus is the canonical desktop runtime path: what the GUI and
 
 ## Verification Basis
 
-This audit was verified from the current repo on 2026-04-12 using:
+This audit was verified from the current repo on 2026-04-15 using:
 
 - `src/pvtapp/capabilities.py`
 - `src/pvtapp/main.py`
@@ -45,6 +45,7 @@ The canonical desktop runtime currently wires these workflows through
 `src/pvtapp/capabilities.py`:
 
 - `PT Flash`
+- `Stability Analysis`
 - `Bubble Point`
 - `Dew Point`
 - `Phase Envelope`
@@ -99,7 +100,9 @@ fluid preparation.
 - The kernel reference path supports explicit DL pressure lists and returns the
   full assignment-style outputs.
 - The app-facing DL config only supports a linear bubble-to-end grid.
-- The app-facing DL result contract omits `Bg` and `RsDb`.
+- The app-facing DL result contract now preserves `Bg`, residual-oil density,
+  and step-level oil/gas diagnostics, but it still omits assignment-specific
+  `RsDb`.
 
 ### 5. The BIP pane is still display-only
 
@@ -115,6 +118,7 @@ fluid preparation.
 | Course Topic | Kernel Status | Desktop Runtime Status | Notes |
 |---|---|---|---|
 | Saturation / flash / phase behavior basics | Present | Wired | Bubble, dew, PT flash, and envelope are real desktop workflows |
+| Stability analysis (TPD / Michelsen) | Present | Wired | Standalone desktop/runtime workflow is exposed with branch diagnostics plus phase-regime, physical-state-hint, and interpretation provenance reporting |
 | CCE / DL / CVD / separator | Present | Wired, but partial | Core workflows run; assignment parity is incomplete |
 | Pedersen characterization | Present | Wired | Active plus-fraction runtime path uses Pedersen |
 | Katz characterization | Present | Wired | Admitted through the canonical characterization pipeline and runtime contract path |
@@ -126,8 +130,8 @@ fluid preparation.
 | Predictive `PPR78` BIPs | Present | Not wired | Exists in `characterization.bip` and `eos.ppr78`, not in the desktop runtime |
 | `SRK` EOS | Present | Wired | Admitted through the canonical runtime EOS factory and contract tests |
 | `PR78` EOS | Present | Wired | Separate runtime EOS class; distinct from predictive `PPR78` BIP handling |
-| Viscosity (`LBC`) | Present | Not wired | Present in `pvtcore.properties` only |
-| IFT (`parachor`) | Present | Not wired | Present in `pvtcore.properties` only |
+| Viscosity (`LBC`) | Present | Partially wired | Surfaced on the canonical PT-flash, CCE, DL, and CVD runtime paths; separator and standalone viscosity workflows are not yet exposed |
+| IFT (`parachor`) | Present | Partially wired | Surfaced on the canonical PT-flash runtime path; not yet propagated through experiment result surfaces |
 | Confinement | Present | Not wired | Present in `pvtcore.confinement` only |
 | Ternary / iso-line tools | Present | Not wired | Present in `pvtcore.envelope` only |
 | Tuning / regression | Present | Not wired | Present in `pvtcore.tuning` only |
@@ -145,6 +149,7 @@ The repo currently has three different classes of feature state:
 These are genuinely reachable from the desktop GUI and `job_runner`:
 
 - flash / saturation / envelope core workflows
+- standalone stability analysis
 - CCE / DL / CVD / separator
 - inline pseudo-component fluid entry
 - Pedersen-based plus characterization on the active path
@@ -157,7 +162,8 @@ These are the main orphan-risk surfaces:
 - Whitson lumping
 - delumping
 - predictive `PPR78`
-- viscosity / IFT
+- non-PT-flash IFT surfaces
+- separator / standalone viscosity surfaces
 - confinement
 - ternary / iso-lines
 - tuning / regression

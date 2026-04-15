@@ -36,8 +36,10 @@ from pvtapp.schemas import (
     PhaseEnvelopeTracingMethod,
     PressureUnit,
     TemperatureUnit,
+    StabilityFeedPhase,
     RunConfig,
     PTFlashConfig,
+    StabilityAnalysisConfig,
     PhaseEnvelopeConfig,
     TBPConfig,
     CCEConfig,
@@ -186,6 +188,10 @@ class ConditionsInputWidget(QWidget):
         # PT Flash config
         self.pt_flash_widget = self._create_pt_flash_widget()
         self.config_stack.addWidget(self.pt_flash_widget)
+
+        # Stability-analysis config
+        self.stability_widget = self._create_stability_analysis_widget()
+        self.config_stack.addWidget(self.stability_widget)
 
         # Phase Envelope config
         self.phase_env_widget = self._create_phase_envelope_widget()
@@ -406,6 +412,63 @@ class ConditionsInputWidget(QWidget):
             PhaseEnvelopeTracingMethod.FIXED_GRID,
         )
         layout.addRow("Tracer:", self.env_tracing_method)
+
+        return widget
+
+    def _create_stability_analysis_widget(self) -> QWidget:
+        """Create standalone Michelsen / TPD stability-analysis widget."""
+        widget = QGroupBox("Stability Analysis Settings")
+        layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
+
+        pressure_layout = QHBoxLayout()
+        self.stability_pressure_edit = ValidatedLineEdit()
+        self.stability_pressure_edit.setPlaceholderText("Enter pressure")
+        self.stability_pressure_unit = NoWheelComboBox()
+        self._populate_pressure_units(self.stability_pressure_unit, PressureUnit.BAR)
+        self._configure_unit_row(
+            pressure_layout,
+            self.stability_pressure_edit,
+            self.stability_pressure_unit,
+        )
+        layout.addRow("Pressure:", pressure_layout)
+
+        temperature_layout = QHBoxLayout()
+        self.stability_temperature_edit = ValidatedLineEdit()
+        self.stability_temperature_edit.setPlaceholderText("Enter temperature")
+        self.stability_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(self.stability_temperature_unit, TemperatureUnit.C)
+        self._configure_unit_row(
+            temperature_layout,
+            self.stability_temperature_edit,
+            self.stability_temperature_unit,
+        )
+        layout.addRow("Temperature:", temperature_layout)
+
+        self.stability_feed_phase_combo = NoWheelComboBox()
+        self.stability_feed_phase_combo.addItem("Auto", StabilityFeedPhase.AUTO)
+        self.stability_feed_phase_combo.addItem("Liquid", StabilityFeedPhase.LIQUID)
+        self.stability_feed_phase_combo.addItem("Vapor", StabilityFeedPhase.VAPOR)
+        layout.addRow("Feed Phase:", self.stability_feed_phase_combo)
+
+        self.stability_use_gdem = QCheckBox("Enable GDEM acceleration")
+        self.stability_use_gdem.setChecked(True)
+        layout.addRow("Acceleration:", self.stability_use_gdem)
+
+        self.stability_random_trials = NoWheelSpinBox()
+        self.stability_random_trials.setRange(0, 12)
+        self.stability_random_trials.setValue(0)
+        layout.addRow("Random Trials:", self.stability_random_trials)
+
+        self.stability_random_seed = NoWheelSpinBox()
+        self.stability_random_seed.setRange(0, 2_147_483_647)
+        self.stability_random_seed.setValue(0)
+        layout.addRow("Random Seed:", self.stability_random_seed)
+
+        self.stability_max_eos_failures = NoWheelSpinBox()
+        self.stability_max_eos_failures.setRange(0, 50)
+        self.stability_max_eos_failures.setValue(5)
+        layout.addRow("Max EOS Failures:", self.stability_max_eos_failures)
 
         return widget
 
@@ -816,6 +879,8 @@ class ConditionsInputWidget(QWidget):
         self.calc_type_combo.currentIndexChanged.connect(self._on_calc_type_changed)
         self.pressure_edit.textChanged.connect(self._validate_pressure)
         self.temperature_edit.textChanged.connect(self._validate_temperature)
+        self.stability_pressure_edit.textChanged.connect(self._validate_stability_pressure)
+        self.stability_temperature_edit.textChanged.connect(self._validate_stability_temperature)
         self.tbp_cut_start_spin.valueChanged.connect(self._emit_conditions_changed)
         self.tbp_cut_table.itemChanged.connect(self._emit_conditions_changed)
         self.add_tbp_cut_btn.clicked.connect(self._add_tbp_cut_row)
@@ -843,6 +908,13 @@ class ConditionsInputWidget(QWidget):
         self.dl_pressure_unit.currentIndexChanged.connect(self._on_dl_pressure_unit_changed)
         self.bubble_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
         self.dew_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
+        self.stability_pressure_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.stability_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.stability_feed_phase_combo.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.stability_use_gdem.toggled.connect(self._emit_conditions_changed)
+        self.stability_random_trials.valueChanged.connect(self._emit_conditions_changed)
+        self.stability_random_seed.valueChanged.connect(self._emit_conditions_changed)
+        self.stability_max_eos_failures.valueChanged.connect(self._emit_conditions_changed)
 
     def _emit_conditions_changed(self, *_args) -> None:
         """Re-emit input changes from Qt signals that may carry extra arguments."""
@@ -854,6 +926,8 @@ class ConditionsInputWidget(QWidget):
 
         if calc_type == CalculationType.PT_FLASH:
             self.config_stack.setCurrentWidget(self.pt_flash_widget)
+        elif calc_type == CalculationType.STABILITY_ANALYSIS:
+            self.config_stack.setCurrentWidget(self.stability_widget)
         elif calc_type == CalculationType.BUBBLE_POINT:
             self.config_stack.setCurrentWidget(self.bubble_widget)
         elif calc_type == CalculationType.DEW_POINT:
@@ -914,6 +988,40 @@ class ConditionsInputWidget(QWidget):
             return True
         except (ValueError, TypeError):
             self.temperature_edit.set_valid(False)
+            return False
+
+    def _validate_stability_pressure(self) -> bool:
+        """Validate standalone stability-analysis pressure input."""
+        try:
+            value = float(self.stability_pressure_edit.text())
+            unit = self._coerce_combo_enum(self.stability_pressure_unit.currentData(), PressureUnit)
+            pa = pressure_to_pa(value, unit)
+
+            if pa < PRESSURE_MIN_PA or pa > PRESSURE_MAX_PA:
+                self.stability_pressure_edit.set_valid(False)
+                return False
+
+            self.stability_pressure_edit.set_valid(True)
+            return True
+        except (ValueError, TypeError):
+            self.stability_pressure_edit.set_valid(False)
+            return False
+
+    def _validate_stability_temperature(self) -> bool:
+        """Validate standalone stability-analysis temperature input."""
+        try:
+            value = float(self.stability_temperature_edit.text())
+            unit = self._coerce_combo_enum(self.stability_temperature_unit.currentData(), TemperatureUnit)
+            k = temperature_to_k(value, unit)
+
+            if k < TEMPERATURE_MIN_K or k > TEMPERATURE_MAX_K:
+                self.stability_temperature_edit.set_valid(False)
+                return False
+
+            self.stability_temperature_edit.set_valid(True)
+            return True
+        except (ValueError, TypeError):
+            self.stability_temperature_edit.set_valid(False)
             return False
 
     @staticmethod
@@ -1219,6 +1327,32 @@ class ConditionsInputWidget(QWidget):
         self.pressure_edit.setText(f"{pressure_value:.6g}")
         self.temperature_edit.setText(f"{temperature_value:.6g}")
 
+    def set_stability_analysis_config(self, config: StabilityAnalysisConfig) -> None:
+        """Load standalone stability-analysis config into widget controls."""
+        pressure_unit = config.pressure_unit
+        temperature_unit = config.temperature_unit
+
+        p_index = self.stability_pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.stability_pressure_unit.setCurrentIndex(p_index)
+        t_index = self.stability_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.stability_temperature_unit.setCurrentIndex(t_index)
+        phase_index = self.stability_feed_phase_combo.findData(config.feed_phase)
+        if phase_index >= 0:
+            self.stability_feed_phase_combo.setCurrentIndex(phase_index)
+
+        self.stability_pressure_edit.setText(
+            f"{pressure_from_pa(config.pressure_pa, pressure_unit):.6g}"
+        )
+        self.stability_temperature_edit.setText(
+            f"{temperature_from_k(config.temperature_k, temperature_unit):.6g}"
+        )
+        self.stability_use_gdem.setChecked(config.use_gdem)
+        self.stability_random_trials.setValue(config.n_random_trials)
+        self.stability_random_seed.setValue(0 if config.random_seed is None else int(config.random_seed))
+        self.stability_max_eos_failures.setValue(config.max_eos_failures_per_trial)
+
     def set_phase_envelope_config(self, config: PhaseEnvelopeConfig) -> None:
         """Load phase-envelope config into widget controls."""
         self.env_t_min.setValue(config.temperature_min_k - 273.15)
@@ -1397,6 +1531,10 @@ class ConditionsInputWidget(QWidget):
             if config.pt_flash_config is None:
                 raise ValueError("RunConfig missing pt_flash_config")
             self.set_pt_flash_config(config.pt_flash_config)
+        elif config.calculation_type == CalculationType.STABILITY_ANALYSIS:
+            if config.stability_analysis_config is None:
+                raise ValueError("RunConfig missing stability_analysis_config")
+            self.set_stability_analysis_config(config.stability_analysis_config)
         elif config.calculation_type == CalculationType.BUBBLE_POINT:
             if config.bubble_point_config is None:
                 raise ValueError("RunConfig missing bubble_point_config")
@@ -1492,6 +1630,40 @@ class ConditionsInputWidget(QWidget):
                     self.env_tracing_method.currentData(),
                     PhaseEnvelopeTracingMethod,
                 ),
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
+    def get_stability_analysis_config(self) -> Optional[StabilityAnalysisConfig]:
+        """Get standalone stability-analysis configuration if valid."""
+        if not self._validate_stability_pressure() or not self._validate_stability_temperature():
+            return None
+
+        try:
+            pressure_value = float(self.stability_pressure_edit.text())
+            temperature_value = float(self.stability_temperature_edit.text())
+            pressure_unit = self._coerce_combo_enum(
+                self.stability_pressure_unit.currentData(),
+                PressureUnit,
+            )
+            temperature_unit = self._coerce_combo_enum(
+                self.stability_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
+            return StabilityAnalysisConfig(
+                pressure_pa=pressure_to_pa(pressure_value, pressure_unit),
+                temperature_k=temperature_to_k(temperature_value, temperature_unit),
+                feed_phase=self._coerce_combo_enum(
+                    self.stability_feed_phase_combo.currentData(),
+                    StabilityFeedPhase,
+                ),
+                use_gdem=self.stability_use_gdem.isChecked(),
+                n_random_trials=self.stability_random_trials.value(),
+                random_seed=self.stability_random_seed.value(),
+                max_eos_failures_per_trial=self.stability_max_eos_failures.value(),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
             )
         except Exception as e:
             self.validation_error.emit(str(e))
@@ -1788,6 +1960,10 @@ class ConditionsInputWidget(QWidget):
             config = self.get_pt_flash_config()
             if config is None:
                 return False, "Invalid PT flash conditions"
+        elif calc_type == CalculationType.STABILITY_ANALYSIS:
+            config = self.get_stability_analysis_config()
+            if config is None:
+                return False, "Invalid stability-analysis conditions"
         elif calc_type == CalculationType.BUBBLE_POINT:
             config = self.get_bubble_point_config()
             if config is None:

@@ -81,6 +81,39 @@ def test_tpd_single_trial_matches_analyze_trial() -> None:
     assert np.isfinite(single.tpd)
     assert single.tpd == pytest.approx(full.vapor_like.tpd, abs=1e-12)
     np.testing.assert_allclose(single.w, full.vapor_like.w, rtol=0.0, atol=1e-12)
+    assert single.best_seed_index == full.vapor_like.best_seed_index
+    assert single.seed_attempts == full.vapor_like.seed_attempts
+    assert single.total_iterations == full.vapor_like.total_iterations
+
+
+def test_trial_result_exposes_seed_history_and_aggregate_diagnostics() -> None:
+    comps = load_components()
+    eos = PengRobinsonEOS([comps["C1"], comps["C10"]])
+
+    z = np.array([0.5, 0.5], dtype=float)
+    P = 3.0e6
+    T = 300.0
+
+    res = stability_analyze(z, P, T, eos, feed_phase="liquid")
+
+    assert res.vapor_like is not None
+    trial = res.vapor_like
+
+    assert trial.seed_attempts == len(trial.seed_results) >= 1
+    assert trial.candidate_seed_count == len(trial.candidate_seed_labels) >= 2
+    assert trial.seed_attempts <= trial.candidate_seed_count
+    assert trial.best_seed_index >= 0
+    assert trial.best_seed.seed_index == trial.best_seed_index
+    assert trial.best_seed.seed_label in {"wilson", "extreme_lightest"}
+    assert trial.candidate_seed_labels[:2] == ("wilson", "extreme_lightest")
+    assert trial.n_phi_calls == sum(seed.n_phi_calls for seed in trial.seed_results)
+    assert trial.n_eos_failures == sum(seed.n_eos_failures for seed in trial.seed_results)
+    assert trial.total_iterations == sum(seed.iterations for seed in trial.seed_results)
+    assert all(seed.kind == trial.kind for seed in trial.seed_results)
+    assert all(seed.trial_phase == trial.trial_phase for seed in trial.seed_results)
+    assert trial.best_seed.tpd == pytest.approx(trial.tpd, abs=1e-12)
+    np.testing.assert_allclose(trial.best_seed.w, trial.w, rtol=0.0, atol=1e-12)
+    assert trial.unattempted_seed_labels == trial.candidate_seed_labels[trial.seed_attempts :]
 
 
 def test_input_validation_rejects_bad_composition_sum() -> None:

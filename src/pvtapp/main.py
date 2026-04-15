@@ -710,6 +710,12 @@ class PVTSimulatorWindow(QMainWindow):
                 return None
             config_kwargs["pt_flash_config"] = pt_config
 
+        elif calc_type == CalculationType.STABILITY_ANALYSIS:
+            stability_config = self.conditions_widget.get_stability_analysis_config()
+            if stability_config is None:
+                return None
+            config_kwargs["stability_analysis_config"] = stability_config
+
         elif calc_type == CalculationType.BUBBLE_POINT:
             bubble_config = self.conditions_widget.get_bubble_point_config()
             if bubble_config is None:
@@ -997,6 +1003,85 @@ class PVTSimulatorWindow(QMainWindow):
                             res.vapor_composition.get(comp, 0),
                             res.K_values.get(comp, 0),
                         ])
+                elif result.stability_analysis_result:
+                    res = result.stability_analysis_result
+                    writer.writerow(["Metric", "Value"])
+                    writer.writerow(["Stable", res.stable])
+                    writer.writerow(["MinimumTPD", res.tpd_min])
+                    writer.writerow(["PhaseRegime", res.phase_regime])
+                    writer.writerow(["PhysicalStateHint", res.physical_state_hint])
+                    writer.writerow(["PhysicalStateHintBasis", res.physical_state_hint_basis])
+                    writer.writerow(["PhysicalStateHintConfidence", res.physical_state_hint_confidence])
+                    writer.writerow(["RequestedFeedPhase", res.requested_feed_phase.value])
+                    writer.writerow(["ResolvedFeedPhase", res.resolved_feed_phase])
+                    writer.writerow(["ReferenceRootUsed", res.reference_root_used])
+                    writer.writerow(["LiquidRootZ", res.liquid_root_z])
+                    writer.writerow(["VaporRootZ", res.vapor_root_z])
+                    writer.writerow(["RootGap", res.root_gap])
+                    writer.writerow(["GibbsGap", res.gibbs_gap])
+                    writer.writerow(["AverageReducedPressure", res.average_reduced_pressure])
+                    writer.writerow(["BubblePressureHintPa", res.bubble_pressure_hint_pa])
+                    writer.writerow(["DewPressureHintPa", res.dew_pressure_hint_pa])
+                    writer.writerow(["BubbleBoundaryReason", res.bubble_boundary_reason])
+                    writer.writerow(["DewBoundaryReason", res.dew_boundary_reason])
+                    writer.writerow(["BestUnstableTrial", res.best_unstable_trial_kind])
+                    writer.writerow([])
+
+                    components = sorted(
+                        set(res.feed_composition)
+                        | (
+                            set()
+                            if res.vapor_like_trial is None
+                            else set(res.vapor_like_trial.composition)
+                        )
+                        | (
+                            set()
+                            if res.liquid_like_trial is None
+                            else set(res.liquid_like_trial.composition)
+                        )
+                    )
+                    writer.writerow(["Component", "Feed_z", "VaporLike", "LiquidLike"])
+                    for comp in components:
+                        writer.writerow([
+                            comp,
+                            res.feed_composition.get(comp, 0.0),
+                            None if res.vapor_like_trial is None else res.vapor_like_trial.composition.get(comp, 0.0),
+                            None if res.liquid_like_trial is None else res.liquid_like_trial.composition.get(comp, 0.0),
+                        ])
+
+                    writer.writerow([])
+                    writer.writerow(
+                        [
+                            "Trial",
+                            "TPD",
+                            "Converged",
+                            "EarlyExitUnstable",
+                            "Iterations",
+                            "TotalIterations",
+                            "PhiCalls",
+                            "EOSFailures",
+                            "BestSeed",
+                        ]
+                    )
+                    for trial_name, trial in (
+                        ("vapor_like", res.vapor_like_trial),
+                        ("liquid_like", res.liquid_like_trial),
+                    ):
+                        if trial is None:
+                            continue
+                        writer.writerow(
+                            [
+                                trial_name,
+                                trial.tpd,
+                                trial.converged,
+                                trial.early_exit_unstable,
+                                trial.iterations,
+                                trial.total_iterations,
+                                trial.n_phi_calls,
+                                trial.n_eos_failures,
+                                trial.best_seed.seed_label,
+                            ]
+                        )
                 elif result.bubble_point_result:
                     res = result.bubble_point_result
                     writer.writerow(["Component", "Liquid", "Vapor", "K-value"])

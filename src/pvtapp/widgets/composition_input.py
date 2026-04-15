@@ -933,6 +933,11 @@ class CompositionInputWidget(QWidget):
                 f"split to C{settings.max_carbon_number}, "
                 f"lumping {'on' if settings.lumping_enabled else 'off'}"
                 + (f" ({settings.lumping_n_groups} groups)" if settings.lumping_enabled else "")
+                + (
+                    f", lumping method {settings.lumping_method}"
+                    if settings.lumping_enabled
+                    else ""
+                )
             )
         if error is not None:
             return None, error

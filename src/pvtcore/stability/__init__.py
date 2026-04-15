@@ -11,6 +11,7 @@ from .michelsen import (
 )
 from .analysis import (
     StabilityOptions,
+    StabilitySeedResult,
     StabilityTrialResult,
     StabilityAnalysisResult,
     stability_analyze,
@@ -27,6 +28,7 @@ __all__ = [
     'STABILITY_TOLERANCE',
     'TPD_TOLERANCE',
     'StabilityOptions',
+    'StabilitySeedResult',
     'StabilityTrialResult',
     'StabilityAnalysisResult',
     'stability_analyze',

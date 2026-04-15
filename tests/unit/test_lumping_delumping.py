@@ -53,3 +53,18 @@ def test_lumping_rejects_too_many_groups() -> None:
 
     with pytest.raises(CharacterizationError):
         characterize_fluid(resolved, plus_fraction=plus, config=cfg)
+
+
+def test_lumping_accepts_legacy_contiguous_method() -> None:
+    resolved = [("C1", 0.50), ("C2", 0.25)]
+    plus = PlusFractionSpec(z_plus=0.25, mw_plus=215.0, n_start=7)
+    cfg = CharacterizationConfig(
+        lumping_enabled=True,
+        lumping_n_groups=4,
+        lumping_method="contiguous",
+    )
+
+    result = characterize_fluid(resolved, plus_fraction=plus, config=cfg)
+
+    assert result.lumping is not None
+    assert len(result.lumping.lump_component_ids) == 4
