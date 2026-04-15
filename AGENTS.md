@@ -247,6 +247,46 @@ Do not leave domain-level simulator features stranded in side-library paths
 while the desktop runtime executes a narrower or materially different method
 without explicit documentation and user-facing disclosure.
 
+## Cursor Cloud specific instructions
+
+### Environment
+
+- Python 3.12, venv at `.venv`.
+- Install surface for development: `pip install -e '.[gui,dev]'`.
+- PySide6 (Qt) requires system libraries for xcb: `libegl1 libgl1 libopengl0
+  libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-xinerama0
+  libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
+  libxcb-render-util0 libxcb-shape0 libxcb-xfixes0`. These are pre-installed
+  in the snapshot.
+- GUI and GUI-dependent tests require a display. Use `xvfb-run -a` or start
+  `Xvfb :99` and export `DISPLAY=:99`.
+
+### Running tests
+
+- `pytest` runs the default ~1100-test suite (unit + contracts + validation).
+  Expect ~13 min wall time — phase envelope tests dominate (~500 s total due
+  to repeated `calculate_phase_envelope` calls without fixture caching in
+  `tests/unit/test_envelope.py`).
+- For fast iteration, target specific test files or directories:
+  `pytest tests/unit/test_flash.py` (< 1 s).
+- GUI contract tests are opt-in: `pytest --run-gui-contracts`.
+- 9 pre-existing test failures on `main` as of 2026-04-15 (dew
+  characterization, thermopack envelope, stability robustness, flash fixture
+  invariants, MI PVT bubble point). These are known; do not block on them.
+
+### Running the application
+
+- CLI: `pvtsim run examples/pt_flash_config.json` or `pvtsim validate <config>`.
+  See `README.md` for entry points.
+- GUI: `DISPLAY=:99 pvtsim-gui` (after starting Xvfb).
+
+### Linting
+
+- `black --check src/ tests/` — formatting (many files currently unformatted).
+- `flake8 src/ --max-line-length=120` — style.
+- `mypy` and `pylint` are installed but not routinely run clean on the full
+  codebase.
+
 ## Bottom line
 
 Read `AGENTS.md` for execution boundaries.
