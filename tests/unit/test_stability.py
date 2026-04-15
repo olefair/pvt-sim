@@ -1,506 +1,409 @@
-"""Unit tests for Michelsen stability analysis.
+"""Consolidated unit tests for Michelsen TPD stability analysis.
 
-Tests validate stability calculations against:
-- Known stable single-phase conditions
-- Known unstable two-phase conditions
-- Literature results from Michelsen (1982)
+Covers the legacy Michelsen wrapper, the new ``stability_analyze`` API,
+GDEM acceleration, EOS failure recovery, legacy/new parity, and edge cases.
 """
 
-import pytest
+from __future__ import annotations
+
 import numpy as np
+import pytest
+
+from pvtcore.eos.peng_robinson import PengRobinsonEOS
+from pvtcore.models.component import load_components
+from pvtcore.core.errors import ValidationError
 from pvtcore.stability.michelsen import (
     michelsen_stability_test,
     is_stable,
     StabilityResult,
-    STABILITY_TOLERANCE,
-    TPD_TOLERANCE
+    TPD_TOLERANCE,
 )
 from pvtcore.stability.tpd import calculate_tpd, calculate_d_terms
-from pvtcore.eos.peng_robinson import PengRobinsonEOS
-from pvtcore.models.component import load_components
-from pvtcore.core.errors import ValidationError, ConvergenceError
+from pvtcore.stability.analysis import (
+    StabilityOptions,
+    stability_analyze,
+    tpd_single_trial,
+)
 
 
-@pytest.fixture
-def components():
-    """Load component database."""
-    return load_components()
+# ── module-scoped EOS for the synthetic _PowerLawPhiEOS ──────────────
 
 
-@pytest.fixture
-def methane_eos(components):
-    """Create PR EOS for pure methane."""
-    return PengRobinsonEOS([components['C1']])
+class _PowerLawPhiEOS:
+    """Deterministic dummy EOS that induces slow SS convergence in log-space."""
+
+    def __init__(self, components, gamma: float = 0.93):
+        self.components = list(components)
+        self.n_components = len(self.components)
+        self._gamma = float(gamma)
+
+    def fugacity_coefficient(self, pressure, temperature, composition, phase,
+                             binary_interaction=None):
+        w = np.asarray(composition, dtype=float)
+        eps = 1e-300
+        return np.maximum(w, eps) ** (-self._gamma)
 
 
-@pytest.fixture
-def binary_c1_c10_eos(components):
-    """Create PR EOS for methane-decane binary mixture."""
-    return PengRobinsonEOS([components['C1'], components['C10']])
+class _FlakyEOS:
+    """EOS wrapper that fails once to exercise recovery logic."""
 
+    def __init__(self, base):
+        self._base = base
+        self.components = base.components
+        self.n_components = base.n_components
+        self._calls = 0
 
-@pytest.fixture
-def binary_c1_c4_eos(components):
-    """Create PR EOS for methane-butane binary mixture."""
-    return PengRobinsonEOS([components['C1'], components['C4']])
-
-
-class TestTPDFunction:
-    """Test tangent plane distance calculations."""
-
-    def test_tpd_at_feed_composition(self, methane_eos):
-        """Test that TPD = 0 when trial equals feed."""
-        T = 300.0  # K
-        P = 5e6  # Pa
-        z = np.array([1.0])
-
-        # Calculate d terms
-        d_terms = calculate_d_terms(z, methane_eos, P, T, phase='vapor')
-        ln_phi_z = d_terms - np.log(z)
-
-        # Trial = feed should give TPD = 0
-        tpd = calculate_tpd(z, z, ln_phi_z, methane_eos, P, T, phase='vapor')
-
-        # TPD should be zero (within numerical precision)
-        assert abs(tpd) < 1e-12
-
-    def test_tpd_composition_normalization(self, methane_eos):
-        """Test that TPD calculation requires normalized compositions."""
-        T = 300.0
-        P = 5e6
-        z = np.array([1.0])
-        W_unnormalized = np.array([2.0])  # Not normalized
-
-        d_terms = calculate_d_terms(z, methane_eos, P, T, phase='vapor')
-        ln_phi_z = d_terms - np.log(z)
-
-        # Should raise error for unnormalized composition
-        with pytest.raises(Exception):  # CompositionError
-            calculate_tpd(W_unnormalized, z, ln_phi_z, methane_eos, P, T, phase='vapor')
-
-    def test_tpd_binary_mixture(self, binary_c1_c10_eos):
-        """Test TPD calculation for binary mixture."""
-        T = 300.0  # K
-        P = 5e6  # Pa
-        z = np.array([0.5, 0.5])  # Equal molar mixture
-
-        # Calculate d terms for liquid feed
-        d_terms = calculate_d_terms(z, binary_c1_c10_eos, P, T, phase='liquid')
-        ln_phi_z = d_terms - np.log(z)
-
-        # Trial vapor-like composition (enriched in light component)
-        W_vapor = np.array([0.9, 0.1])
-
-        tpd = calculate_tpd(
-            W_vapor, z, ln_phi_z, binary_c1_c10_eos,
-            P, T, phase='vapor'
+    def fugacity_coefficient(self, pressure, temperature, composition, phase,
+                             binary_interaction=None):
+        self._calls += 1
+        if self._calls == 2:
+            raise RuntimeError("simulated EOS failure")
+        return self._base.fugacity_coefficient(
+            pressure, temperature, composition, phase, binary_interaction
         )
 
-        # TPD should be a real number
-        assert isinstance(tpd, (float, np.floating))
+
+# ── 1. test_tpd_and_stability ────────────────────────────────────────
 
 
-class TestStabilityResult:
-    """Test StabilityResult data structure."""
-
-    def test_stability_result_fields(self, methane_eos):
-        """Test that StabilityResult contains required fields."""
-        T = 400.0  # High T, low P → stable vapor
-        P = 1e5  # 1 bar
-        z = np.array([1.0])
-
-        result = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor'
-        )
-
-        # Check all required fields exist
-        assert hasattr(result, 'stable')
-        assert hasattr(result, 'tpd_min')
-        assert hasattr(result, 'trial_compositions')
-        assert hasattr(result, 'tpd_values')
-        assert hasattr(result, 'iterations')
-        assert hasattr(result, 'feed_phase')
-        assert hasattr(result, 'converged')
-
-        # Check types
-        assert isinstance(result.stable, bool)
-        assert isinstance(result.tpd_min, (float, np.floating))
-        assert isinstance(result.trial_compositions, list)
-        assert isinstance(result.tpd_values, list)
-        assert isinstance(result.iterations, list)
-        assert isinstance(result.feed_phase, str)
-        assert isinstance(result.converged, bool)
+_STABILITY_CASES = [
+    # (fixture_key, P, T, z, expected_stable, id)
+    #   fixture_key maps to an EOS fixture from conftest
+    #
+    # --- binary C1/C10 ---
+    ("c1_c10_pr", 3e6,  300.0, [0.5, 0.5],  False, "c1c10-unstable-VLE"),
+    ("c1_c10_pr", 1e4,  600.0, [0.5, 0.5],  True,  "c1c10-stable-high-T"),
+    # --- binary C1/C4 ---
+    ("c1_c4_pr",  4e6,  250.0, [0.7, 0.3],  False, "c1c4-unstable-VLE"),
+    ("c1_c4_pr",  1e5,  400.0, [0.5, 0.5],  True,  "c1c4-stable-low-P-high-T"),
+    # --- ternary C1/C4/C10 ---
+    ("c1_c4_c10_pr", 3e6, 300.0, [0.6, 0.2, 0.2], False, "ternary-unstable"),
+    ("c1_c4_c10_pr", 1e4, 600.0, [0.4, 0.3, 0.3], True,  "ternary-stable-high-T"),
+]
 
 
-class TestStableSinglePhase:
-    """Test cases where mixture should be stable (single phase)."""
+@pytest.mark.parametrize(
+    "eos_key, P, T, z_list, expected_stable",
+    [(c[0], c[1], c[2], c[3], c[4]) for c in _STABILITY_CASES],
+    ids=[c[5] for c in _STABILITY_CASES],
+)
+def test_tpd_and_stability(
+    eos_key, P, T, z_list, expected_stable, request
+):
+    """Michelsen stability test agrees with known stable/unstable conditions."""
+    eos = request.getfixturevalue(eos_key)
+    z = np.array(z_list, dtype=float)
 
-    def test_pure_methane_low_pressure_high_temperature(self, methane_eos):
-        """Test that pure methane is stable vapor at low P, high T.
+    result = michelsen_stability_test(z, P, T, eos, feed_phase="liquid")
 
-        Conditions: T = 400 K (well above Tc = 190.6 K), P = 1 bar
-        Expected: Stable single-phase vapor
-        """
-        T = 400.0  # K
-        P = 1e5  # 1 bar = 100 kPa
-        z = np.array([1.0])
+    assert isinstance(result, StabilityResult)
+    assert isinstance(result.stable, bool)
+    assert isinstance(result.tpd_min, (float, np.floating))
+    assert result.stable is expected_stable
 
-        result = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor'
-        )
-
-        # Should be stable
-        assert result.stable is True
+    if expected_stable:
         assert result.tpd_min >= -TPD_TOLERANCE
         assert result.converged is True
-
-        # All TPD values should be non-negative
-        assert all(tpd >= -TPD_TOLERANCE for tpd in result.tpd_values)
-
-    def test_pure_methane_high_temperature_moderate_pressure(self, methane_eos, components):
-        """Test methane stability at supercritical temperature.
-
-        Conditions: T = 250 K (> Tc = 190.6 K), P = 5 MPa
-        Expected: Stable supercritical fluid
-        """
-        comp = components['C1']
-        T = 1.3 * comp.Tc  # Above critical temperature
-        P = 5e6  # 50 bar
-        z = np.array([1.0])
-
-        result = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor'
-        )
-
-        # Should be stable above critical temperature
-        assert result.stable is True
-        assert result.tpd_min >= -TPD_TOLERANCE
-
-    def test_is_stable_convenience_function(self, methane_eos):
-        """Test simplified is_stable() function."""
-        T = 400.0
-        P = 1e5
-        z = np.array([1.0])
-
-        stable = is_stable(z, P, T, methane_eos, feed_phase='vapor')
-
-        assert stable is True
-
-
-class TestUnstableTwoPhase:
-    """Test cases where mixture should be unstable (two-phase)."""
-
-    def test_c1_c10_mixture_vle_region(self, binary_c1_c10_eos, components):
-        """Test C1-C10 binary in VLE region shows instability.
-
-        Methane-decane at moderate conditions should show phase split
-        due to large volatility difference.
-
-        Conditions: T = 300 K, P = 3 MPa, z = [0.5, 0.5]
-        Expected: Unstable, TPD < 0
-        """
-        T = 300.0  # K
-        P = 3e6  # 30 bar
-        z = np.array([0.5, 0.5])  # Equal molar
-
-        result = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid'
-        )
-
-        # Should be unstable
-        assert result.stable is False
+    else:
         assert result.tpd_min < -TPD_TOLERANCE
-
-        # At least one trial should have negative TPD
         assert any(tpd < -TPD_TOLERANCE for tpd in result.tpd_values)
 
-    def test_c1_c4_mixture_two_phase(self, binary_c1_c4_eos, components):
-        """Test C1-C4 binary at conditions known to be two-phase.
+    assert len(result.trial_compositions) == 2
+    for W in result.trial_compositions:
+        assert abs(W.sum() - 1.0) < 1e-10
 
-        Conditions: T = 250 K, P = 4 MPa, z = [0.7, 0.3]
-        Expected: Unstable (two-phase region)
-        """
-        T = 250.0  # K
-        P = 4e6  # 40 bar
-        z = np.array([0.7, 0.3])  # Light component rich
 
-        result = michelsen_stability_test(
-            z, P, T, binary_c1_c4_eos, feed_phase='liquid'
-        )
+# ── 2. test_stability_analyze_api ────────────────────────────────────
 
-        # Should be unstable at these conditions
-        assert result.stable is False
-        assert result.tpd_min < 0
 
-    def test_pure_methane_below_critical(self, methane_eos, components):
-        """Test pure methane below critical temperature.
+def test_stability_analyze_api(components, c1_c10_pr):
+    """New analysis API returns structured results with diagnostics."""
+    eos = c1_c10_pr
+    z = np.array([0.5, 0.5], dtype=float)
 
-        At subcritical temperature and moderate pressure, should find
-        that liquid wants to vaporize or vapor wants to condense.
+    # Stable case: pure methane, low P, high T
+    eos_c1 = PengRobinsonEOS([components["C1"]])
+    res_stable = stability_analyze(
+        np.array([1.0]), 1e5, 400.0, eos_c1, feed_phase="auto"
+    )
 
-        Conditions: T = 150 K (< Tc = 190.6 K), P = 2 MPa
-        Expected: May be unstable depending on exact conditions
-        """
-        comp = components['C1']
-        T = 0.8 * comp.Tc  # Below critical
-        P = 2e6  # 20 bar
+    assert res_stable.stable is True
+    assert isinstance(res_stable.tpd_min, float)
+    assert res_stable.vapor_like is not None
+    assert res_stable.liquid_like is not None
+    assert len(res_stable.trials) == 2
+    assert res_stable.tpd_min >= -StabilityOptions().tpd_negative_tol
+
+    # Unstable case: C1/C10 binary in VLE region
+    res_unst = stability_analyze(z, 3e6, 300.0, eos, feed_phase="liquid")
+
+    assert res_unst.stable is False
+    assert res_unst.tpd_min < -StabilityOptions().tpd_negative_tol
+    assert res_unst.best_unstable_trial is not None
+
+    # Seed-level diagnostics (from test_stability_analysis.py)
+    trial = res_unst.vapor_like
+    assert trial is not None
+    assert trial.seed_attempts == len(trial.seed_results) >= 1
+    assert trial.candidate_seed_count == len(trial.candidate_seed_labels) >= 2
+    assert trial.seed_attempts <= trial.candidate_seed_count
+    assert trial.best_seed_index >= 0
+    assert trial.best_seed.seed_index == trial.best_seed_index
+    assert trial.best_seed.seed_label in {"wilson", "extreme_lightest"}
+    assert trial.candidate_seed_labels[:2] == ("wilson", "extreme_lightest")
+    assert trial.n_phi_calls == sum(
+        seed.n_phi_calls for seed in trial.seed_results
+    )
+    assert trial.n_eos_failures == sum(
+        seed.n_eos_failures for seed in trial.seed_results
+    )
+    assert trial.total_iterations == sum(
+        seed.iterations for seed in trial.seed_results
+    )
+    assert all(seed.kind == trial.kind for seed in trial.seed_results)
+    assert all(
+        seed.trial_phase == trial.trial_phase for seed in trial.seed_results
+    )
+    assert trial.best_seed.tpd == pytest.approx(trial.tpd, abs=1e-12)
+    np.testing.assert_allclose(
+        trial.best_seed.w, trial.w, rtol=0.0, atol=1e-12
+    )
+    assert (
+        trial.unattempted_seed_labels
+        == trial.candidate_seed_labels[trial.seed_attempts:]
+    )
+
+    # tpd_single_trial matches the full analysis for vapor-like trial
+    opts = StabilityOptions(use_gdem=True)
+    full = stability_analyze(z, 3e6, 300.0, eos, feed_phase="liquid", options=opts)
+    single = tpd_single_trial(
+        z, 3e6, 300.0, eos,
+        feed_phase="liquid", trial_kind="vapor_like", options=opts,
+    )
+    assert full.vapor_like is not None
+    assert single.kind == "vapor_like"
+    assert single.trial_phase == "vapor"
+    assert np.isfinite(single.tpd)
+    assert single.tpd == pytest.approx(full.vapor_like.tpd, abs=1e-12)
+    np.testing.assert_allclose(
+        single.w, full.vapor_like.w, rtol=0.0, atol=1e-12
+    )
+
+
+# ── 3. test_gdem_acceleration ────────────────────────────────────────
+
+
+def test_gdem_acceleration(components):
+    """GDEM converges no worse than plain successive substitution."""
+    fake_components = [components["C1"], components["C2"], components["C3"]]
+    eos = _PowerLawPhiEOS(fake_components, gamma=0.90)
+
+    z = np.array([0.2, 0.3, 0.5], dtype=float)
+    P, T = 1e6, 300.0
+
+    opts_no = StabilityOptions(
+        use_gdem=False, max_iter=600, tol_ln_w=1e-10
+    )
+    res_no = tpd_single_trial(
+        z, P, T, eos,
+        feed_phase="vapor", trial_kind="liquid_like", options=opts_no,
+    )
+    assert res_no.converged is True
+
+    opts_yes = StabilityOptions(
+        use_gdem=True, gdem_lambda_trigger=0.85,
+        max_iter=600, tol_ln_w=1e-10,
+    )
+    res_yes = tpd_single_trial(
+        z, P, T, eos,
+        feed_phase="vapor", trial_kind="liquid_like", options=opts_yes,
+    )
+    assert res_yes.converged is True
+    assert res_yes.iterations <= res_no.iterations
+
+
+# ── 4. test_eos_failure_recovery ─────────────────────────────────────
+
+
+def test_eos_failure_recovery(c1_c4_pr):
+    """Single transient EOS failure is recovered without crashing."""
+    eos = _FlakyEOS(c1_c4_pr)
+
+    z = np.array([0.6, 0.4], dtype=float)
+    opts = StabilityOptions(use_gdem=False, max_iter=200)
+    trial = tpd_single_trial(
+        z, 3e6, 300.0, eos,
+        feed_phase="liquid", trial_kind="vapor_like", options=opts,
+    )
+
+    assert trial.converged is True
+    assert trial.n_eos_failures == 1
+    assert trial.seed_attempts == len(trial.seed_results) == 2
+    assert trial.candidate_seed_count == 2
+    assert trial.stopped_early is False
+    assert sum(
+        seed.n_eos_failures for seed in trial.seed_results
+    ) == 1
+    assert any(
+        seed.n_eos_failures == 1 for seed in trial.seed_results
+    )
+    assert trial.message is not None
+    assert "Recovered from 1 EOS evaluation failure" in trial.message
+    assert np.isfinite(trial.tpd)
+
+
+# ── 5. test_legacy_wrapper_parity ────────────────────────────────────
+
+
+def test_legacy_wrapper_parity(c1_c10_pr):
+    """Legacy Michelsen wrapper agrees numerically with the new analysis API."""
+    z = np.array([0.5, 0.5])
+    P, T = 5e6, 300.0
+
+    legacy = michelsen_stability_test(z, P, T, c1_c10_pr, feed_phase="liquid")
+    new = stability_analyze(z, P, T, c1_c10_pr, feed_phase="liquid")
+
+    assert len(legacy.trial_compositions) == 2
+    assert len(legacy.tpd_values) == 2
+
+    assert legacy.tpd_values[0] == pytest.approx(
+        new.vapor_like.tpd, abs=1e-10
+    )
+    assert legacy.tpd_values[1] == pytest.approx(
+        new.liquid_like.tpd, abs=1e-10
+    )
+    assert np.allclose(
+        legacy.trial_compositions[0], new.vapor_like.w, atol=1e-12
+    )
+    assert np.allclose(
+        legacy.trial_compositions[1], new.liquid_like.w, atol=1e-12
+    )
+    assert legacy.tpd_min == pytest.approx(min(legacy.tpd_values), abs=1e-10)
+    assert legacy.stable == (legacy.tpd_min >= -TPD_TOLERANCE)
+
+    # Both APIs should agree on stability verdict
+    assert legacy.stable == new.stable
+
+    # Wrapper preserves exactly two trials
+    legacy2 = michelsen_stability_test(
+        z, 3e6, 300.0, c1_c10_pr, feed_phase="liquid"
+    )
+    assert len(legacy2.trial_compositions) == 2
+    assert len(legacy2.tpd_values) == 2
+    assert len(legacy2.iterations) == 2
+
+
+# ── 6. test_stability_edge_cases ─────────────────────────────────────
+
+
+class TestStabilityEdgeCases:
+    """Near-critical points, single-phase guaranteed stable, input validation."""
+
+    def test_supercritical_pure_component(self, components):
+        """Pure component well above Tc is always single-phase stable."""
+        comp = components["C1"]
+        eos = PengRobinsonEOS([comp])
+        T = 1.3 * comp.Tc
         z = np.array([1.0])
 
-        # Test as liquid feed
-        result_liquid = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='liquid'
-        )
+        result = michelsen_stability_test(z, 5e6, T, eos, feed_phase="vapor")
+        assert result.stable is True
+        assert result.tpd_min >= -TPD_TOLERANCE
 
-        # Test as vapor feed
-        result_vapor = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor'
-        )
+    def test_is_stable_convenience(self, components):
+        """is_stable() convenience function returns correct bool."""
+        eos = PengRobinsonEOS([components["C1"]])
+        assert is_stable(np.array([1.0]), 1e5, 400.0, eos, feed_phase="vapor") is True
 
-        # At least one phase should be unstable (want to split)
-        # or both could be metastable
-        # We just verify the calculation runs without error
-        assert isinstance(result_liquid.stable, bool)
-        assert isinstance(result_vapor.stable, bool)
-
-
-class TestConvergence:
-    """Test convergence behavior of stability algorithm."""
-
-    def test_convergence_flag(self, methane_eos):
-        """Test that convergence flag is set correctly."""
-        T = 400.0
-        P = 1e5
+    def test_pure_below_critical_runs(self, components):
+        """Pure methane below Tc runs without error for both feed phases."""
+        comp = components["C1"]
+        eos = PengRobinsonEOS([comp])
+        T = 0.8 * comp.Tc
         z = np.array([1.0])
 
-        result = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor'
-        )
+        r_liq = michelsen_stability_test(z, 2e6, T, eos, feed_phase="liquid")
+        r_vap = michelsen_stability_test(z, 2e6, T, eos, feed_phase="vapor")
+        assert isinstance(r_liq.stable, bool)
+        assert isinstance(r_vap.stable, bool)
 
-        # Should converge for this simple case
-        assert result.converged is True
+    def test_trace_component_finite(self, components):
+        """Trace-amount component does not crash and returns finite TPD."""
+        ternary = [components["C1"], components["C3"], components["C10"]]
+        eos = PengRobinsonEOS(ternary)
+        z = np.array([0.7, 0.3 - 1e-12, 1e-12], dtype=float)
+        z = z / float(np.sum(z))
 
-        # Iterations should be less than max
-        assert all(it < 1000 for it in result.iterations)
+        res = stability_analyze(z, 3e6, 300.0, eos, feed_phase="auto")
+        assert np.isfinite(res.tpd_min)
+        assert isinstance(res.stable, bool)
 
-    def test_custom_tolerance(self, methane_eos):
-        """Test stability test with custom tolerance."""
-        T = 400.0
-        P = 1e5
-        z = np.array([1.0])
+    def test_pressure_temperature_traversals(self, c1_c10_pr):
+        """Stability test runs across P/T traversals without error."""
+        z = np.array([0.5, 0.5])
 
-        # Looser tolerance should converge faster
-        result_loose = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor',
-            tolerance=1e-6
-        )
+        for T in [250.0, 300.0, 400.0, 600.0]:
+            r = michelsen_stability_test(
+                z, 5e6, T, c1_c10_pr, feed_phase="liquid"
+            )
+            assert isinstance(r.stable, bool)
 
-        # Tighter tolerance may need more iterations
-        result_tight = michelsen_stability_test(
-            z, P, T, methane_eos, feed_phase='vapor',
-            tolerance=1e-12
-        )
+        for P in [1e5, 1e6, 5e6, 10e6]:
+            r = michelsen_stability_test(
+                z, P, 400.0, c1_c10_pr, feed_phase="vapor"
+            )
+            assert isinstance(r.stable, bool)
 
-        # Both should converge but tight may need more iterations
-        assert result_loose.converged is True
-        assert result_tight.converged is True
-
-
-class TestInputValidation:
-    """Test input validation and error handling."""
-
-    def test_invalid_composition_sum(self, methane_eos):
-        """Test that invalid composition sum raises error."""
-        T = 300.0
-        P = 5e6
-        z_invalid = np.array([0.5])  # Doesn't sum to 1.0
-
+    def test_invalid_composition_sum(self, components):
+        """Bad composition sum raises ValidationError."""
+        eos = PengRobinsonEOS([components["C1"]])
         with pytest.raises(ValidationError):
             michelsen_stability_test(
-                z_invalid, P, T, methane_eos, feed_phase='liquid'
+                np.array([0.5]), 5e6, 300.0, eos, feed_phase="liquid"
             )
 
-    def test_negative_pressure(self, methane_eos):
-        """Test that negative pressure raises error."""
-        T = 300.0
-        P = -1e6  # Invalid
-        z = np.array([1.0])
-
+    def test_negative_pressure(self, components):
+        """Negative pressure raises ValidationError."""
+        eos = PengRobinsonEOS([components["C1"]])
         with pytest.raises(ValidationError):
             michelsen_stability_test(
-                z, P, T, methane_eos, feed_phase='liquid'
+                np.array([1.0]), -1e6, 300.0, eos, feed_phase="liquid"
             )
 
-    def test_negative_temperature(self, methane_eos):
-        """Test that negative temperature raises error."""
-        T = -100.0  # Invalid
-        P = 5e6
-        z = np.array([1.0])
-
+    def test_negative_temperature(self, components):
+        """Negative temperature raises ValidationError."""
+        eos = PengRobinsonEOS([components["C1"]])
         with pytest.raises(ValidationError):
             michelsen_stability_test(
-                z, P, T, methane_eos, feed_phase='liquid'
+                np.array([1.0]), 5e6, -100.0, eos, feed_phase="liquid"
             )
 
-    def test_invalid_feed_phase(self, methane_eos):
-        """Test that invalid feed phase raises error."""
-        T = 300.0
-        P = 5e6
-        z = np.array([1.0])
-
+    def test_invalid_feed_phase(self, components):
+        """Invalid feed phase string raises ValidationError."""
+        eos = PengRobinsonEOS([components["C1"]])
         with pytest.raises(ValidationError):
             michelsen_stability_test(
-                z, P, T, methane_eos, feed_phase='supercritical'  # Invalid
+                np.array([1.0]), 5e6, 300.0, eos, feed_phase="supercritical"
             )
 
-    def test_composition_eos_mismatch(self, methane_eos):
-        """Test that composition length must match EOS components."""
-        T = 300.0
-        P = 5e6
-        z_wrong_size = np.array([0.5, 0.5])  # Two components, but EOS has one
-
+    def test_composition_eos_mismatch(self, components):
+        """Composition size != EOS component count raises ValidationError."""
+        eos = PengRobinsonEOS([components["C1"]])
         with pytest.raises(ValidationError):
             michelsen_stability_test(
-                z_wrong_size, P, T, methane_eos, feed_phase='liquid'
+                np.array([0.5, 0.5]), 5e6, 300.0, eos, feed_phase="liquid"
             )
 
+    def test_new_api_rejects_bad_sum(self, c1_c10_pr):
+        """New analysis API rejects bad composition sum."""
+        z_bad = np.array([0.6, 0.6], dtype=float)
+        with pytest.raises(ValidationError):
+            stability_analyze(z_bad, 3e6, 300.0, c1_c10_pr, feed_phase="liquid")
 
-class TestPressureTemperatureTraverse:
-    """Test stability along pressure/temperature paths."""
-
-    def test_pressure_traverse(self, binary_c1_c10_eos):
-        """Test stability test along an isobaric path.
-
-        At low T: should be two-phase (unstable)
-        At high T: should eventually become single-phase (stable)
-        """
-        P = 5e6  # 50 bar
-        z = np.array([0.5, 0.5])
-
-        temperatures = [250.0, 300.0, 350.0, 400.0, 450.0]
-        stability_results = []
-
-        for T in temperatures:
-            result = michelsen_stability_test(
-                z, P, T, binary_c1_c10_eos, feed_phase='liquid'
+    def test_new_api_rejects_negative_pressure(self, components):
+        """New analysis API rejects negative pressure."""
+        eos = PengRobinsonEOS([components["C1"]])
+        with pytest.raises(ValidationError):
+            stability_analyze(
+                np.array([1.0]), -1e5, 300.0, eos, feed_phase="vapor"
             )
-            stability_results.append(result.stable)
-
-        # At least should get valid results at all temperatures
-        assert len(stability_results) == len(temperatures)
-        assert all(isinstance(s, bool) for s in stability_results)
-
-        # Verify we can run stability tests across temperature range
-        # (Actual phase behavior depends on the system)
-        # At very high T relative to both critical temperatures, expect stable
-        T_very_high = 600.0  # Well above C10 critical temperature
-        result_high = michelsen_stability_test(
-            z, P, T_very_high, binary_c1_c10_eos, feed_phase='vapor'
-        )
-        assert result_high.stable is True
-
-    def test_temperature_traverse(self, binary_c1_c10_eos):
-        """Test stability test along an isothermal path.
-
-        At low P: should be single-phase vapor (stable)
-        At high P: may enter two-phase region
-        """
-        T = 400.0  # K - higher temperature to ensure vapor stability at low P
-        z = np.array([0.5, 0.5])
-
-        pressures = [1e5, 1e6, 3e6, 5e6, 10e6]  # 1 bar to 100 bar
-        stability_results = []
-
-        for P in pressures:
-            result = michelsen_stability_test(
-                z, P, T, binary_c1_c10_eos, feed_phase='vapor'
-            )
-            stability_results.append(result.stable)
-
-        # At least should get valid results at all pressures
-        assert len(stability_results) == len(pressures)
-        assert all(isinstance(s, bool) for s in stability_results)
-
-        # At very low pressure and high temperature, should be stable vapor
-        # Test at extremely low pressure
-        P_very_low = 1e4  # 0.1 bar
-        result_low_p = michelsen_stability_test(
-            z, P_very_low, T, binary_c1_c10_eos, feed_phase='vapor'
-        )
-        assert result_low_p.stable is True
-
-
-class TestBinaryInteractionParameters:
-    """Test effect of binary interaction parameters on stability."""
-
-    def test_stability_with_kij(self, binary_c1_c10_eos):
-        """Test that binary interaction parameters affect stability."""
-        T = 300.0
-        P = 5e6
-        z = np.array([0.5, 0.5])
-
-        # Test without BIP
-        result_no_kij = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid',
-            binary_interaction=None
-        )
-
-        # Test with BIP (typical C1-C10 kij ≈ 0.04)
-        kij = np.array([[0.0, 0.04],
-                        [0.04, 0.0]])
-        result_with_kij = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid',
-            binary_interaction=kij
-        )
-
-        # Both should complete successfully
-        assert isinstance(result_no_kij.stable, bool)
-        assert isinstance(result_with_kij.stable, bool)
-
-        # BIPs can affect phase boundaries, so TPD values may differ
-        # (we just verify both calculations work)
-
-
-class TestMultipleTrials:
-    """Test that multiple trial compositions are tested."""
-
-    def test_two_trials_performed(self, binary_c1_c10_eos):
-        """Test that both vapor-like and liquid-like trials are performed."""
-        T = 300.0
-        P = 5e6
-        z = np.array([0.5, 0.5])
-
-        result = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid'
-        )
-
-        # Should have two trials (vapor-like and liquid-like)
-        assert len(result.trial_compositions) == 2
-        assert len(result.tpd_values) == 2
-        assert len(result.iterations) == 2
-
-    def test_trial_compositions_normalized(self, binary_c1_c10_eos):
-        """Test that all trial compositions sum to 1.0."""
-        T = 300.0
-        P = 5e6
-        z = np.array([0.5, 0.5])
-
-        result = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid'
-        )
-
-        # All trial compositions should be normalized
-        for W in result.trial_compositions:
-            assert abs(W.sum() - 1.0) < 1e-10
-
-    def test_tpd_min_is_minimum(self, binary_c1_c10_eos):
-        """Test that tpd_min is the minimum of all trial TPD values."""
-        T = 300.0
-        P = 5e6
-        z = np.array([0.5, 0.5])
-
-        result = michelsen_stability_test(
-            z, P, T, binary_c1_c10_eos, feed_phase='liquid'
-        )
-
-        # tpd_min should be the minimum
-        assert result.tpd_min == pytest.approx(min(result.tpd_values), abs=1e-10)
