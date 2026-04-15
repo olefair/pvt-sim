@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import csv
 import json
 import os
@@ -14,11 +15,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
+pytestmark = pytest.mark.gui_contract
+
 try:
-    from PySide6.QtCore import QSettings, Qt
+    from PySide6.QtCore import QCoreApplication, QEvent, QSettings, Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QAbstractItemView, QApplication, QMessageBox
 except ModuleNotFoundError:  # pragma: no cover - environment dependent
+    QCoreApplication = None  # type: ignore[assignment]
+    QEvent = None  # type: ignore[assignment]
     QSettings = None  # type: ignore[assignment]
     Qt = None  # type: ignore[assignment]
     QTest = None  # type: ignore[assignment]
@@ -111,6 +116,12 @@ def window(app: QApplication, monkeypatch: pytest.MonkeyPatch, settings_path: Pa
     instance = PVTSimulatorWindow()
     yield instance
     instance.close()
+    instance.deleteLater()
+    app.processEvents()
+    if QCoreApplication is not None and QEvent is not None:
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        app.processEvents()
+    gc.collect()
 
 
 def _run_config(data: dict) -> RunConfig:
@@ -698,6 +709,7 @@ def _dl_result() -> RunResult:
                 DLStepResult(
                     pressure_pa=1.5e7,
                     rs=620.0,
+                    bg=None,
                     bo=1.48,
                     bt=1.48,
                     vapor_fraction=0.0,
@@ -706,6 +718,7 @@ def _dl_result() -> RunResult:
                 DLStepResult(
                     pressure_pa=5.0e6,
                     rs=210.0,
+                    bg=0.0048,
                     bo=1.18,
                     bt=1.23,
                     vapor_fraction=0.28,
@@ -729,16 +742,22 @@ def _cvd_result() -> RunResult:
                 CVDStepResult(
                     pressure_pa=5.652e6,
                     liquid_dropout=0.00,
+                    gas_produced=0.00,
                     cumulative_gas_produced=0.00,
                     moles_remaining=1.0,
                     z_two_phase=0.92,
+                    liquid_density_kg_per_m3=None,
+                    vapor_density_kg_per_m3=120.0,
                 ),
                 CVDStepResult(
                     pressure_pa=5.0e6,
                     liquid_dropout=0.07,
+                    gas_produced=0.20,
                     cumulative_gas_produced=0.20,
                     moles_remaining=0.80,
                     z_two_phase=0.86,
+                    liquid_density_kg_per_m3=530.0,
+                    vapor_density_kg_per_m3=96.0,
                 ),
             ],
         ),
@@ -766,6 +785,10 @@ def _separator_result() -> RunResult:
                     vapor_fraction=0.35,
                     liquid_moles=0.65,
                     vapor_moles=0.35,
+                    liquid_density_kg_per_m3=640.0,
+                    vapor_density_kg_per_m3=85.0,
+                    liquid_z_factor=0.24,
+                    vapor_z_factor=0.91,
                     converged=True,
                 ),
                 SeparatorStageResult(
@@ -776,6 +799,10 @@ def _separator_result() -> RunResult:
                     vapor_fraction=0.18,
                     liquid_moles=0.53,
                     vapor_moles=0.12,
+                    liquid_density_kg_per_m3=710.0,
+                    vapor_density_kg_per_m3=22.0,
+                    liquid_z_factor=0.07,
+                    vapor_z_factor=0.97,
                     converged=True,
                 ),
             ],
@@ -1577,6 +1604,7 @@ def test_stylesheet_keeps_labels_transparent_and_combo_drop_downs_rounded() -> N
     assert "QTableWidget#CompositionInputTable" in stylesheet
     assert "QTabWidget#HeavyFractionTabs::pane" in stylesheet
     assert "QTabWidget#HeavyFractionTabs QStackedWidget" in stylesheet
+    assert "QTabBar#HeavyFractionTabBar" in stylesheet
 
 
 def test_results_tables_align_to_shared_right_edge(
@@ -1612,6 +1640,9 @@ def test_composition_inputs_use_square_table_and_tab_gap(app: QApplication) -> N
     app.processEvents()
 
     assert widget.table.objectName() == "CompositionInputTable"
+    assert widget.heavy_tabs.documentMode() is True
+    assert widget.heavy_tabs.tabBar().objectName() == "HeavyFractionTabBar"
+    assert widget.heavy_tabs.tabBar().drawBase() is False
     assert widget.plus_form.contentsMargins().top() > 0
     assert widget.inline_form.contentsMargins().top() > 0
 
@@ -1837,6 +1868,7 @@ def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None
     table.show()
     app.processEvents()
     assert table.details_section.title() == "Densities"
+    assert table.composition_table.horizontalHeaderItem(3).text() == "Vapor Frac."
     assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
     assert table.details_table.horizontalHeaderItem(2).text() == "Vapor Density"
     assert table.details_table.item(0, 1).text() == "648.20"
@@ -1865,12 +1897,68 @@ def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None
     plot.display_result(result)
     ax = plot.figure.axes[0]
     assert ax.get_ylabel() == "Density (kg/m³)"
-    assert ax.get_title() == "CCE Density at 86.9 °C"
-    assert {line.get_label() for line in ax.lines} >= {
+    assert ax.get_title() == "CCE Trends at 86.9 °C"
+    assert plot.series_controls.isHidden() is False
+    assert {action.text() for action in plot.series_menu.actions()} >= {
         "Liquid Density",
         "Vapor Density",
+        "Relative Volume",
+    }
+    assert {line.get_label() for line in ax.lines} >= {
+        "Liquid Density",
         "Psat = 155.00 bar",
     }
+    assert {line.get_label() for line in plot.figure.axes[1].lines} >= {"Relative Volume"}
+
+
+def test_cce_plot_separates_incompatible_selected_series_into_stacked_axes(app: QApplication) -> None:
+    result = _cce_result()
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+
+    plot.display_result(result)
+    for action in plot.series_menu.actions():
+        if action.text() in {"Liquid Fraction", "Relative Volume", "Liquid Density"}:
+            action.setChecked(True)
+    plot._refresh_plot()
+
+    assert len(plot.figure.axes) >= 3
+    labels_by_axis = [{line.get_label() for line in ax.lines} for ax in plot.figure.axes]
+    assert any({"Liquid Density"} <= labels for labels in labels_by_axis)
+    assert any({"Relative Volume"} <= labels for labels in labels_by_axis)
+    assert any({"Liquid Fraction"} <= labels for labels in labels_by_axis)
+    assert all(
+        not ({"Liquid Density", "Liquid Fraction"} <= labels)
+        for labels in labels_by_axis
+    )
+
+
+def test_plot_surface_resizes_canvas_and_keeps_series_controls_pinned_top(
+    app: QApplication,
+) -> None:
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+
+    plot.resize(720, 540)
+    plot.show()
+    plot.display_result(_cce_result())
+    app.processEvents()
+
+    initial_canvas_size = plot.canvas.size()
+    initial_controls_y = plot.series_controls.geometry().top()
+    initial_canvas_y = plot.canvas.geometry().top()
+
+    plot.resize(1180, 860)
+    app.processEvents()
+
+    assert plot.series_controls.isHidden() is False
+    assert plot.canvas.width() > initial_canvas_size.width()
+    assert plot.canvas.height() > initial_canvas_size.height()
+    assert plot.series_controls.geometry().top() <= initial_controls_y + 2
+    assert plot.series_controls.geometry().bottom() < plot.canvas.geometry().top()
+    assert plot.canvas.geometry().top() >= initial_canvas_y
 
 
 def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> None:
@@ -1942,7 +2030,7 @@ def test_cce_result_widgets_honor_selected_display_units(app: QApplication) -> N
     plot.display_result(result)
     ax = plot.figure.axes[0]
     assert ax.get_xlabel() == "Pressure (psia)"
-    assert ax.get_title() == "CCE Density at 188.3 °F"
+    assert ax.get_title() == "CCE Trends at 188.3 °F"
     assert "Psat = 1400.00 psia" in {line.get_label() for line in ax.lines}
 
 
@@ -1979,6 +2067,7 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
                 DLStepResult(
                     pressure_pa=5200000.0,
                     rs=620.0,
+                    bg=None,
                     bo=1.48,
                     bt=1.48,
                     vapor_fraction=0.0,
@@ -1987,6 +2076,7 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
                 DLStepResult(
                     pressure_pa=3447378.5,
                     rs=210.0,
+                    bg=0.0048,
                     bo=1.18,
                     bt=1.23,
                     vapor_fraction=0.28,
@@ -2002,12 +2092,17 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
     assert summary["Temperature"] == "128.50 °F"
     assert summary["Bubble Pressure"] == "754.20 psia"
     assert table.composition_table.horizontalHeaderItem(0).text() == "Pressure (psia)"
+    assert table.composition_table.horizontalHeaderItem(1).text() == "RsD"
+    assert table.composition_table.horizontalHeaderItem(2).text() == "RsDi"
+    assert table.composition_table.horizontalHeaderItem(4).text() == "Bg"
+    assert table.composition_table.item(1, 4).text() == "0.0048"
 
     text = TextOutputWidget()
     text.display_result(result)
     report = text.text.toPlainText()
     assert "T = 128.500 °F" in report
     assert "Pb = 754.19627 psia" in report
+    assert "RsDi = 620.00000" in report
     assert "P (psia)" in report
 
     plot = ResultsPlotWidget()
@@ -2016,10 +2111,87 @@ def test_dl_result_widgets_honor_selected_display_units(app: QApplication) -> No
     plot.display_result(result)
     assert plot.figure.axes[0].get_xlabel() == "Pressure (psia)"
     assert plot.figure.axes[0].get_title() == "Differential Liberation at 128.5 °F"
+    assert {action.text() for action in plot.series_menu.actions()} >= {
+        "RsD",
+        "RsDi",
+        "Bo",
+        "Bg",
+        "BtD",
+    }
 
 
 def test_main_window_uses_generic_plot_surface(window: PVTSimulatorWindow) -> None:
     assert window.results_plot._view_mode == "generic"
+
+
+def test_cvd_result_surface_exposes_additional_runtime_series(app: QApplication) -> None:
+    result = _cvd_result()
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    assert table.composition_table.horizontalHeaderItem(2).text() == "Gas Produced"
+    assert table.composition_table.item(1, 2).text() == "0.2000"
+    assert table.composition_table.horizontalHeaderItem(4).text() == "Moles Remaining"
+    assert table.composition_table.item(1, 4).text() == "0.800000"
+    assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
+    assert table.details_table.item(1, 1).text() == "530.00"
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "Gas Prod." in report
+    assert "530.00" in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    assert {action.text() for action in plot.series_menu.actions()} >= {
+        "Liquid Dropout",
+        "Gas Produced",
+        "Cumulative Gas",
+        "Z-factor",
+        "Liquid Density",
+        "Vapor Density",
+    }
+    assert "Pd = 56.52 bar" in {
+        line.get_label()
+        for ax in plot.figure.axes
+        for line in ax.lines
+    }
+
+
+def test_separator_result_surface_exposes_additional_runtime_series(app: QApplication) -> None:
+    result = _separator_result()
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    assert table.composition_table.horizontalHeaderItem(4).text() == "Liquid Moles"
+    assert table.composition_table.horizontalHeaderItem(5).text() == "Vapor Moles"
+    assert table.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
+    assert table.details_table.horizontalHeaderItem(3).text() == "ZL"
+    assert table.details_table.item(0, 1).text() == "640.00"
+    assert table.details_table.item(0, 3).text() == "0.2400"
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "rhoL" in report
+    assert "ZL" in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    assert {action.text() for action in plot.series_menu.actions()} >= {
+        "Vapor Fraction",
+        "Liquid Moles",
+        "Vapor Moles",
+        "Liquid Density",
+        "Vapor Density",
+        "ZL",
+        "ZV",
+    }
 
 
 def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication) -> None:
@@ -2535,15 +2707,18 @@ def test_diagnostics_widget_convergence_plot_uses_integer_iteration_ticks(
 
 
 def test_main_window_phase_envelope_view_rejects_non_envelope_plots(
-    window: PVTSimulatorWindow,
+    app: QApplication,
 ) -> None:
     result = _bubble_point_result()
+    plot = ResultsPlotWidget(view_mode="phase_envelope_only")
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
 
-    assert window.results_plot._view_mode == "phase_envelope_only"
-    window.results_plot.display_result(result)
+    assert plot._view_mode == "phase_envelope_only"
+    plot.display_result(result)
 
-    assert len(window.results_plot.figure.axes) == 1
-    ax = window.results_plot.figure.axes[0]
+    assert len(plot.figure.axes) == 1
+    ax = plot.figure.axes[0]
     assert ax.get_title() == "Phase Envelope"
     assert len(ax.texts) == 1
     assert "only populated by phase-envelope runs" in ax.texts[0].get_text()
@@ -3053,9 +3228,21 @@ def test_main_window_restores_persisted_zoom_between_sessions(
         assert first.ui_scale == pytest.approx(DEFAULT_UI_SCALE + (2 * UI_SCALE_STEP))
     finally:
         first.close()
+        first.deleteLater()
+        app.processEvents()
+        if QCoreApplication is not None and QEvent is not None:
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+            app.processEvents()
+        gc.collect()
 
     second = PVTSimulatorWindow()
     try:
         assert second.ui_scale == pytest.approx(DEFAULT_UI_SCALE + (2 * UI_SCALE_STEP))
     finally:
         second.close()
+        second.deleteLater()
+        app.processEvents()
+        if QCoreApplication is not None and QEvent is not None:
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+            app.processEvents()
+        gc.collect()

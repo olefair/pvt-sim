@@ -94,6 +94,7 @@ def test_conditions_widget_builds_bubble_point_config(app: QApplication) -> None
     assert config.pressure_initial_pa == pytest.approx(1.25e7)
 
 
+@pytest.mark.gui_contract
 def test_conditions_selectors_ignore_mouse_wheel_changes(app: QApplication) -> None:
     widget = ConditionsInputWidget()
     combo = widget.pressure_unit
@@ -117,6 +118,7 @@ def test_conditions_selectors_ignore_mouse_wheel_changes(app: QApplication) -> N
     assert separator_pressure.value() == initial_pressure
 
 
+@pytest.mark.gui_contract
 def test_conditions_widget_scales_unit_widths_with_app_zoom(app: QApplication) -> None:
     widget = ConditionsInputWidget()
     initial_unit_width = widget.pressure_unit.maximumWidth()
@@ -371,6 +373,7 @@ def test_conditions_widget_only_exposes_gui_supported_types(app: QApplication) -
     ]
 
 
+@pytest.mark.gui_contract
 def test_conditions_widget_solver_group_is_always_visible(app: QApplication) -> None:
     widget = ConditionsInputWidget()
 

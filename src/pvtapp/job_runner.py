@@ -22,6 +22,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from pvtcore.core.constants import R, SC_IMPERIAL
 from pvtapp.schemas import (
     RunConfig, RunResult, RunManifest, RunStatus,
     CalculationType, EOSType, PhaseEnvelopeTracingMethod,
@@ -1167,23 +1168,62 @@ def execute_dl(
     if callback:
         callback.on_progress(config.run_id or "", 0.9, "Processing results...")
 
+    steps: list[DLStepResult] = []
+    previous_liquid_moles = 1.0
+    for step in result.steps:
+        bg = None
+        vapor_fraction = float(step.vapor_fraction)
+        gas_z = float(step.gas_Z)
+        if vapor_fraction > 0.0 and np.isfinite(gas_z):
+            n_gas = float(previous_liquid_moles) * vapor_fraction
+            gas_z_std = eos.compressibility(
+                SC_IMPERIAL.P,
+                SC_IMPERIAL.T,
+                step.gas_composition,
+                phase="vapor",
+                binary_interaction=binary_interaction,
+            )
+            if isinstance(gas_z_std, list):
+                gas_z_std = gas_z_std[-1]
+            v_gas_at_standard = (
+                n_gas
+                * float(gas_z_std)
+                * R.Pa_m3_per_mol_K
+                * SC_IMPERIAL.T
+                / SC_IMPERIAL.P
+            )
+            if v_gas_at_standard > 0.0:
+                v_gas_at_reservoir = (
+                    n_gas
+                    * gas_z
+                    * R.Pa_m3_per_mol_K
+                    * float(step.temperature)
+                    / float(step.pressure)
+                )
+                bg = v_gas_at_reservoir / v_gas_at_standard
+
+        steps.append(
+            DLStepResult(
+                pressure_pa=float(step.pressure),
+                rs=float(step.Rs),
+                bg=_finite_or_none(bg),
+                bo=float(step.Bo),
+                bt=float(step.Bt),
+                vapor_fraction=vapor_fraction,
+                liquid_moles_remaining=_finite_or_none(step.liquid_moles_remaining),
+            )
+        )
+        liquid_moles_remaining = _finite_or_none(step.liquid_moles_remaining)
+        if liquid_moles_remaining is not None:
+            previous_liquid_moles = float(liquid_moles_remaining)
+
     return DLResult(
         temperature_k=float(result.temperature),
         bubble_pressure_pa=float(result.bubble_pressure),
         rsi=float(result.Rsi),
         boi=float(result.Boi),
         converged=bool(result.converged),
-        steps=[
-            DLStepResult(
-                pressure_pa=float(step.pressure),
-                rs=float(step.Rs),
-                bo=float(step.Bo),
-                bt=float(step.Bt),
-                vapor_fraction=float(step.vapor_fraction),
-                liquid_moles_remaining=_finite_or_none(step.liquid_moles_remaining),
-            )
-            for step in result.steps
-        ],
+        steps=steps,
     )
 
 
@@ -1236,9 +1276,12 @@ def execute_cvd(
             CVDStepResult(
                 pressure_pa=float(step.pressure),
                 liquid_dropout=float(step.liquid_dropout),
+                gas_produced=_finite_or_none(step.gas_produced),
                 cumulative_gas_produced=float(step.cumulative_gas_produced),
                 moles_remaining=_finite_or_none(step.moles_remaining),
                 z_two_phase=_finite_or_none(step.Z_two_phase),
+                liquid_density_kg_per_m3=_finite_or_none(step.liquid_density),
+                vapor_density_kg_per_m3=_finite_or_none(step.vapor_density),
             )
             for step in result.steps
         ],
@@ -1305,6 +1348,10 @@ def execute_separator(
                 vapor_fraction=_finite_or_none(stage.vapor_fraction),
                 liquid_moles=_finite_or_none(stage.liquid_moles),
                 vapor_moles=_finite_or_none(stage.vapor_moles),
+                liquid_density_kg_per_m3=_finite_or_none(stage.liquid_density),
+                vapor_density_kg_per_m3=_finite_or_none(stage.vapor_density),
+                liquid_z_factor=_finite_or_none(stage.Z_liquid),
+                vapor_z_factor=_finite_or_none(stage.Z_vapor),
                 converged=bool(stage.converged),
             )
             for stage in result.stages

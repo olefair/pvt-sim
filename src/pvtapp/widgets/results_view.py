@@ -6,11 +6,13 @@ with export capabilities.
 
 import csv
 import json
+import math
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QWidget,
@@ -29,6 +31,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QLineEdit,
+    QMenu,
+    QToolButton,
 )
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
@@ -122,6 +126,26 @@ def _format_calculation_type_label(calculation_type) -> str:
         "separator": "Separator",
     }
     return labels.get(value, value.replace("_", " ").title())
+
+
+@dataclass(frozen=True)
+class PlotSeriesSpec:
+    """Metadata for a selectable result series plotted against pressure."""
+
+    key: str
+    label: str
+    axis_group: str
+    axis_label: str
+    overlay_group: str
+    values: list[Optional[float]]
+    color: str
+    default_selected: bool = False
+    marker: str = "o"
+    linestyle: str = "-"
+    linewidth: float = 2.0
+    markersize: float = 4.0
+    force_overlay: bool = False
+    preferred_ylim: Optional[tuple[float, float]] = None
 
 
 class ResultsTableWidget(QWidget):
@@ -394,6 +418,9 @@ class ResultsTableWidget(QWidget):
             minimum, maximum = self._column_width_bounds(table, header_label, column)
             minimum = scale_metric(minimum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
             maximum = scale_metric(maximum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            header_minimum = table.horizontalHeader().fontMetrics().horizontalAdvance(header_label)
+            minimum = max(minimum, header_minimum)
+            maximum = max(maximum, minimum)
             table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             width = max(
                 minimum,
@@ -436,6 +463,9 @@ class ResultsTableWidget(QWidget):
             minimum, maximum = self._column_width_bounds(table, header_label, column)
             minimum = scale_metric(minimum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
             maximum = scale_metric(maximum, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+            header_minimum = table.horizontalHeader().fontMetrics().horizontalAdvance(header_label)
+            minimum = max(minimum, header_minimum)
+            maximum = max(maximum, minimum)
             minimums.append(minimum)
             widths.append(max(minimum, min(maximum, table.columnWidth(column))))
 
@@ -1139,9 +1169,9 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
         # Steps in composition table
-        self.composition_table.setColumnCount(4)
+        self.composition_table.setColumnCount(5)
         self.composition_table.setHorizontalHeaderLabels([
-            f"Pressure ({pressure_unit.value})", "Rel. Volume", "Liquid Frac.", "Z-factor"
+            f"Pressure ({pressure_unit.value})", "Rel. Volume", "Liquid Frac.", "Vapor Frac.", "Z-factor"
         ])
         self.composition_table.setRowCount(len(result.steps))
 
@@ -1158,8 +1188,12 @@ class ResultsTableWidget(QWidget):
             self.composition_table.setItem(row, 2, QTableWidgetItem(
                 f"{lf:.4f}" if lf else "-"
             ))
-            zf = step.z_factor if step.z_factor else ""
+            vf = step.vapor_fraction if step.vapor_fraction else ""
             self.composition_table.setItem(row, 3, QTableWidgetItem(
+                f"{vf:.4f}" if vf else "-"
+            ))
+            zf = step.z_factor if step.z_factor else ""
+            self.composition_table.setItem(row, 4, QTableWidgetItem(
                 f"{zf:.4f}" if zf else "-"
             ))
 
@@ -1205,14 +1239,16 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        self.composition_table.setColumnCount(5)
+        self.composition_table.setColumnCount(6)
         self.composition_table.setHorizontalHeaderLabels(
-            [f"Pressure ({pressure_unit.value})", "Rs", "Bo", "Bt", "Vapor Frac."]
+            [f"Pressure ({pressure_unit.value})", "RsD", "RsDi", "Bo", "Bg", "BtD"]
         )
         self.composition_table.setRowCount(len(result.steps))
 
-        self.details_table.setColumnCount(2)
-        self.details_table.setHorizontalHeaderLabels(["Step", "Liquid Moles Remaining"])
+        self.details_table.setColumnCount(3)
+        self.details_table.setHorizontalHeaderLabels(
+            ["Step", "Vapor Frac.", "Liquid Moles Remaining"]
+        )
         self.details_table.setRowCount(len(result.steps))
 
         for row, step in enumerate(result.steps):
@@ -1222,19 +1258,23 @@ class ResultsTableWidget(QWidget):
                 QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
             )
             self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs:.4f}"))
-            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{step.bo:.4f}"))
-            self.composition_table.setItem(row, 3, QTableWidgetItem(f"{step.bt:.4f}"))
+            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{result.rsi:.4f}"))
+            self.composition_table.setItem(row, 3, QTableWidgetItem(f"{step.bo:.4f}"))
             self.composition_table.setItem(
-                row, 4, QTableWidgetItem(f"{step.vapor_fraction:.4f}")
+                row,
+                4,
+                QTableWidgetItem("-" if step.bg is None else f"{step.bg:.4f}"),
             )
+            self.composition_table.setItem(row, 5, QTableWidgetItem(f"{step.bt:.4f}"))
 
             self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+            self.details_table.setItem(row, 1, QTableWidgetItem(f"{step.vapor_fraction:.4f}"))
             liquid_moles = (
                 "-"
                 if step.liquid_moles_remaining is None
                 else f"{step.liquid_moles_remaining:.6f}"
             )
-            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_moles))
+            self.details_table.setItem(row, 2, QTableWidgetItem(liquid_moles))
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -1258,9 +1298,9 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        self.composition_table.setColumnCount(4)
+        self.composition_table.setColumnCount(6)
         self.composition_table.setHorizontalHeaderLabels([
-            "Pressure (bar)", "Liquid Dropout", "Cum. Gas", "Z (2-phase)"
+            "Pressure (bar)", "Liquid Dropout", "Gas Produced", "Cum. Gas", "Moles Remaining", "Z (2-phase)"
         ])
         self.composition_table.setRowCount(len(result.steps))
 
@@ -1272,22 +1312,41 @@ class ResultsTableWidget(QWidget):
                 row, 1, QTableWidgetItem(f"{step.liquid_dropout:.4f}")
             )
             self.composition_table.setItem(
-                row, 2, QTableWidgetItem(f"{step.cumulative_gas_produced:.4f}")
+                row,
+                2,
+                QTableWidgetItem("-" if step.gas_produced is None else f"{step.gas_produced:.4f}"),
             )
+            self.composition_table.setItem(
+                row, 3, QTableWidgetItem(f"{step.cumulative_gas_produced:.4f}")
+            )
+            moles_remaining = "-" if step.moles_remaining is None else f"{step.moles_remaining:.6f}"
+            self.composition_table.setItem(row, 4, QTableWidgetItem(moles_remaining))
             z_two_phase = "-" if step.z_two_phase is None else f"{step.z_two_phase:.4f}"
-            self.composition_table.setItem(row, 3, QTableWidgetItem(z_two_phase))
+            self.composition_table.setItem(row, 5, QTableWidgetItem(z_two_phase))
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
 
-        self.details_table.setColumnCount(2)
-        self.details_table.setHorizontalHeaderLabels(["Step", "Moles Remaining"])
+        self.details_table.setColumnCount(3)
+        self.details_table.setHorizontalHeaderLabels(
+            ["Step", "Liquid Density", "Vapor Density"]
+        )
         self.details_table.setRowCount(len(result.steps))
         for row, step in enumerate(result.steps):
             self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            moles_remaining = "-" if step.moles_remaining is None else f"{step.moles_remaining:.6f}"
-            self.details_table.setItem(row, 1, QTableWidgetItem(moles_remaining))
+            liquid_density = (
+                "-"
+                if step.liquid_density_kg_per_m3 is None or step.liquid_density_kg_per_m3 <= 0
+                else f"{step.liquid_density_kg_per_m3:.2f}"
+            )
+            vapor_density = (
+                "-"
+                if step.vapor_density_kg_per_m3 is None or step.vapor_density_kg_per_m3 <= 0
+                else f"{step.vapor_density_kg_per_m3:.2f}"
+            )
+            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_density))
+            self.details_table.setItem(row, 2, QTableWidgetItem(vapor_density))
 
         self.details_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -1312,15 +1371,22 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        self.composition_table.setColumnCount(4)
+        self.composition_table.setColumnCount(6)
         self.composition_table.setHorizontalHeaderLabels(
-            ["Stage", "Pressure (bar)", "Temperature (C)", "Vapor Frac."]
+            ["Stage", "Pressure (bar)", "Temperature (C)", "Vapor Frac.", "Liquid Moles", "Vapor Moles"]
         )
         self.composition_table.setRowCount(len(result.stages))
 
-        self.details_table.setColumnCount(4)
+        self.details_table.setColumnCount(6)
         self.details_table.setHorizontalHeaderLabels(
-            ["Stage", "Liquid Moles", "Vapor Moles", "Converged"]
+            [
+                "Stage",
+                "Liquid Density",
+                "Vapor Density",
+                "ZL",
+                "ZV",
+                "Converged",
+            ]
         )
         self.details_table.setRowCount(len(result.stages))
 
@@ -1335,14 +1401,30 @@ class ResultsTableWidget(QWidget):
             )
             vapor_fraction = "-" if stage.vapor_fraction is None else f"{stage.vapor_fraction:.4f}"
             self.composition_table.setItem(row, 3, QTableWidgetItem(vapor_fraction))
-
-            self.details_table.setItem(row, 0, QTableWidgetItem(stage_label))
             liquid_moles = "-" if stage.liquid_moles is None else f"{stage.liquid_moles:.6f}"
             vapor_moles = "-" if stage.vapor_moles is None else f"{stage.vapor_moles:.6f}"
-            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_moles))
-            self.details_table.setItem(row, 2, QTableWidgetItem(vapor_moles))
+            self.composition_table.setItem(row, 4, QTableWidgetItem(liquid_moles))
+            self.composition_table.setItem(row, 5, QTableWidgetItem(vapor_moles))
+
+            self.details_table.setItem(row, 0, QTableWidgetItem(stage_label))
+            liquid_density = (
+                "-"
+                if stage.liquid_density_kg_per_m3 is None or stage.liquid_density_kg_per_m3 <= 0
+                else f"{stage.liquid_density_kg_per_m3:.2f}"
+            )
+            vapor_density = (
+                "-"
+                if stage.vapor_density_kg_per_m3 is None or stage.vapor_density_kg_per_m3 <= 0
+                else f"{stage.vapor_density_kg_per_m3:.2f}"
+            )
+            liquid_z = "-" if stage.liquid_z_factor is None else f"{stage.liquid_z_factor:.4f}"
+            vapor_z = "-" if stage.vapor_z_factor is None else f"{stage.vapor_z_factor:.4f}"
+            self.details_table.setItem(row, 1, QTableWidgetItem(liquid_density))
+            self.details_table.setItem(row, 2, QTableWidgetItem(vapor_density))
+            self.details_table.setItem(row, 3, QTableWidgetItem(liquid_z))
+            self.details_table.setItem(row, 4, QTableWidgetItem(vapor_z))
             self.details_table.setItem(
-                row, 3, QTableWidgetItem("Yes" if stage.converged else "No")
+                row, 5, QTableWidgetItem("Yes" if stage.converged else "No")
             )
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
@@ -1551,14 +1633,38 @@ class ResultsPlotWidget(QWidget):
         if view_mode not in {"generic", "phase_envelope_only"}:
             raise ValueError(f"Unsupported ResultsPlotWidget view_mode: {view_mode}")
         self._current_result: Optional[RunResult] = None
+        self._current_plot_kind: Optional[str] = None
+        self._plot_series_specs: dict[str, PlotSeriesSpec] = {}
+        self._selected_plot_series: dict[str, list[str]] = {}
         self._view_mode = view_mode
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """Create the widget UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
         self._apply_background_color(self, PLOT_SURFACE_COLOR)
+
+        self.series_controls = QWidget(self)
+        self._apply_background_color(self.series_controls, PLOT_SURFACE_COLOR)
+        self.series_controls.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.series_controls.hide()
+        self._controls_layout = QHBoxLayout(self.series_controls)
+        self._controls_layout.setContentsMargins(0, 0, 0, 0)
+        self._controls_layout.setSpacing(8)
+        self.series_label = QLabel("Plot Series")
+        self.series_button = QToolButton(self.series_controls)
+        self.series_button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.series_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.series_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.series_button.setText("Select series")
+        self.series_menu = QMenu(self.series_button)
+        self.series_button.setMenu(self.series_menu)
+        self._controls_layout.addWidget(self.series_label)
+        self._controls_layout.addWidget(self.series_button)
+        self._controls_layout.addStretch()
+        self._layout.addWidget(self.series_controls, 0, Qt.AlignmentFlag.AlignTop)
 
         # Import matplotlib with Qt backend
         try:
@@ -1569,7 +1675,9 @@ class ResultsPlotWidget(QWidget):
             self._apply_figure_theme()
             self.canvas = FigureCanvasQTAgg(self.figure)
             self._apply_background_color(self.canvas, PLOT_SURFACE_COLOR)
-            layout.addWidget(self.canvas)
+            self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.canvas.setMinimumSize(0, 0)
+            self._layout.addWidget(self.canvas, 1)
 
             self._matplotlib_available = True
 
@@ -1581,15 +1689,29 @@ class ResultsPlotWidget(QWidget):
                 "Install with: pip install matplotlib"
             )
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(placeholder)
+            self._layout.addWidget(placeholder, 1)
 
         # Export button
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        self._btn_layout = QHBoxLayout()
+        self._btn_layout.setContentsMargins(0, 0, 0, 0)
+        self._btn_layout.setSpacing(8)
+        self._btn_layout.addStretch()
         self.export_btn = QPushButton("Export Plot")
         self.export_btn.clicked.connect(self._export_plot)
-        btn_layout.addWidget(self.export_btn)
-        layout.addLayout(btn_layout)
+        self._btn_layout.addWidget(self.export_btn)
+        self._layout.addLayout(self._btn_layout)
+
+    def apply_ui_scale(self, ui_scale: float) -> None:
+        """Keep the plot surface spacing aligned with the app shell zoom."""
+        self._layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._controls_layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        self._btn_layout.setSpacing(scale_metric(8, ui_scale, reference_scale=DEFAULT_UI_SCALE))
+        if self._matplotlib_available:
+            self._sync_figure_size()
+            if self._current_result is not None:
+                self._refresh_plot()
+            else:
+                self.canvas.draw_idle()
 
     @staticmethod
     def _apply_background_color(widget: QWidget, color: str) -> None:
@@ -1641,10 +1763,32 @@ class ResultsPlotWidget(QWidget):
     def clear(self) -> None:
         """Clear the plot."""
         self._current_result = None
+        self._current_plot_kind = None
+        self._plot_series_specs = {}
+        self.series_controls.hide()
         if self._matplotlib_available:
             self.figure.clear()
             self._apply_figure_theme()
             self.canvas.draw()
+
+    def _sync_figure_size(self) -> None:
+        """Match the Matplotlib figure size to the live Qt canvas size."""
+        if not self._matplotlib_available:
+            return
+        width = max(self.canvas.width(), 1)
+        height = max(self.canvas.height(), 1)
+        dpi = max(float(self.figure.get_dpi()), 1.0)
+        self.figure.set_size_inches(width / dpi, height / dpi, forward=False)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self._matplotlib_available:
+            return
+        self._sync_figure_size()
+        if self._current_result is not None:
+            self._refresh_plot()
+        else:
+            self.canvas.draw_idle()
 
     def display_result(self, result: RunResult) -> None:
         """Display a calculation result as a plot.
@@ -1656,8 +1800,18 @@ class ResultsPlotWidget(QWidget):
             return
 
         self._current_result = result
+        self._configure_plot_series_selector(result)
+        self._refresh_plot()
+
+    def _refresh_plot(self) -> None:
+        """Redraw the plot for the current result and series selection."""
+        if not self._matplotlib_available or self._current_result is None:
+            return
+
+        self._sync_figure_size()
         self.figure.clear()
         self._apply_figure_theme()
+        result = self._current_result
 
         if self._view_mode == "phase_envelope_only":
             if result.phase_envelope_result:
@@ -1666,7 +1820,8 @@ class ResultsPlotWidget(QWidget):
                 calc_label = _format_calculation_type_label(result.config.calculation_type)
                 self._plot_placeholder(
                     "Phase envelope view is only populated by phase-envelope runs.\n"
-                    f"Latest result type: {calc_label}."
+                    f"Latest result type: {calc_label}.",
+                    title="Phase Envelope",
                 )
         elif result.pt_flash_result:
             self._plot_pt_flash(result.pt_flash_result)
@@ -1688,6 +1843,99 @@ class ResultsPlotWidget(QWidget):
             self._plot_separator(result.separator_result)
 
         self.canvas.draw()
+
+    def _configure_plot_series_selector(self, result: RunResult) -> None:
+        """Expose checkable plot-series options for pressure-driven experiment plots."""
+        if self._view_mode == "phase_envelope_only":
+            self._current_plot_kind = None
+            self._plot_series_specs = {}
+            self.series_menu.clear()
+            self.series_button.setText("Select series")
+            self.series_controls.hide()
+            return
+
+        if result.cce_result is not None:
+            plot_kind = "cce"
+            specs = self._cce_plot_series_specs(result.cce_result)
+        elif result.dl_result is not None:
+            plot_kind = "dl"
+            specs = self._dl_plot_series_specs(result.dl_result)
+        elif result.cvd_result is not None:
+            plot_kind = "cvd"
+            specs = self._cvd_plot_series_specs(result.cvd_result)
+        elif result.separator_result is not None:
+            plot_kind = "separator"
+            specs = self._separator_plot_series_specs(result.separator_result)
+        else:
+            self._current_plot_kind = None
+            self._plot_series_specs = {}
+            self.series_menu.clear()
+            self.series_button.setText("Select series")
+            self.series_controls.hide()
+            return
+
+        self._current_plot_kind = plot_kind
+        self._plot_series_specs = specs
+        self.series_menu.clear()
+
+        selected = [
+            key
+            for key in self._selected_plot_series.get(plot_kind, [])
+            if key in specs
+        ]
+        if not selected:
+            selected = [
+                key
+                for key, spec in specs.items()
+                if spec.default_selected
+            ]
+        if not selected and specs:
+            selected = [next(iter(specs))]
+        self._selected_plot_series[plot_kind] = selected
+
+        for key, spec in specs.items():
+            action = QAction(spec.label, self.series_menu)
+            action.setCheckable(True)
+            action.setChecked(key in selected)
+            action.toggled.connect(
+                lambda checked, *, series_key=key: self._on_plot_series_toggled(series_key, checked)
+            )
+            self.series_menu.addAction(action)
+
+        self._update_plot_series_button_text()
+        self.series_controls.show()
+
+    def _on_plot_series_toggled(self, series_key: str, checked: bool) -> None:
+        """Track plot-series selection and redraw the active plot."""
+        if self._current_plot_kind is None:
+            return
+        selected = list(self._selected_plot_series.get(self._current_plot_kind, []))
+        if checked:
+            if series_key not in selected:
+                selected.append(series_key)
+        else:
+            selected = [key for key in selected if key != series_key]
+        self._selected_plot_series[self._current_plot_kind] = selected
+        self._update_plot_series_button_text()
+        self._refresh_plot()
+
+    def _update_plot_series_button_text(self) -> None:
+        """Keep the selector caption aligned with the active checked series."""
+        if self._current_plot_kind is None:
+            self.series_button.setText("Select series")
+            return
+        specs = self._plot_series_specs
+        labels = [
+            specs[key].label
+            for key in self._selected_plot_series.get(self._current_plot_kind, [])
+            if key in specs
+        ]
+        if not labels:
+            self.series_button.setText("Select series")
+        elif len(labels) <= 2:
+            self.series_button.setText(", ".join(labels))
+        else:
+            self.series_button.setText(f"{len(labels)} selected")
 
     def _saturation_pressure_unit(self) -> PressureUnit:
         """Return the preferred saturation pressure unit."""
@@ -1719,7 +1967,7 @@ class ResultsPlotWidget(QWidget):
             return PressureUnit.BAR, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
 
-    def _plot_placeholder(self, message: str) -> None:
+    def _plot_placeholder(self, message: str, *, title: str = "Plot") -> None:
         """Render a neutral placeholder instead of a misleading plot."""
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(PLOT_CANVAS_COLOR)
@@ -1738,9 +1986,498 @@ class ResultsPlotWidget(QWidget):
             wrap=True,
             transform=ax.transAxes,
         )
-        ax.set_title("Phase Envelope")
+        ax.set_title(title)
         self._apply_axes_theme(ax)
         self.figure.tight_layout()
+
+    def _current_series_specs(self) -> list[PlotSeriesSpec]:
+        """Return the checked plot-series specs in stable definition order."""
+        if self._current_plot_kind is None:
+            return []
+        selected = set(self._selected_plot_series.get(self._current_plot_kind, []))
+        return [
+            spec
+            for key, spec in self._plot_series_specs.items()
+            if key in selected
+        ]
+
+    @staticmethod
+    def _series_value_range(values: list[Optional[float]]) -> Optional[tuple[float, float]]:
+        finite_values = [
+            float(value)
+            for value in values
+            if value is not None and math.isfinite(float(value))
+        ]
+        if not finite_values:
+            return None
+        return min(finite_values), max(finite_values)
+
+    def _series_are_compatible_for_overlay(
+        self,
+        cluster: list[PlotSeriesSpec],
+        candidate: PlotSeriesSpec,
+    ) -> bool:
+        """Return whether two pressure-series remain visually comparable on one axis."""
+        if candidate.force_overlay or any(spec.force_overlay for spec in cluster):
+            return True
+
+        cluster_range = self._series_value_range(
+            [value for spec in cluster for value in spec.values]
+        )
+        candidate_range = self._series_value_range(candidate.values)
+        if cluster_range is None or candidate_range is None:
+            return False
+
+        cluster_min, cluster_max = cluster_range
+        candidate_min, candidate_max = candidate_range
+        cluster_span = cluster_max - cluster_min
+        candidate_span = candidate_max - candidate_min
+        cluster_scale = max(abs(cluster_min), abs(cluster_max), cluster_span)
+        candidate_scale = max(abs(candidate_min), abs(candidate_max), candidate_span)
+        tiny = 1.0e-12
+
+        if cluster_scale <= tiny or candidate_scale <= tiny:
+            return cluster_scale <= tiny and candidate_scale <= tiny
+
+        magnitude_ratio = max(cluster_scale, candidate_scale) / max(
+            min(cluster_scale, candidate_scale),
+            tiny,
+        )
+        if magnitude_ratio > 8.0:
+            return False
+
+        if cluster_span <= tiny or candidate_span <= tiny:
+            return True
+
+        span_ratio = max(cluster_span, candidate_span) / max(
+            min(cluster_span, candidate_span),
+            tiny,
+        )
+        return span_ratio <= 12.0 or magnitude_ratio <= 3.0
+
+    def _cluster_selected_series(self, specs: list[PlotSeriesSpec]) -> list[list[PlotSeriesSpec]]:
+        """Partition checked series into visually compatible subplot clusters."""
+        clusters: list[list[PlotSeriesSpec]] = []
+        groups: dict[str, list[PlotSeriesSpec]] = {}
+        group_order: list[str] = []
+
+        for spec in specs:
+            if spec.overlay_group not in groups:
+                groups[spec.overlay_group] = []
+                group_order.append(spec.overlay_group)
+            groups[spec.overlay_group].append(spec)
+
+        for group in group_order:
+            for spec in groups[group]:
+                placed = False
+                for cluster in clusters:
+                    if cluster[0].overlay_group != group:
+                        continue
+                    if self._series_are_compatible_for_overlay(cluster, spec):
+                        cluster.append(spec)
+                        placed = True
+                        break
+                if not placed:
+                    clusters.append([spec])
+        return clusters
+
+    @staticmethod
+    def _cluster_axis_label(cluster: list[PlotSeriesSpec]) -> str:
+        if not cluster:
+            return ""
+        if len(cluster) == 1:
+            return cluster[0].axis_label
+        first_label = cluster[0].axis_label
+        if all(spec.axis_label == first_label for spec in cluster):
+            return first_label
+        return cluster[0].axis_label
+
+    @staticmethod
+    def _finite_pressure_series(
+        pressures: list[float],
+        values: list[Optional[float]],
+    ) -> tuple[list[float], list[float]]:
+        """Filter a pressure series down to finite numeric values only."""
+        xs: list[float] = []
+        ys: list[float] = []
+        for pressure, value in zip(pressures, values, strict=True):
+            if value is None:
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                continue
+            xs.append(pressure)
+            ys.append(numeric)
+        return xs, ys
+
+    def _cce_plot_series_specs(self, result: CCEResult) -> dict[str, PlotSeriesSpec]:
+        """Return the available selectable CCE series."""
+        return {
+            "liquid_density": PlotSeriesSpec(
+                key="liquid_density",
+                label="Liquid Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[step.liquid_density_kg_per_m3 for step in result.steps],
+                color="#2563eb",
+                default_selected=True,
+            ),
+            "vapor_density": PlotSeriesSpec(
+                key="vapor_density",
+                label="Vapor Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[step.vapor_density_kg_per_m3 for step in result.steps],
+                color="#dc2626",
+                default_selected=True,
+                marker="s",
+            ),
+            "relative_volume": PlotSeriesSpec(
+                key="relative_volume",
+                label="Relative Volume",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="relative_volume",
+                values=[step.relative_volume for step in result.steps],
+                color="#f59e0b",
+                default_selected=True,
+                linestyle="--",
+            ),
+            "liquid_fraction": PlotSeriesSpec(
+                key="liquid_fraction",
+                label="Liquid Fraction",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="fraction",
+                values=[step.liquid_fraction for step in result.steps],
+                color="#10b981",
+                force_overlay=True,
+                preferred_ylim=(0.0, 1.0),
+            ),
+            "vapor_fraction": PlotSeriesSpec(
+                key="vapor_fraction",
+                label="Vapor Fraction",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="fraction",
+                values=[step.vapor_fraction for step in result.steps],
+                color="#ef4444",
+                force_overlay=True,
+                preferred_ylim=(0.0, 1.0),
+            ),
+            "z_factor": PlotSeriesSpec(
+                key="z_factor",
+                label="Z-factor",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="z_factor",
+                values=[step.z_factor for step in result.steps],
+                color="#8b5cf6",
+                marker="d",
+            ),
+        }
+
+    def _dl_plot_series_specs(self, result: DLResult) -> dict[str, PlotSeriesSpec]:
+        """Return the available selectable DL series."""
+        return {
+            "rsd": PlotSeriesSpec(
+                key="rsd",
+                label="RsD",
+                axis_group="gor",
+                axis_label="Solution GOR",
+                overlay_group="solution_gor",
+                values=[step.rs for step in result.steps],
+                color="#22c55e",
+                default_selected=True,
+            ),
+            "rsdi": PlotSeriesSpec(
+                key="rsdi",
+                label="RsDi",
+                axis_group="gor",
+                axis_label="Solution GOR",
+                overlay_group="solution_gor",
+                values=[result.rsi for _ in result.steps],
+                color="#86efac",
+                linestyle=":",
+            ),
+            "bo": PlotSeriesSpec(
+                key="bo",
+                label="Bo",
+                axis_group="fvf",
+                axis_label="Formation Volume Factor",
+                overlay_group="liquid_fvf",
+                values=[step.bo for step in result.steps],
+                color="#eab308",
+                default_selected=True,
+            ),
+            "bg": PlotSeriesSpec(
+                key="bg",
+                label="Bg",
+                axis_group="fvf",
+                axis_label="Formation Volume Factor",
+                overlay_group="gas_fvf",
+                values=[step.bg for step in result.steps],
+                color="#38bdf8",
+                marker="s",
+            ),
+            "btd": PlotSeriesSpec(
+                key="btd",
+                label="BtD",
+                axis_group="fvf",
+                axis_label="Formation Volume Factor",
+                overlay_group="liquid_fvf",
+                values=[step.bt for step in result.steps],
+                color="#f472b6",
+                default_selected=True,
+                linestyle="--",
+            ),
+        }
+
+    def _cvd_plot_series_specs(self, result: CVDResult) -> dict[str, PlotSeriesSpec]:
+        """Return the available selectable CVD series."""
+        return {
+            "liquid_dropout": PlotSeriesSpec(
+                key="liquid_dropout",
+                label="Liquid Dropout",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="liquid_dropout",
+                values=[step.liquid_dropout for step in result.steps],
+                color="#06b6d4",
+                default_selected=True,
+            ),
+            "gas_produced": PlotSeriesSpec(
+                key="gas_produced",
+                label="Gas Produced",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="gas_release",
+                values=[step.gas_produced for step in result.steps],
+                color="#f97316",
+            ),
+            "cumulative_gas_produced": PlotSeriesSpec(
+                key="cumulative_gas_produced",
+                label="Cumulative Gas",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="gas_release",
+                values=[step.cumulative_gas_produced for step in result.steps],
+                color="#22c55e",
+                default_selected=True,
+                linestyle="--",
+            ),
+            "moles_remaining": PlotSeriesSpec(
+                key="moles_remaining",
+                label="Moles Remaining",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="inventory",
+                values=[step.moles_remaining for step in result.steps],
+                color="#a3e635",
+            ),
+            "z_two_phase": PlotSeriesSpec(
+                key="z_two_phase",
+                label="Z-factor",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="z_factor",
+                values=[step.z_two_phase for step in result.steps],
+                color="#8b5cf6",
+                default_selected=True,
+                marker="d",
+            ),
+            "liquid_density": PlotSeriesSpec(
+                key="liquid_density",
+                label="Liquid Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[step.liquid_density_kg_per_m3 for step in result.steps],
+                color="#2563eb",
+            ),
+            "vapor_density": PlotSeriesSpec(
+                key="vapor_density",
+                label="Vapor Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[step.vapor_density_kg_per_m3 for step in result.steps],
+                color="#dc2626",
+                marker="s",
+            ),
+        }
+
+    def _separator_plot_series_specs(self, result: SeparatorResult) -> dict[str, PlotSeriesSpec]:
+        """Return the available selectable separator-trend series."""
+        return {
+            "vapor_fraction": PlotSeriesSpec(
+                key="vapor_fraction",
+                label="Vapor Fraction",
+                axis_group="fraction",
+                axis_label="Fraction",
+                overlay_group="fraction",
+                values=[stage.vapor_fraction for stage in result.stages],
+                color="#f59e0b",
+                default_selected=True,
+                force_overlay=True,
+                preferred_ylim=(0.0, 1.0),
+            ),
+            "liquid_moles": PlotSeriesSpec(
+                key="liquid_moles",
+                label="Liquid Moles",
+                axis_group="moles",
+                axis_label="Moles",
+                overlay_group="moles",
+                values=[stage.liquid_moles for stage in result.stages],
+                color="#22c55e",
+                default_selected=True,
+            ),
+            "vapor_moles": PlotSeriesSpec(
+                key="vapor_moles",
+                label="Vapor Moles",
+                axis_group="moles",
+                axis_label="Moles",
+                overlay_group="moles",
+                values=[stage.vapor_moles for stage in result.stages],
+                color="#ef4444",
+                default_selected=True,
+                linestyle="--",
+            ),
+            "liquid_density": PlotSeriesSpec(
+                key="liquid_density",
+                label="Liquid Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[stage.liquid_density_kg_per_m3 for stage in result.stages],
+                color="#2563eb",
+            ),
+            "vapor_density": PlotSeriesSpec(
+                key="vapor_density",
+                label="Vapor Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[stage.vapor_density_kg_per_m3 for stage in result.stages],
+                color="#dc2626",
+                marker="s",
+            ),
+            "liquid_z": PlotSeriesSpec(
+                key="liquid_z",
+                label="ZL",
+                axis_group="z",
+                axis_label="Z-factor",
+                overlay_group="z_factor",
+                values=[stage.liquid_z_factor for stage in result.stages],
+                color="#0ea5e9",
+                marker="d",
+            ),
+            "vapor_z": PlotSeriesSpec(
+                key="vapor_z",
+                label="ZV",
+                axis_group="z",
+                axis_label="Z-factor",
+                overlay_group="z_factor",
+                values=[stage.vapor_z_factor for stage in result.stages],
+                color="#a855f7",
+                marker="^",
+            ),
+        }
+
+    def _plot_selected_pressure_series(
+        self,
+        *,
+        pressures: list[float],
+        specs: list[PlotSeriesSpec],
+        pressure_unit: PressureUnit,
+        title: str,
+        reference_pressure: Optional[float] = None,
+        reference_label: Optional[str] = None,
+    ) -> None:
+        """Plot selected experiment series using separate subplots for incompatible scales."""
+        if not specs:
+            self._plot_placeholder("Select at least one series to display.", title=title)
+            return
+
+        clusters = self._cluster_selected_series(specs)
+        axes: list[object] = []
+        for index in range(len(clusters)):
+            share_axis = axes[0] if axes else None
+            axis = self.figure.add_subplot(len(clusters), 1, index + 1, sharex=share_axis)
+            axis.set_facecolor(PLOT_CANVAS_COLOR)
+            axes.append(axis)
+
+        plotted_any = False
+        for index, (axis, cluster) in enumerate(zip(axes, clusters, strict=True)):
+            cluster_plotted = False
+            for spec in cluster:
+                xs, ys = self._finite_pressure_series(pressures, spec.values)
+                if not xs:
+                    continue
+                axis.plot(
+                    xs,
+                    ys,
+                    color=spec.color,
+                    marker=spec.marker,
+                    linestyle=spec.linestyle,
+                    linewidth=spec.linewidth,
+                    markersize=spec.markersize,
+                    label=spec.label,
+                )
+                cluster_plotted = True
+                plotted_any = True
+
+            if reference_pressure is not None and reference_label:
+                axis.axvline(
+                    reference_pressure,
+                    color="#ef4444",
+                    linestyle="--",
+                    linewidth=1.5,
+                    label=reference_label if index == 0 else "_nolegend_",
+                )
+
+            if not cluster_plotted and reference_pressure is None:
+                axis.text(
+                    0.5,
+                    0.5,
+                    "No finite data is available for the selected series.",
+                    color=PLOT_TEXT_COLOR,
+                    ha="center",
+                    va="center",
+                    wrap=True,
+                    transform=axis.transAxes,
+                )
+
+            preferred_ylim = next(
+                (spec.preferred_ylim for spec in cluster if spec.preferred_ylim is not None),
+                None,
+            )
+            if preferred_ylim is not None:
+                axis.set_ylim(*preferred_ylim)
+            axis.set_ylabel(self._cluster_axis_label(cluster))
+            axis.set_xlabel(f"Pressure ({pressure_unit.value})")
+            axis.invert_xaxis()
+            if index == 0:
+                axis.set_title(title)
+            self._apply_axes_theme(axis)
+
+            handles, labels = axis.get_legend_handles_labels()
+            if handles:
+                axis.legend(handles, labels, loc="best")
+                self._apply_axes_theme(axis)
+
+        if not plotted_any and reference_pressure is None:
+            self.figure.clear()
+            self._apply_figure_theme()
+            self._plot_placeholder("No finite data is available for the selected series.", title=title)
+            return
+
+        if len(axes) > 1:
+            self.figure.subplots_adjust(left=0.12, right=0.97, top=0.93, bottom=0.09, hspace=0.34)
+        else:
+            self.figure.tight_layout()
 
     def _plot_pt_flash(self, result: PTFlashResult) -> None:
         """Plot PT flash results (composition bar chart)."""
@@ -1929,169 +2666,61 @@ class ResultsPlotWidget(QWidget):
         self._plot_saturation_result(result, title="Dew Point")
 
     def _plot_cce(self, result: CCEResult) -> None:
-        """Plot CCE density trends against pressure."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        """Plot the selected CCE pressure-series."""
         pressure_unit, temperature_unit = self._cce_plot_units()
-
         pressures = [pressure_from_pa(s.pressure_pa, pressure_unit) for s in result.steps]
-        liquid_pressures = [
-            pressure
-            for pressure, step in zip(pressures, result.steps, strict=True)
-            if step.liquid_density_kg_per_m3 is not None and step.liquid_density_kg_per_m3 > 0
-        ]
-        liquid_densities = [
-            step.liquid_density_kg_per_m3
-            for step in result.steps
-            if step.liquid_density_kg_per_m3 is not None and step.liquid_density_kg_per_m3 > 0
-        ]
-        vapor_pressures = [
-            pressure
-            for pressure, step in zip(pressures, result.steps, strict=True)
-            if step.vapor_density_kg_per_m3 is not None and step.vapor_density_kg_per_m3 > 0
-        ]
-        vapor_densities = [
-            step.vapor_density_kg_per_m3
-            for step in result.steps
-            if step.vapor_density_kg_per_m3 is not None and step.vapor_density_kg_per_m3 > 0
-        ]
-
-        if liquid_pressures:
-            ax.plot(
-                liquid_pressures,
-                liquid_densities,
-                color="#2563eb",
-                marker="o",
-                linewidth=2,
-                markersize=4,
-                label="Liquid Density",
-            )
-        if vapor_pressures:
-            ax.plot(
-                vapor_pressures,
-                vapor_densities,
-                color="#dc2626",
-                marker="s",
-                linewidth=2,
-                markersize=4,
-                label="Vapor Density",
-            )
-
-        # Mark saturation pressure
-        if result.saturation_pressure_pa:
-            saturation_pressure = pressure_from_pa(result.saturation_pressure_pa, pressure_unit)
-            ax.axvline(
-                saturation_pressure,
-                color='r', linestyle='--', linewidth=1.5,
-                label=f"Psat = {pressure_from_pa(result.saturation_pressure_pa, pressure_unit):.2f} {pressure_unit.value}"
-            )
-        if liquid_pressures or vapor_pressures or result.saturation_pressure_pa:
-            ax.legend()
-
-        ax.set_xlabel(f"Pressure ({pressure_unit.value})")
-        ax.set_ylabel('Density (kg/m³)')
-        ax.set_title(f"CCE Density at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}")
-        ax.invert_xaxis()  # Pressure decreases during CCE
-        self._apply_axes_theme(ax)
-
-        self.figure.tight_layout()
+        self._plot_selected_pressure_series(
+            pressures=pressures,
+            specs=self._current_series_specs(),
+            pressure_unit=pressure_unit,
+            title=f"CCE Trends at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}",
+            reference_pressure=(
+                None
+                if result.saturation_pressure_pa is None
+                else pressure_from_pa(result.saturation_pressure_pa, pressure_unit)
+            ),
+            reference_label=(
+                None
+                if result.saturation_pressure_pa is None
+                else f"Psat = {pressure_from_pa(result.saturation_pressure_pa, pressure_unit):.2f} {pressure_unit.value}"
+            ),
+        )
 
     def _plot_dl(self, result: DLResult) -> None:
-        """Plot DL pressure trends."""
-        ax_rs = self.figure.add_subplot(211)
-        ax_fvf = self.figure.add_subplot(212)
-        ax_rs.set_facecolor(PLOT_CANVAS_COLOR)
-        ax_fvf.set_facecolor(PLOT_CANVAS_COLOR)
+        """Plot the selected DL pressure-series."""
         pressure_unit, temperature_unit = self._dl_plot_units()
-
         pressures = [pressure_from_pa(s.pressure_pa, pressure_unit) for s in result.steps]
-        rs = [s.rs for s in result.steps]
-        bo = [s.bo for s in result.steps]
-        bt = [s.bt for s in result.steps]
-
-        ax_rs.plot(pressures, rs, "g-o", linewidth=2, markersize=4, label="Rs")
-        ax_rs.set_xlabel(f"Pressure ({pressure_unit.value})")
-        ax_rs.set_ylabel("Rs")
-        ax_rs.set_title(
-            f"Differential Liberation at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+        self._plot_selected_pressure_series(
+            pressures=pressures,
+            specs=self._current_series_specs(),
+            pressure_unit=pressure_unit,
+            title=(
+                f"Differential Liberation at "
+                f"{_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+            ),
         )
-        ax_rs.invert_xaxis()
-        ax_rs.legend()
-        self._apply_axes_theme(ax_rs)
-
-        ax_fvf.plot(pressures, bo, "y-o", linewidth=2, markersize=4, label="Bo")
-        ax_fvf.plot(pressures, bt, "m--o", linewidth=1.5, markersize=3, label="Bt")
-        ax_fvf.set_xlabel(f"Pressure ({pressure_unit.value})")
-        ax_fvf.set_ylabel("Formation Volume Factor")
-        ax_fvf.invert_xaxis()
-        ax_fvf.legend()
-        self._apply_axes_theme(ax_fvf)
-
-        self.figure.tight_layout()
 
     def _plot_cvd(self, result: CVDResult) -> None:
-        """Plot CVD liquid dropout versus pressure."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor(PLOT_CANVAS_COLOR)
-
+        """Plot the selected CVD pressure-series."""
         pressures = [s.pressure_pa / 1e5 for s in result.steps]
-        liquid_dropout = [s.liquid_dropout for s in result.steps]
-
-        ax.plot(pressures, liquid_dropout, 'c-o', linewidth=2, markersize=4, label='Liquid Dropout')
-        ax.set_xlabel('Pressure (bar)')
-        ax.set_ylabel('Liquid Dropout')
-        ax.set_title(f'CVD at {result.temperature_k - 273.15:.1f} C')
-        ax.invert_xaxis()
-        ax.legend()
-        self._apply_axes_theme(ax)
-
-        self.figure.tight_layout()
+        self._plot_selected_pressure_series(
+            pressures=pressures,
+            specs=self._current_series_specs(),
+            pressure_unit=PressureUnit.BAR,
+            title=f"CVD Trends at {result.temperature_k - 273.15:.1f} {_format_temperature_unit(TemperatureUnit.C)}",
+            reference_pressure=result.dew_pressure_pa / 1e5,
+            reference_label=f"Pd = {result.dew_pressure_pa / 1e5:.2f} bar",
+        )
 
     def _plot_separator(self, result: SeparatorResult) -> None:
-        """Plot separator stage pressure and vapor fraction."""
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor(PLOT_CANVAS_COLOR)
-        ax2 = ax.twinx()
-        ax2.set_facecolor(PLOT_CANVAS_COLOR)
-
-        labels = [
-            stage.stage_name or f"Stage {stage.stage_number}"
-            for stage in result.stages
-        ]
-        x = list(range(len(result.stages)))
+        """Plot the selected separator stage series against stage pressure."""
         pressures = [stage.pressure_pa / 1e5 for stage in result.stages]
-
-        ax.plot(x, pressures, "b-o", linewidth=2, markersize=4, label="Pressure (bar)")
-        ax.set_xlabel("Stage")
-        ax.set_ylabel("Pressure (bar)")
-        ax.set_title("Separator Train")
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=30, ha="right")
-
-        vapor_fraction = [
-            0.0 if stage.vapor_fraction is None else stage.vapor_fraction
-            for stage in result.stages
-        ]
-        if any(stage.vapor_fraction is not None for stage in result.stages):
-            ax2.bar(x, vapor_fraction, alpha=0.35, color="orange", label="Vapor Fraction")
-            ax2.set_ylabel("Vapor Fraction")
-        else:
-            ax2.set_ylabel("")
-
-        self._apply_axes_theme(ax)
-        self._apply_axes_theme(ax2)
-        ax2.grid(False)
-
-        handles1, labels1 = ax.get_legend_handles_labels()
-        handles2, labels2 = ax2.get_legend_handles_labels()
-        if handles1 or handles2:
-            legend = ax.legend(handles1 + handles2, labels1 + labels2, loc="best")
-            legend.get_frame().set_facecolor(PLOT_LEGEND_FACE_COLOR)
-            legend.get_frame().set_edgecolor(PLOT_GRID_COLOR)
-            for text in legend.get_texts():
-                text.set_color(PLOT_TEXT_COLOR)
-
-        self.figure.tight_layout()
+        self._plot_selected_pressure_series(
+            pressures=pressures,
+            specs=self._current_series_specs(),
+            pressure_unit=PressureUnit.BAR,
+            title="Separator Trends",
+        )
 
     def _export_plot(self) -> None:
         """Export current plot to file."""

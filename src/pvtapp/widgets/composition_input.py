@@ -348,8 +348,11 @@ class CompositionInputWidget(QWidget):
         self.heavy_tabs.setObjectName("HeavyFractionTabs")
         self.heavy_tabs.setUsesScrollButtons(False)
         self.heavy_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.heavy_tabs.setDocumentMode(True)
         self.heavy_tabs.tabBar().setExpanding(True)
         self.heavy_tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
+        self.heavy_tabs.tabBar().setObjectName("HeavyFractionTabBar")
+        self.heavy_tabs.tabBar().setDrawBase(False)
         self.heavy_tabs.addTab(QWidget(), "None")
 
         plus_page = QWidget()

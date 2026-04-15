@@ -356,16 +356,21 @@ class TextOutputWidget(QWidget):
             lines.append("-----------------------")
             lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
             lines.append(f"Pb = {_format_pressure(r.bubble_pressure_pa, pressure_unit)}")
-            lines.append(f"Rsi = {r.rsi:.5f}")
+            lines.append(f"RsDi = {r.rsi:.5f}")
             lines.append(f"Boi = {r.boi:.5f}")
             lines.append(f"Converged: {r.converged}")
             lines.append("")
-            lines.append(f"P ({pressure_unit.value})         Rs         Bo         Bt     VaporFrac")
+            lines.append(
+                f"P ({pressure_unit.value})        RsD       RsDi         Bo         Bg        BtD     VaporFrac"
+            )
             for step in r.steps[:80]:
+                bg_txt = "-" if step.bg is None else f"{step.bg:.5f}"
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
                     f"{step.rs:>10.5f} "
+                    f"{r.rsi:>10.5f} "
                     f"{step.bo:>10.5f} "
+                    f"{bg_txt:>10s} "
                     f"{step.bt:>10.5f} "
                     f"{step.vapor_fraction:>12.5f}"
                 )
@@ -381,14 +386,28 @@ class TextOutputWidget(QWidget):
             lines.append(f"Pd = {_pa_to_bar(r.dew_pressure_pa):.5f} bar")
             lines.append(f"Initial Z = {r.initial_z:.5f}")
             lines.append("")
-            lines.append("P (bar)     Liquid Dropout   Cum. Gas     Z")
+            lines.append("P (bar)     Liquid Dropout   Gas Prod.   Cum. Gas     Z      rhoL      rhoV")
             for step in r.steps[:80]:
                 z_two_phase = "" if step.z_two_phase is None else f"{step.z_two_phase:.5f}"
+                gas_produced = "" if step.gas_produced is None else f"{step.gas_produced:.5f}"
+                liquid_density = (
+                    ""
+                    if step.liquid_density_kg_per_m3 is None or step.liquid_density_kg_per_m3 <= 0
+                    else f"{step.liquid_density_kg_per_m3:.2f}"
+                )
+                vapor_density = (
+                    ""
+                    if step.vapor_density_kg_per_m3 is None or step.vapor_density_kg_per_m3 <= 0
+                    else f"{step.vapor_density_kg_per_m3:.2f}"
+                )
                 lines.append(
                     f"{_pa_to_bar(step.pressure_pa):>10.5f} "
                     f"{step.liquid_dropout:>16.5f} "
+                    f"{gas_produced:>11s} "
                     f"{step.cumulative_gas_produced:>10.5f} "
-                    f"{z_two_phase:>8s}"
+                    f"{z_two_phase:>8s} "
+                    f"{liquid_density:>9s} "
+                    f"{vapor_density:>9s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
@@ -406,18 +425,36 @@ class TextOutputWidget(QWidget):
             lines.append(f"API = {r.api_gravity:.3f}")
             lines.append(f"Stock-tank oil density = {r.stock_tank_oil_density:.5f}")
             lines.append("")
-            lines.append("Stage         P (bar)      T (K)    VaporFrac   LiquidMol    VaporMol")
+            lines.append(
+                "Stage         P (bar)      T (K)    VaporFrac   LiquidMol    VaporMol      rhoL      rhoV       ZL       ZV"
+            )
             for stage in r.stages[:80]:
                 vapor_fraction = "" if stage.vapor_fraction is None else f"{stage.vapor_fraction:.5f}"
                 liquid_moles = "" if stage.liquid_moles is None else f"{stage.liquid_moles:.5f}"
                 vapor_moles = "" if stage.vapor_moles is None else f"{stage.vapor_moles:.5f}"
+                liquid_density = (
+                    ""
+                    if stage.liquid_density_kg_per_m3 is None or stage.liquid_density_kg_per_m3 <= 0
+                    else f"{stage.liquid_density_kg_per_m3:.2f}"
+                )
+                vapor_density = (
+                    ""
+                    if stage.vapor_density_kg_per_m3 is None or stage.vapor_density_kg_per_m3 <= 0
+                    else f"{stage.vapor_density_kg_per_m3:.2f}"
+                )
+                liquid_z = "" if stage.liquid_z_factor is None else f"{stage.liquid_z_factor:.5f}"
+                vapor_z = "" if stage.vapor_z_factor is None else f"{stage.vapor_z_factor:.5f}"
                 lines.append(
                     f"{stage.stage_name[:12]:<12s} "
                     f"{_pa_to_bar(stage.pressure_pa):>10.5f} "
                     f"{stage.temperature_k:>10.3f} "
                     f"{vapor_fraction:>11s} "
                     f"{liquid_moles:>11s} "
-                    f"{vapor_moles:>11s}"
+                    f"{vapor_moles:>11s} "
+                    f"{liquid_density:>9s} "
+                    f"{vapor_density:>9s} "
+                    f"{liquid_z:>8s} "
+                    f"{vapor_z:>8s}"
                 )
             if len(r.stages) > 80:
                 lines.append(f"... ({len(r.stages) - 80} more)")

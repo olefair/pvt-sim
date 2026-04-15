@@ -1034,28 +1034,69 @@ class PVTSimulatorWindow(QMainWindow):
                             step.z_factor,
                         ])
                 elif result.dl_result:
-                    writer.writerow(["Pressure_bar", "Rs", "Bo", "Bt", "VaporFraction", "LiquidMolesRemaining"])
+                    writer.writerow(
+                        [
+                            "Pressure_bar",
+                            "RsD",
+                            "RsDi",
+                            "Bo",
+                            "Bg",
+                            "BtD",
+                            "VaporFraction",
+                            "LiquidMolesRemaining",
+                        ]
+                    )
                     for step in result.dl_result.steps:
                         writer.writerow([
                             step.pressure_pa / 1e5,
                             step.rs,
+                            result.dl_result.rsi,
                             step.bo,
+                            step.bg,
                             step.bt,
                             step.vapor_fraction,
                             step.liquid_moles_remaining,
                         ])
                 elif result.cvd_result:
-                    writer.writerow(["Pressure_bar", "LiquidDropout", "CumulativeGasProduced", "MolesRemaining", "ZTwoPhase"])
+                    writer.writerow(
+                        [
+                            "Pressure_bar",
+                            "LiquidDropout",
+                            "GasProduced",
+                            "CumulativeGasProduced",
+                            "MolesRemaining",
+                            "ZTwoPhase",
+                            "LiquidDensity_kg_m3",
+                            "VaporDensity_kg_m3",
+                        ]
+                    )
                     for step in result.cvd_result.steps:
                         writer.writerow([
                             step.pressure_pa / 1e5,
                             step.liquid_dropout,
+                            step.gas_produced,
                             step.cumulative_gas_produced,
                             step.moles_remaining,
                             step.z_two_phase,
+                            step.liquid_density_kg_per_m3,
+                            step.vapor_density_kg_per_m3,
                         ])
                 elif result.separator_result:
-                    writer.writerow(["Stage", "Pressure_bar", "Temperature_C", "VaporFraction", "LiquidMoles", "VaporMoles", "Converged"])
+                    writer.writerow(
+                        [
+                            "Stage",
+                            "Pressure_bar",
+                            "Temperature_C",
+                            "VaporFraction",
+                            "LiquidMoles",
+                            "VaporMoles",
+                            "LiquidDensity_kg_m3",
+                            "VaporDensity_kg_m3",
+                            "LiquidZ",
+                            "VaporZ",
+                            "Converged",
+                        ]
+                    )
                     for stage in result.separator_result.stages:
                         writer.writerow([
                             stage.stage_name,
@@ -1064,6 +1105,10 @@ class PVTSimulatorWindow(QMainWindow):
                             stage.vapor_fraction,
                             stage.liquid_moles,
                             stage.vapor_moles,
+                            stage.liquid_density_kg_per_m3,
+                            stage.vapor_density_kg_per_m3,
+                            stage.liquid_z_factor,
+                            stage.vapor_z_factor,
                             stage.converged,
                         ])
 
