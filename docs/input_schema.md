@@ -29,6 +29,32 @@ All correlation and model choices must be explicit in input (or explicitly defau
 ### 0.3 Units are mandatory
 All dimensional quantities must declare units (or be in canonical SI where required).
 
+### 0.4 Component naming must be explicit
+Hydrocarbon isomer labels must be written explicitly anywhere ambiguity is
+possible.
+
+Preferred explicit notation in user-facing docs, validation artifacts, and
+external simulator exchanges:
+
+- `iC4` = isobutane
+- `nC4` = normal butane
+- `iC5` = isopentane
+- `nC5` = normal pentane
+- `neoC5` = neopentane
+
+Current runtime / database compatibility note:
+
+- the repo's historical internal IDs still use `C4` for `nC4`
+- the repo's historical internal IDs still use `C5` for `nC5`
+- alias resolution supports both forms where implemented
+
+Documentation and validation guidance:
+
+- prefer `nC4` / `nC5` over bare `C4` / `C5` in new docs and external
+  reference captures
+- only use bare `C4` / `C5` when referring to the legacy internal component IDs
+  explicitly
+
 ---
 
 ## 1. Canonical top-level object

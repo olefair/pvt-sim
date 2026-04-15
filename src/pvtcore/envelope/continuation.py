@@ -64,6 +64,11 @@ DEFAULT_MAX_K_VALUE_JUMP: float = 2.5
 DEFAULT_MIN_TEMPERATURE_STEP_K: float = 0.25
 DEFAULT_MAX_TEMPERATURE_STEP_K: float = 2.0
 DEFAULT_STEP_GROWTH: float = 1.35
+CRITICAL_PROBE_MIN_SPAN_K: float = 18.0
+CRITICAL_PROBE_STEP_MULTIPLIER: float = 3.5
+DENSITY_HANDOFF_SEARCH_POINTS_MIN: int = 8
+DENSITY_HANDOFF_SEARCH_POINTS_MAX: int = 12
+DENSITY_MARCH_MIDPOINT_JUMP_MAX: float = 0.12
 NEAR_TRIVIAL_PHASE_GAP: float = 1.0e-4
 NEAR_TRIVIAL_K_DEVIATION: float = 1.0e-4
 CRITICAL_COLLAPSE_PHASE_GAP: float = 0.035
@@ -217,6 +222,8 @@ class ContinuationState:
     pressure: float
     liquid_composition: NDArray[np.float64]
     vapor_composition: NDArray[np.float64]
+    liquid_density: float
+    vapor_density: float
     K_values: NDArray[np.float64]
     residual: float
     bracket: RootBracket
@@ -284,6 +291,7 @@ class _ContinuationTransitionMetrics:
     log_pressure_jump: float
     phase_component_jump: float
     k_value_jump: float
+    midpoint_density_rel_jump: float
 
 
 def _pressure_bar_to_pa(pressure_bar: float) -> float:
@@ -564,12 +572,33 @@ def _build_state(
             phase="liquid" if branch == "bubble" else "vapor",
         )
 
+    liquid_density = float(
+        eos.density(
+            float(pressure),
+            float(temperature),
+            liquid,
+            phase="liquid",
+            binary_interaction=binary_interaction,
+        )
+    )
+    vapor_density = float(
+        eos.density(
+            float(pressure),
+            float(temperature),
+            vapor,
+            phase="vapor",
+            binary_interaction=binary_interaction,
+        )
+    )
+
     return ContinuationState(
         branch=branch,
         temperature=float(temperature),
         pressure=float(pressure),
         liquid_composition=liquid.astype(np.float64),
         vapor_composition=vapor.astype(np.float64),
+        liquid_density=liquid_density,
+        vapor_density=vapor_density,
         K_values=k_values.astype(np.float64),
         residual=float(abs(residual)),
         bracket=bracket,
@@ -801,6 +830,11 @@ def _state_k_deviation(state: ContinuationState) -> float:
     return float(np.max(np.abs(state.K_values - 1.0)))
 
 
+def _state_midpoint_density(state: ContinuationState) -> float:
+    """Return the branch midpoint density used for density-marched continuation."""
+    return 0.5 * (float(state.liquid_density) + float(state.vapor_density))
+
+
 def _is_near_trivial_state(phase_gap: float, k_deviation: float) -> bool:
     """Return True when a resolved state has effectively collapsed to critical triviality."""
     return (
@@ -838,12 +872,16 @@ def _continuation_transition_metrics(
     candidate: ContinuationState,
 ) -> _ContinuationTransitionMetrics:
     """Return continuity metrics between two neighboring continuation states."""
+    midpoint_density = max(abs(_state_midpoint_density(previous)), 1.0)
     return _ContinuationTransitionMetrics(
         log_pressure_jump=float(abs(np.log(candidate.pressure / previous.pressure))),
         phase_component_jump=float(
             np.max(np.abs(_state_branch_phase(candidate) - _state_branch_phase(previous)))
         ),
         k_value_jump=_k_value_transition_jump(previous, candidate),
+        midpoint_density_rel_jump=float(
+            abs(_state_midpoint_density(candidate) - _state_midpoint_density(previous)) / midpoint_density
+        ),
     )
 
 
@@ -853,8 +891,11 @@ def _transition_is_acceptable(
     max_log_pressure_jump: float,
     max_phase_composition_jump: float,
     max_k_value_jump: float,
+    density_march: bool = False,
 ) -> bool:
     """Return True when the neighboring state looks like the same root family."""
+    if density_march and metrics.midpoint_density_rel_jump <= DENSITY_MARCH_MIDPOINT_JUMP_MAX:
+        return True
     return (
         metrics.log_pressure_jump <= float(max_log_pressure_jump)
         and metrics.phase_component_jump <= float(max_phase_composition_jump)
@@ -862,8 +903,20 @@ def _transition_is_acceptable(
     )
 
 
-def _continuation_score(previous: ContinuationState, candidate: ContinuationState) -> float:
+def _continuation_score(
+    previous: ContinuationState,
+    candidate: ContinuationState,
+    *,
+    density_march: bool = False,
+) -> float:
     metrics = _continuation_transition_metrics(previous, candidate)
+    if density_march:
+        return float(
+            2.0 * metrics.midpoint_density_rel_jump
+            + 0.35 * metrics.phase_component_jump
+            + 0.05 * metrics.k_value_jump
+            + 0.05 * metrics.log_pressure_jump
+        )
     return float(
         metrics.log_pressure_jump
         + 0.50 * metrics.phase_component_jump
@@ -903,6 +956,7 @@ def _select_candidate(
     max_log_pressure_jump: float = DEFAULT_MAX_LOG_PRESSURE_JUMP,
     max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
     max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
+    density_march: bool = False,
 ) -> ContinuationState:
     if not candidates:
         raise PhaseError(
@@ -914,7 +968,17 @@ def _select_candidate(
 
     if previous_state is not None:
         scored = sorted(
-            ((_continuation_score(previous_state, candidate), candidate) for candidate in candidates),
+            (
+                (
+                    _continuation_score(
+                        previous_state,
+                        candidate,
+                        density_march=density_march,
+                    ),
+                    candidate,
+                )
+                for candidate in candidates
+            ),
             key=lambda item: item[0],
         )
         _, best_candidate = scored[0]
@@ -924,6 +988,7 @@ def _select_candidate(
             max_log_pressure_jump=max_log_pressure_jump,
             max_phase_composition_jump=max_phase_composition_jump,
             max_k_value_jump=max_k_value_jump,
+            density_march=density_march,
         ):
             raise PhaseError(
                 "The continuation branch could not be matched to a nearby local root family.",
@@ -1032,6 +1097,7 @@ def advance_continuation_state(
     max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
     max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
     pressure_hint: Optional[float] = None,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> ContinuationState:
@@ -1068,6 +1134,7 @@ def advance_continuation_state(
                     max_log_pressure_jump=max_log_pressure_jump,
                     max_phase_composition_jump=max_phase_composition_jump,
                     max_k_value_jump=max_k_value_jump,
+                    density_march=density_march,
                 )
                 return _accept_advanced_candidate(
                     local_candidate,
@@ -1096,6 +1163,7 @@ def advance_continuation_state(
                     max_log_pressure_jump=max_log_pressure_jump,
                     max_phase_composition_jump=max_phase_composition_jump,
                     max_k_value_jump=max_k_value_jump,
+                    density_march=density_march,
                 )
                 return _accept_advanced_candidate(
                     candidate,
@@ -1126,6 +1194,7 @@ def advance_continuation_state(
                 max_log_pressure_jump=max_log_pressure_jump,
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
+                density_march=density_march,
             )
             return _accept_advanced_candidate(
                 local_candidate,
@@ -1154,6 +1223,7 @@ def advance_continuation_state(
                 max_log_pressure_jump=max_log_pressure_jump,
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
+                density_march=density_march,
             )
             return _accept_advanced_candidate(
                 candidate,
@@ -1187,6 +1257,7 @@ def advance_continuation_state(
                     max_log_pressure_jump=max_log_pressure_jump,
                     max_phase_composition_jump=max_phase_composition_jump,
                     max_k_value_jump=max_k_value_jump,
+                    density_march=density_march,
                 )
                 return _accept_advanced_candidate(
                     candidate,
@@ -1212,6 +1283,7 @@ def advance_continuation_state(
         max_log_pressure_jump=max_log_pressure_jump,
         max_phase_composition_jump=max_phase_composition_jump,
         max_k_value_jump=max_k_value_jump,
+        density_march=density_march,
     )
     return _accept_advanced_candidate(
         candidate,
@@ -1473,6 +1545,7 @@ def _refine_ambiguous_candidate(
     max_phase_composition_jump: float,
     max_k_value_jump: float,
     pressure_hint: Optional[float] = None,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> ContinuationState:
@@ -1500,10 +1573,19 @@ def _refine_ambiguous_candidate(
         max_phase_composition_jump=max_phase_composition_jump,
         max_k_value_jump=max_k_value_jump,
         pressure_hint=pressure_hint,
+        density_march=density_march,
         runtime_policy=runtime_policy,
         cancel_check=cancel_check,
     )
-    if refined is not None and _continuation_score(previous_state, refined) < _continuation_score(previous_state, candidate):
+    if refined is not None and _continuation_score(
+        previous_state,
+        refined,
+        density_march=density_march,
+    ) < _continuation_score(
+        previous_state,
+        candidate,
+        density_march=density_march,
+    ):
         return refined
     return candidate
 
@@ -1546,6 +1628,7 @@ def _best_refined_candidate(
     max_phase_composition_jump: float,
     max_k_value_jump: float,
     pressure_hint: Optional[float] = None,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> Optional[ContinuationState]:
@@ -1571,13 +1654,14 @@ def _best_refined_candidate(
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
                 pressure_hint=pressure_hint,
+                density_march=density_march,
                 runtime_policy=runtime_policy,
                 cancel_check=cancel_check,
             )
         except PhaseError:
             continue
 
-        score = _continuation_score(previous_state, refined)
+        score = _continuation_score(previous_state, refined, density_march=density_march)
         if best_score is None or score < best_score:
             best_candidate = refined
             best_score = score
@@ -1597,6 +1681,7 @@ def _retry_failed_candidate_with_refined_scan(
     max_phase_composition_jump: float,
     max_k_value_jump: float,
     pressure_hint: Optional[float] = None,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> Optional[ContinuationState]:
@@ -1615,6 +1700,7 @@ def _retry_failed_candidate_with_refined_scan(
         max_phase_composition_jump=max_phase_composition_jump,
         max_k_value_jump=max_k_value_jump,
         pressure_hint=pressure_hint,
+        density_march=density_march,
         runtime_policy=runtime_policy,
         cancel_check=cancel_check,
     )
@@ -1635,6 +1721,7 @@ def _attempt_adaptive_branch_step(
     min_temperature_step_k: float = DEFAULT_MIN_TEMPERATURE_STEP_K,
     pressure_hint: Optional[float] = None,
     prior_state: Optional[ContinuationState] = None,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> tuple[Optional[ContinuationState], float, Optional[str], Optional[float]]:
@@ -1673,6 +1760,7 @@ def _attempt_adaptive_branch_step(
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
                 pressure_hint=candidate_pressure_hint,
+                density_march=density_march,
                 runtime_policy=runtime_policy,
                 cancel_check=cancel_check,
             )
@@ -1688,6 +1776,7 @@ def _attempt_adaptive_branch_step(
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
                 pressure_hint=candidate_pressure_hint,
+                density_march=density_march,
                 runtime_policy=runtime_policy,
                 cancel_check=cancel_check,
             )
@@ -1707,6 +1796,7 @@ def _attempt_adaptive_branch_step(
                 max_phase_composition_jump=max_phase_composition_jump,
                 max_k_value_jump=max_k_value_jump,
                 pressure_hint=candidate_pressure_hint,
+                density_march=density_march,
                 runtime_policy=runtime_policy,
                 cancel_check=cancel_check,
             )
@@ -1723,6 +1813,7 @@ def _attempt_adaptive_branch_step(
                     max_phase_composition_jump=max_phase_composition_jump,
                     max_k_value_jump=max_k_value_jump,
                     pressure_hint=candidate_pressure_hint,
+                    density_march=density_march,
                     runtime_policy=runtime_policy,
                     cancel_check=cancel_check,
                 )
@@ -1776,6 +1867,7 @@ def trace_branch_continuation_adaptive(
     max_log_pressure_jump: float = DEFAULT_MAX_LOG_PRESSURE_JUMP,
     max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
     max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
+    density_march: bool = False,
     runtime_policy: Optional[ContinuationRuntimePolicy] = None,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> ContinuationTraceResult:
@@ -1850,6 +1942,7 @@ def trace_branch_continuation_adaptive(
             max_k_value_jump=max_k_value_jump,
             min_temperature_step_k=min_step_k,
             prior_state=prior,
+            density_march=density_march,
             runtime_policy=policy,
             cancel_check=cancel_check,
         )
@@ -1878,6 +1971,207 @@ def trace_branch_continuation_adaptive(
     )
 
 
+def _density_handoff_score(reference_state: ContinuationState, candidate: ContinuationState) -> float:
+    """Score a cross-branch handoff candidate by midpoint-density continuity."""
+    reference_density = max(abs(_state_midpoint_density(reference_state)), 1.0)
+    midpoint_density_gap = abs(_state_midpoint_density(candidate) - _state_midpoint_density(reference_state)) / reference_density
+    pressure_gap = abs(np.log(candidate.pressure / reference_state.pressure))
+    return float(
+        2.0 * midpoint_density_gap
+        + 0.50 * _state_phase_gap(candidate)
+        + 0.10 * _state_k_deviation(candidate)
+        + 0.05 * pressure_gap
+    )
+
+
+def _critical_probe_temperature_end(
+    reference_temperature: float,
+    temperature_end: float,
+    *,
+    runtime_policy: Optional[ContinuationRuntimePolicy] = None,
+) -> float:
+    """Clamp exploratory hot-side tracing to the near-critical neighborhood."""
+    policy = _coerce_runtime_policy(runtime_policy)
+    span_k = max(
+        CRITICAL_PROBE_MIN_SPAN_K,
+        2.0 * CRITICAL_PAIR_MAX_TEMP_GAP,
+        CRITICAL_PROBE_STEP_MULTIPLIER * float(policy.max_temperature_step_k),
+    )
+    t_start = float(reference_temperature)
+    t_end = float(temperature_end)
+    if t_end >= t_start:
+        return float(min(t_end, t_start + span_k))
+    return float(max(t_end, t_start - span_k))
+
+
+def _density_handoff_temperatures(
+    temperature_start: float,
+    temperature_end: float,
+    *,
+    runtime_policy: Optional[ContinuationRuntimePolicy] = None,
+) -> NDArray[np.float64]:
+    """Return a short, start-biased temperature grid for cross-branch handoff search."""
+    policy = _coerce_runtime_policy(runtime_policy)
+    t_start = float(temperature_start)
+    t_end = float(temperature_end)
+    if abs(t_end - t_start) <= 1.0e-12:
+        return np.array([t_start], dtype=np.float64)
+
+    span_k = abs(t_end - t_start)
+    nominal_step_k = max(2.0, 1.5 * float(policy.max_temperature_step_k))
+    search_points = int(np.ceil(span_k / nominal_step_k)) + 1
+    search_points = max(
+        DENSITY_HANDOFF_SEARCH_POINTS_MIN,
+        min(DENSITY_HANDOFF_SEARCH_POINTS_MAX, search_points),
+    )
+    weights = np.linspace(0.0, 1.0, search_points, dtype=np.float64) ** 1.75
+    return np.asarray(t_start + (t_end - t_start) * weights, dtype=np.float64)
+
+
+def _find_density_handoff_seed(
+    *,
+    branch: BranchName,
+    reference_state: ContinuationState,
+    temperature_end: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    n_pressure_points: int,
+    runtime_policy: Optional[ContinuationRuntimePolicy] = None,
+    cancel_check: Optional[Callable[[], None]] = None,
+) -> Optional[ContinuationState]:
+    """Find the best cross-branch restart seed by midpoint-density continuity."""
+    t_start = float(reference_state.temperature)
+    t_end = _critical_probe_temperature_end(
+        t_start,
+        float(temperature_end),
+        runtime_policy=runtime_policy,
+    )
+    if abs(t_end - t_start) <= 1.0e-12:
+        return None
+
+    temperatures = _density_handoff_temperatures(
+        t_start,
+        t_end,
+        runtime_policy=runtime_policy,
+    )
+    best_candidate: Optional[ContinuationState] = None
+    best_score: Optional[float] = None
+
+    for temperature in temperatures:
+        if cancel_check is not None:
+            cancel_check()
+        candidates = resolve_local_branch_candidates(
+            branch=branch,
+            temperature=float(temperature),
+            composition=np.asarray(composition, dtype=np.float64),
+            eos=eos,
+            binary_interaction=binary_interaction,
+            n_pressure_points=n_pressure_points,
+            cancel_check=cancel_check,
+        )
+        for candidate in candidates:
+            score = _density_handoff_score(reference_state, candidate)
+            if best_score is None or score < best_score:
+                best_candidate = candidate
+                best_score = score
+
+    return best_candidate
+
+
+def trace_branch_continuation_adaptive_from_seed(
+    seed_state: ContinuationState,
+    *,
+    temperature_end: float,
+    composition: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]] = None,
+    target_points: int,
+    n_pressure_points: int = DEFAULT_CONTINUATION_PRESSURE_POINTS,
+    max_log_pressure_jump: float = DEFAULT_MAX_LOG_PRESSURE_JUMP,
+    max_phase_composition_jump: float = DEFAULT_MAX_PHASE_COMPOSITION_JUMP,
+    max_k_value_jump: float = DEFAULT_MAX_K_VALUE_JUMP,
+    prior_state: Optional[ContinuationState] = None,
+    density_march: bool = False,
+    runtime_policy: Optional[ContinuationRuntimePolicy] = None,
+    cancel_check: Optional[Callable[[], None]] = None,
+) -> ContinuationTraceResult:
+    """Trace one branch adaptively from an already-resolved seed state."""
+    policy = _coerce_runtime_policy(runtime_policy)
+    t_end = float(temperature_end)
+    if not np.isfinite(t_end) or t_end <= 0.0:
+        raise ValidationError(
+            "temperature_end must be finite and positive",
+            parameter="temperature_end",
+            value=temperature_end,
+        )
+    if abs(seed_state.temperature - t_end) <= 1.0e-12:
+        return ContinuationTraceResult(branch=seed_state.branch, states=(seed_state,))
+
+    initial_step_k, min_step_k, max_step_k = _adaptive_step_bounds(
+        temperature_start=float(seed_state.temperature),
+        temperature_end=t_end,
+        target_points=target_points,
+        runtime_policy=policy,
+    )
+    if prior_state is not None:
+        prior_step = abs(float(seed_state.temperature) - float(prior_state.temperature))
+        if prior_step > 1.0e-12:
+            initial_step_k = min(max_step_k, max(min_step_k, prior_step))
+
+    states: List[ContinuationState] = [seed_state]
+    step_k = initial_step_k
+    previous = seed_state
+    prior = prior_state
+    direction = 1.0 if t_end >= previous.temperature else -1.0
+    termination_reason: Optional[str] = None
+    termination_temperature: Optional[float] = None
+
+    while direction * (t_end - previous.temperature) > 1.0e-12:
+        if cancel_check is not None:
+            cancel_check()
+        candidate, accepted_step_k, failure_reason, failure_temperature = _attempt_adaptive_branch_step(
+            previous,
+            step_k=step_k,
+            temperature_end=t_end,
+            composition=np.asarray(composition, dtype=np.float64),
+            eos=eos,
+            binary_interaction=binary_interaction,
+            n_pressure_points=n_pressure_points,
+            max_log_pressure_jump=max_log_pressure_jump,
+            max_phase_composition_jump=max_phase_composition_jump,
+            max_k_value_jump=max_k_value_jump,
+            min_temperature_step_k=min_step_k,
+            prior_state=prior,
+            density_march=density_march,
+            runtime_policy=policy,
+            cancel_check=cancel_check,
+        )
+        if candidate is None:
+            termination_reason = failure_reason
+            termination_temperature = failure_temperature
+            break
+
+        metrics = _continuation_transition_metrics(previous, candidate)
+        states.append(candidate)
+        prior = previous
+        previous = candidate
+        step_k = _next_adaptive_temperature_step(
+            accepted_step_k,
+            metrics,
+            min_step_k=min_step_k,
+            max_step_k=max_step_k,
+            runtime_policy=policy,
+        )
+
+    return ContinuationTraceResult(
+        branch=seed_state.branch,
+        states=tuple(states),
+        termination_reason=termination_reason,
+        termination_temperature=termination_temperature,
+    )
+
+
 def _temperature_scale(temperatures: Sequence[float]) -> float:
     """Return a normalization scale for temperature-gap scoring."""
     if len(temperatures) <= 1:
@@ -1897,6 +2191,16 @@ def _pair_phase_gap(bubble_state: ContinuationState, dew_state: ContinuationStat
     )
 
 
+def _critical_anchor_score(state: ContinuationState) -> float:
+    """Return how close one traced state is to the critical collapse."""
+    return float(_state_phase_gap(state) + 0.25 * _state_k_deviation(state))
+
+
+def _critical_anchor_state(*states: ContinuationState) -> ContinuationState:
+    """Return the most critical-like traced state from a small candidate set."""
+    return min(states, key=_critical_anchor_score)
+
+
 def _build_pair_critical_candidate(
     bubble_state: ContinuationState,
     dew_state: ContinuationState,
@@ -1904,6 +2208,7 @@ def _build_pair_critical_candidate(
     temperature_scale: float,
 ) -> CriticalJunction:
     """Build a critical candidate from one bubble/dew closest-approach pair."""
+    anchor_state = _critical_anchor_state(bubble_state, dew_state)
     pressure_gap = abs(np.log(bubble_state.pressure / dew_state.pressure))
     temperature_gap = abs(bubble_state.temperature - dew_state.temperature) / max(temperature_scale, 1e-12)
     phase_gap = _pair_phase_gap(bubble_state, dew_state)
@@ -1916,8 +2221,8 @@ def _build_pair_critical_candidate(
     )
 
     return CriticalJunction(
-        temperature=float(0.5 * (bubble_state.temperature + dew_state.temperature)),
-        pressure=float(0.5 * (bubble_state.pressure + dew_state.pressure)),
+        temperature=float(anchor_state.temperature),
+        pressure=float(anchor_state.pressure),
         source="branch_closest_approach",
         score=float(score),
         phase_gap=float(phase_gap),
@@ -2070,10 +2375,11 @@ def _build_trivial_endpoint_candidate(
         + 0.25 * k_deviation
         + CRITICAL_TRIVIAL_ENDPOINT_PENALTY
     )
+    anchor_state = _critical_anchor_state(*neighbors)
 
     return CriticalJunction(
-        temperature=float(temperature),
-        pressure=float(pressure),
+        temperature=float(anchor_state.temperature),
+        pressure=float(anchor_state.pressure),
         source=f"{branch}_trivial_endpoint",
         score=float(score),
         phase_gap=float(phase_gap),
@@ -2100,6 +2406,32 @@ def _critical_probe_temperatures(trace: ContinuationTraceResult) -> List[float]:
         if not unique or all(abs(value - existing) > 1.0e-9 for existing in unique):
             unique.append(value)
     return unique
+
+
+def _trim_trace_at_first_critical_collapse(
+    trace: ContinuationTraceResult,
+) -> ContinuationTraceResult:
+    """Trim a probe trace once it first collapses into the critical neighborhood.
+
+    The upward dew probe is only a locator for the handoff neighborhood. Once it
+    reaches the first certified near-trivial state, any hotter continuation
+    points are outside the physical envelope and should not participate in the
+    returned dew branch or in later critical matching.
+    """
+    if not trace.states:
+        return trace
+
+    kept: List[ContinuationState] = []
+    for state in trace.states:
+        kept.append(state)
+        if _candidate_collapses_to_critical_junction(state):
+            return ContinuationTraceResult(
+                branch=trace.branch,
+                states=tuple(kept),
+                termination_reason=trace.termination_reason,
+                termination_temperature=trace.termination_temperature,
+            )
+    return trace
 
 
 def detect_continuation_critical_junction(
@@ -2248,6 +2580,22 @@ def _merge_branch_states(*state_groups: Sequence[ContinuationState]) -> tuple[Co
     return tuple(unique)
 
 
+def _adjacent_trace_state(
+    states: Sequence[ContinuationState],
+    seed_state: ContinuationState,
+    *,
+    toward_higher_temperature: bool,
+) -> Optional[ContinuationState]:
+    """Return the nearest neighboring state on the same trace side as the march direction."""
+    ordered = sorted(states, key=lambda state: state.temperature)
+    for state in ordered:
+        if toward_higher_temperature and state.temperature > seed_state.temperature + 1.0e-12:
+            return state
+        if (not toward_higher_temperature) and state.temperature < seed_state.temperature - 1.0e-12:
+            return state
+    return None
+
+
 def _trace_optional_branch_continuation(
     *,
     branch: BranchName,
@@ -2342,21 +2690,48 @@ def trace_envelope_continuation(
 
     dew_probe_trace = ContinuationTraceResult(branch="dew", states=tuple())
     if bubble_trace.states:
-        dew_probe_trace = _trace_optional_branch_continuation(
+        dew_probe_temperature_end = _critical_probe_temperature_end(
+            bubble_trace.states[-1].temperature,
+            temperature_max,
+            runtime_policy=policy,
+        )
+        dew_handoff_seed = _find_density_handoff_seed(
             branch="dew",
-            temperature_start=max(temperature_min, bubble_trace.states[-1].temperature),
-            temperature_end=temperature_max,
-            target_points=target_points,
+            reference_state=bubble_trace.states[-1],
+            temperature_end=dew_probe_temperature_end,
             composition=z,
-            components=components,
             eos=eos,
             binary_interaction=binary_interaction,
-            pressure_seed=bubble_trace.states[-1].pressure,
             n_pressure_points=n_pressure_points,
-            max_log_pressure_jump=max_log_pressure_jump,
             runtime_policy=policy,
             cancel_check=cancel_check,
         )
+        if dew_handoff_seed is not None:
+            # The density-selected handoff seed is already the near-critical dew
+            # anchor we need for matching and for the downward dew march. Chasing
+            # a hotter synthetic probe here only adds cost and can reintroduce a
+            # nonphysical right tail before we trim it away.
+            dew_probe_trace = ContinuationTraceResult(
+                branch="dew",
+                states=(dew_handoff_seed,),
+            )
+        else:
+            dew_probe_trace = _trace_optional_branch_continuation(
+                branch="dew",
+                temperature_start=max(temperature_min, bubble_trace.states[-1].temperature),
+                temperature_end=dew_probe_temperature_end,
+                target_points=target_points,
+                composition=z,
+                components=components,
+                eos=eos,
+                binary_interaction=binary_interaction,
+                pressure_seed=bubble_trace.states[-1].pressure,
+                n_pressure_points=n_pressure_points,
+                max_log_pressure_jump=max_log_pressure_jump,
+                runtime_policy=policy,
+                cancel_check=cancel_check,
+            )
+        dew_probe_trace = _trim_trace_at_first_critical_collapse(dew_probe_trace)
 
     critical_state = detect_continuation_critical_junction(
         temperatures=([state.temperature for state in bubble_trace.states] + [state.temperature for state in dew_probe_trace.states] + temps),
@@ -2412,22 +2787,49 @@ def trace_envelope_continuation(
             for state in bubble_trace.states
             if state.temperature <= critical_state.temperature + 1e-12
         )
-        dew_lower_trace = _trace_optional_branch_continuation(
-            branch="dew",
-            temperature_start=float(critical_state.temperature),
-            temperature_end=temperature_min,
-            target_points=target_points,
-            composition=z,
-            components=components,
-            eos=eos,
-            binary_interaction=binary_interaction,
-            pressure_seed=float(critical_state.pressure),
-            n_pressure_points=n_pressure_points,
-            max_log_pressure_jump=max_log_pressure_jump,
-            runtime_policy=policy,
-            cancel_check=cancel_check,
-        )
         dew_upper_trace = dew_probe_trace
+        dew_seed_state = _nearest_state(
+            dew_probe_trace.states,
+            temperature=float(critical_state.temperature),
+            pressure=float(critical_state.pressure),
+            temperature_scale=_temperature_scale(temps),
+        )
+        if dew_seed_state is not None:
+            dew_seed_prior = _adjacent_trace_state(
+                dew_probe_trace.states,
+                dew_seed_state,
+                toward_higher_temperature=True,
+            )
+            dew_lower_trace = trace_branch_continuation_adaptive_from_seed(
+                dew_seed_state,
+                temperature_end=temperature_min,
+                target_points=target_points,
+                composition=z,
+                eos=eos,
+                binary_interaction=binary_interaction,
+                n_pressure_points=n_pressure_points,
+                max_log_pressure_jump=max_log_pressure_jump,
+                prior_state=dew_seed_prior,
+                density_march=True,
+                runtime_policy=policy,
+                cancel_check=cancel_check,
+            )
+        else:
+            dew_lower_trace = _trace_optional_branch_continuation(
+                branch="dew",
+                temperature_start=float(critical_state.temperature),
+                temperature_end=temperature_min,
+                target_points=target_points,
+                composition=z,
+                components=components,
+                eos=eos,
+                binary_interaction=binary_interaction,
+                pressure_seed=float(critical_state.pressure),
+                n_pressure_points=n_pressure_points,
+                max_log_pressure_jump=max_log_pressure_jump,
+                runtime_policy=policy,
+                cancel_check=cancel_check,
+            )
         if not dew_upper_trace.states:
             dew_upper_trace = _trace_optional_branch_continuation(
                 branch="dew",
@@ -2444,6 +2846,7 @@ def trace_envelope_continuation(
                 runtime_policy=policy,
                 cancel_check=cancel_check,
             )
+            dew_upper_trace = _trim_trace_at_first_critical_collapse(dew_upper_trace)
 
         dew_segments: List[tuple[ContinuationState, ...]] = []
         for trace in (dew_lower_trace, dew_upper_trace):

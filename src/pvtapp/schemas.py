@@ -1168,6 +1168,26 @@ class PhaseEnvelopeResult(BaseModel):
             return PhaseEnvelopeTracingMethod.CONTINUATION
         return v
 
+    def continuous_curve_points(self) -> List[PhaseEnvelopePoint]:
+        """Return bubble rows followed by the dew branch from critical downward."""
+        ordered = list(self.bubble_curve)
+        dew_descending = list(reversed(self.dew_curve))
+
+        if ordered and dew_descending:
+            last_bubble = ordered[-1]
+            first_dew = dew_descending[0]
+            same_temperature = abs(float(last_bubble.temperature_k) - float(first_dew.temperature_k)) <= 1.0e-12
+            same_pressure = abs(float(last_bubble.pressure_pa) - float(first_dew.pressure_pa)) <= 1.0e-9
+            if same_temperature and same_pressure:
+                dew_descending = dew_descending[1:]
+
+        ordered.extend(dew_descending)
+        return ordered
+
+    def continuous_curve_payload(self) -> List[Dict[str, float | str]]:
+        """Return the continuous phase-envelope row order as JSON-ready records."""
+        return [point.model_dump(mode="json") for point in self.continuous_curve_points()]
+
 
 class CCEStepResult(BaseModel):
     """Results for a single CCE pressure step."""

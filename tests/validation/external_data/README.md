@@ -1,7 +1,8 @@
 # External Saturation Validation Corpus
 
 This folder is the canonical intake surface for external physical-accuracy
-anchors used by bubble-point and dew-point validation.
+anchors used by bubble-point and dew-point validation, and the preferred source
+for future reference-backed phase-envelope family gates.
 
 Boundary:
 
@@ -10,6 +11,10 @@ Boundary:
 - `tests/validation/mi_pvt/` remains the secondary MI-PVT cross-check lane.
 - `tests/validation/external_data/` is where measured, critically evaluated,
   or literature-derived physical-accuracy anchors belong.
+- when a phase-envelope family such as heavy-end, `C7+`, or sour / `H2S`
+  behavior needs a reference-backed gate, the anchor should enter through this
+  corpus or a sibling schema with the same contract rather than as an MI-only
+  proxy assertion.
 
 Do not drop new external reference JSON files directly into arbitrary test
 modules. Add them here and validate them through

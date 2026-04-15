@@ -1019,10 +1019,8 @@ class PVTSimulatorWindow(QMainWindow):
                         ])
                 elif result.phase_envelope_result:
                     writer.writerow(["Type", "Temperature_C", "Pressure_bar"])
-                    for point in result.phase_envelope_result.bubble_curve:
-                        writer.writerow(["bubble", point.temperature_k - 273.15, point.pressure_pa / 1e5])
-                    for point in result.phase_envelope_result.dew_curve:
-                        writer.writerow(["dew", point.temperature_k - 273.15, point.pressure_pa / 1e5])
+                    for point in result.phase_envelope_result.continuous_curve_points():
+                        writer.writerow([point.point_type, point.temperature_k - 273.15, point.pressure_pa / 1e5])
                 elif result.cce_result:
                     writer.writerow(["Pressure_bar", "RelativeVolume", "LiquidFraction", "VaporFraction", "ZFactor"])
                     for step in result.cce_result.steps:
@@ -1121,8 +1119,14 @@ class PVTSimulatorWindow(QMainWindow):
         """Export result to JSON file."""
         try:
             import json
+            payload = result.model_dump(mode='json')
+            if result.phase_envelope_result is not None:
+                payload.setdefault("phase_envelope_result", {})
+                payload["phase_envelope_result"]["continuous_curve"] = (
+                    result.phase_envelope_result.continuous_curve_payload()
+                )
             with open(filename, 'w') as f:
-                json.dump(result.model_dump(mode='json'), f, indent=2, default=str)
+                json.dump(payload, f, indent=2, default=str)
 
             self._set_status_message(f"Exported: {Path(filename).name}")
 

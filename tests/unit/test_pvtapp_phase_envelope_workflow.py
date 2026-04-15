@@ -8,7 +8,13 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from pvtapp.job_runner import _infer_phase_envelope_runtime_family, run_calculation
-from pvtapp.schemas import PhaseEnvelopeTracingMethod, RunConfig, RunStatus
+from pvtapp.schemas import (
+    PhaseEnvelopePoint,
+    PhaseEnvelopeResult,
+    PhaseEnvelopeTracingMethod,
+    RunConfig,
+    RunStatus,
+)
 
 
 def _phase_envelope_config(
@@ -131,6 +137,46 @@ def test_phase_envelope_workflow_fixed_grid_route_remains_available() -> None:
     assert result.status == RunStatus.COMPLETED
     assert result.phase_envelope_result is not None
     assert result.phase_envelope_result.tracing_method is PhaseEnvelopeTracingMethod.FIXED_GRID
+
+
+def test_phase_envelope_result_orders_display_points_continuously() -> None:
+    """Bubble rows should flow into the dew branch from the critical side downward."""
+    result = PhaseEnvelopeResult(
+        bubble_curve=[
+            PhaseEnvelopePoint(temperature_k=250.0, pressure_pa=2.0e6, point_type="bubble"),
+            PhaseEnvelopePoint(temperature_k=300.0, pressure_pa=7.0e6, point_type="bubble"),
+        ],
+        dew_curve=[
+            PhaseEnvelopePoint(temperature_k=180.0, pressure_pa=1.0e5, point_type="dew"),
+            PhaseEnvelopePoint(temperature_k=240.0, pressure_pa=1.2e6, point_type="dew"),
+            PhaseEnvelopePoint(temperature_k=320.0, pressure_pa=6.5e6, point_type="dew"),
+        ],
+    )
+
+    ordered = result.continuous_curve_points()
+
+    assert [point.point_type for point in ordered] == ["bubble", "bubble", "dew", "dew", "dew"]
+    assert [point.temperature_k for point in ordered] == [250.0, 300.0, 320.0, 240.0, 180.0]
+
+
+def test_phase_envelope_result_serializes_continuous_curve_payload() -> None:
+    """JSON exports should expose the same continuous phase-envelope ordering."""
+    result = PhaseEnvelopeResult(
+        bubble_curve=[
+            PhaseEnvelopePoint(temperature_k=250.0, pressure_pa=2.0e6, point_type="bubble"),
+            PhaseEnvelopePoint(temperature_k=300.0, pressure_pa=7.0e6, point_type="bubble"),
+        ],
+        dew_curve=[
+            PhaseEnvelopePoint(temperature_k=180.0, pressure_pa=1.0e5, point_type="dew"),
+            PhaseEnvelopePoint(temperature_k=240.0, pressure_pa=1.2e6, point_type="dew"),
+            PhaseEnvelopePoint(temperature_k=320.0, pressure_pa=6.5e6, point_type="dew"),
+        ],
+    )
+
+    payload = result.continuous_curve_payload()
+
+    assert [point["point_type"] for point in payload] == ["bubble", "bubble", "dew", "dew", "dew"]
+    assert [point["temperature_k"] for point in payload] == [250.0, 300.0, 320.0, 240.0, 180.0]
 
 
 @pytest.mark.parametrize(

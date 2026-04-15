@@ -972,10 +972,7 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
         # Envelope points in composition table
-        all_points = (
-            [(p, "Bubble") for p in result.bubble_curve] +
-            [(p, "Dew") for p in result.dew_curve]
-        )
+        all_points = result.continuous_curve_points()
 
         self.composition_table.setColumnCount(3)
         self.composition_table.setHorizontalHeaderLabels([
@@ -983,8 +980,8 @@ class ResultsTableWidget(QWidget):
         ])
         self.composition_table.setRowCount(len(all_points))
 
-        for row, (point, ptype) in enumerate(all_points):
-            self.composition_table.setItem(row, 0, QTableWidgetItem(ptype))
+        for row, point in enumerate(all_points):
+            self.composition_table.setItem(row, 0, QTableWidgetItem(str(point.point_type).title()))
             self.composition_table.setItem(
                 row, 1, QTableWidgetItem(f"{point.temperature_k - 273.15:.2f}")
             )

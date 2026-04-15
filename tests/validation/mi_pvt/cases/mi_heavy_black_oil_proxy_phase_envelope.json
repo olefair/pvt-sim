@@ -1,0 +1,92 @@
+{
+  "case_id": "mi_heavy_black_oil_proxy_phase_envelope",
+  "task": "phase_envelope",
+  "temperature": { "value": 576.4334, "unit": "K" },
+  "composition": [
+    { "id": "CO2", "z": 0.008008 },
+    { "id": "C1", "z": 0.14014 },
+    { "id": "C2", "z": 0.045045 },
+    { "id": "C3", "z": 0.06006 },
+    { "id": "nC4", "z": 0.083083 },
+    { "id": "nC5", "z": 0.09009 },
+    { "id": "C6", "z": 0.07007 },
+    { "id": "C7-C12", "z": 0.39039 },
+    { "id": "C13-C18", "z": 0.11311 }
+  ],
+  "runtime_supported": false,
+  "runtime_skip_reason": "Archived MI-PVT heavy-bin proxy capture. The current runtime does not represent MI aggregate heavy bins honestly enough for executable comparison.",
+  "mi_settings": {
+    "eos": "Peng-Robinson 1976",
+    "kij": "zero",
+    "notes": "Manual MI-PVT phase-envelope capture from 2026-04-14 screenshots."
+  },
+  "trace": {
+    "method": "fixed_grid",
+    "temperature_min": { "value": 177.1874, "unit": "K" },
+    "temperature_max": { "value": 584.5091, "unit": "K" },
+    "n_points": 64
+  },
+  "expected": {
+    "envelope_points": [
+      { "temperature": { "value": 491.5220, "unit": "K" }, "pressure": { "value": 5.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 500.5680, "unit": "K" }, "pressure": { "value": 6.2527, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 509.5169, "unit": "K" }, "pressure": { "value": 7.7428, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 522.6004, "unit": "K" }, "pressure": { "value": 10.4676, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 540.9376, "unit": "K" }, "pressure": { "value": 15.7367, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 551.8337, "unit": "K" }, "pressure": { "value": 20.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 563.7608, "unit": "K" }, "pressure": { "value": 26.1718, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 578.7050, "unit": "K" }, "pressure": { "value": 38.5665, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 579.8196, "unit": "K" }, "pressure": { "value": 40.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 584.4426, "unit": "K" }, "pressure": { "value": 50.9221, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 584.5091, "unit": "K" }, "pressure": { "value": 52.3247, "unit": "atm" }, "marker": "tmax" },
+      { "temperature": { "value": 582.2061, "unit": "K" }, "pressure": { "value": 60.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 581.2307, "unit": "K" }, "pressure": { "value": 61.3450, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 576.4334, "unit": "K" }, "pressure": { "value": 65.6698, "unit": "atm" }, "marker": "crit" },
+      { "temperature": { "value": 570.5658, "unit": "K" }, "pressure": { "value": 68.8468, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 554.5175, "unit": "K" }, "pressure": { "value": 73.3996, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 535.1349, "unit": "K" }, "pressure": { "value": 75.5125, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 520.7245, "unit": "K" }, "pressure": { "value": 75.8809, "unit": "atm" }, "marker": "pmax" },
+      { "temperature": { "value": 514.1119, "unit": "K" }, "pressure": { "value": 75.8148, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 492.6901, "unit": "K" }, "pressure": { "value": 74.8478, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 471.6960, "unit": "K" }, "pressure": { "value": 73.0168, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 451.6292, "unit": "K" }, "pressure": { "value": 70.6107, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 432.7527, "unit": "K" }, "pressure": { "value": 67.8352, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 415.1716, "unit": "K" }, "pressure": { "value": 64.8378, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 391.2230, "unit": "K" }, "pressure": { "value": 60.1522, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 390.4984, "unit": "K" }, "pressure": { "value": 60.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 373.0000, "unit": "K" }, "pressure": { "value": 56.1461, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 369.9883, "unit": "K" }, "pressure": { "value": 55.4490, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 351.1566, "unit": "K" }, "pressure": { "value": 50.8784, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 334.4020, "unit": "K" }, "pressure": { "value": 46.5269, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 312.5187, "unit": "K" }, "pressure": { "value": 40.5033, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 310.7414, "unit": "K" }, "pressure": { "value": 40.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 293.7970, "unit": "K" }, "pressure": { "value": 35.1237, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 277.5835, "unit": "K" }, "pressure": { "value": 30.3753, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 256.9105, "unit": "K" }, "pressure": { "value": 24.3375, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 241.6241, "unit": "K" }, "pressure": { "value": 20.0000, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 239.5752, "unit": "K" }, "pressure": { "value": 19.4329, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 224.7545, "unit": "K" }, "pressure": { "value": 15.4732, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 206.0367, "unit": "K" }, "pressure": { "value": 10.9428, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 190.4483, "unit": "K" }, "pressure": { "value": 7.6995, "unit": "atm" }, "marker": null },
+      { "temperature": { "value": 177.1874, "unit": "K" }, "pressure": { "value": 5.3919, "unit": "atm" }, "marker": null }
+    ],
+    "critical_point": {
+      "temperature": { "value": 576.4334, "unit": "K" },
+      "pressure": { "value": 65.6698, "unit": "atm" }
+    },
+    "cricondenbar": {
+      "temperature": { "value": 520.7245, "unit": "K" },
+      "pressure": { "value": 75.8809, "unit": "atm" }
+    },
+    "cricondentherm": {
+      "temperature": { "value": 584.5091, "unit": "K" },
+      "pressure": { "value": 52.3247, "unit": "atm" }
+    }
+  },
+  "tolerances": {
+    "key_pressure_pa_atol": 1000000.0,
+    "key_temperature_k_atol": 5.0,
+    "curve_pressure_pa_atol": 1500000.0,
+    "curve_point_fraction_min": 0.65
+  }
+}
