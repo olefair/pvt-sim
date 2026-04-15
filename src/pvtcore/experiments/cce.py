@@ -55,6 +55,8 @@ class CCEStepResult:
         liquid_compressibility: Liquid phase Z factor
         vapor_compressibility: Vapor phase Z factor
         phase: Phase state ('liquid', 'vapor', 'two-phase')
+        liquid_composition: Liquid-phase mole fractions when present
+        vapor_composition: Vapor-phase mole fractions when present
         Y_function: Y-function for gas condensates (optional)
     """
     pressure: float
@@ -68,6 +70,12 @@ class CCEStepResult:
     liquid_compressibility: float
     vapor_compressibility: float
     phase: str
+    liquid_composition: NDArray[np.float64] = field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
+    vapor_composition: NDArray[np.float64] = field(
+        default_factory=lambda: np.array([], dtype=np.float64)
+    )
     Y_function: Optional[float] = None
 
 
@@ -238,6 +246,8 @@ def simulate_cce(
                 liquid_compressibility=np.nan,
                 vapor_compressibility=np.nan,
                 phase='unknown',
+                liquid_composition=np.zeros_like(z),
+                vapor_composition=np.zeros_like(z),
             ))
             all_converged = False
 
@@ -309,6 +319,8 @@ def _cce_step(
             liquid_compressibility=Z if phase == 'liquid' else 0.0,
             vapor_compressibility=Z if phase == 'vapor' else 0.0,
             phase=phase,
+            liquid_composition=z.copy() if phase == 'liquid' else np.zeros_like(z),
+            vapor_composition=z.copy() if phase == 'vapor' else np.zeros_like(z),
         )
     else:
         # Below saturation: two-phase flash
@@ -337,6 +349,8 @@ def _cce_step(
                 liquid_compressibility=Z if phase == 'liquid' else 0.0,
                 vapor_compressibility=Z if phase == 'vapor' else 0.0,
                 phase=phase,
+                liquid_composition=z.copy() if phase == 'liquid' else np.zeros_like(z),
+                vapor_composition=z.copy() if phase == 'vapor' else np.zeros_like(z),
             )
 
         # Two-phase
@@ -387,6 +401,8 @@ def _cce_step(
             liquid_compressibility=Z_L,
             vapor_compressibility=Z_V,
             phase='two-phase',
+            liquid_composition=x.copy(),
+            vapor_composition=y.copy(),
             Y_function=Y_func,
         )
 

@@ -107,7 +107,7 @@ fluid:
     lumping:
       enabled: false
       n_groups: 8
-      method: "contiguous"
+      method: "whitson"              # legacy "contiguous" still accepted explicitly
       mixing: "lee"                   # how Tc/Pc/omega mix for lumps
 
   eos:

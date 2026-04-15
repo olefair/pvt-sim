@@ -34,7 +34,7 @@ def _example_doc() -> dict:
                     "max_carbon_number": 45,
                     "pedersen": {"mw_model": "MWn = 14n - 4"},
                 },
-                "lumping": {"enabled": True, "n_groups": 4, "method": "contiguous"},
+                "lumping": {"enabled": True, "n_groups": 4},
             },
             "correlations": {"critical_props": "riazi_daubert_1987"},
             "eos": {
@@ -120,9 +120,18 @@ def test_schema_rejects_non_mole_basis() -> None:
         characterize_from_schema(doc)
 
 
+def test_schema_accepts_legacy_contiguous_lumping_method() -> None:
+    doc = _example_doc()
+    doc["fluid"]["plus_fraction"]["lumping"]["method"] = "contiguous"
+
+    res = characterize_from_schema(doc)
+
+    assert res.lumping is not None
+
+
 def test_schema_rejects_unsupported_lumping_method() -> None:
     doc = _example_doc()
-    doc["fluid"]["plus_fraction"]["lumping"]["method"] = "whitson"
+    doc["fluid"]["plus_fraction"]["lumping"]["method"] = "lee"
     with pytest.raises(ConfigurationError):
         characterize_from_schema(doc)
 

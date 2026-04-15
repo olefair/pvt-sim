@@ -144,6 +144,8 @@ class TestCCE:
         assert len(result.pressures) == len(result.steps)
         assert len(result.relative_volumes) == len(result.steps)
         assert result.temperature == T
+        assert all(len(step.liquid_composition) == len(z) for step in result.steps)
+        assert all(len(step.vapor_composition) == len(z) for step in result.steps)
 
     def test_cce_relative_volume_increases(self, methane_propane, methane_propane_eos):
         """Test that relative volume increases as pressure decreases."""

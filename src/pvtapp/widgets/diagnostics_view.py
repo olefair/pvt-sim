@@ -26,12 +26,17 @@ from pvtapp.schemas import (
     SolverDiagnostics,
     SolverCertificate,
     ConvergenceStatusEnum,
+    StabilityAnalysisResult,
 )
 from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 
 
 class DiagnosticsWidget(QWidget):
     """Widget for displaying solver diagnostics and convergence info."""
+
+    _DEFAULT_HISTORY_HEADERS = [
+        "Iteration", "Residual", "Step Norm", "Damping", "Time (ms)"
+    ]
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -103,9 +108,7 @@ class DiagnosticsWidget(QWidget):
 
         self.history_table = QTableWidget()
         self.history_table.setColumnCount(5)
-        self.history_table.setHorizontalHeaderLabels([
-            "Iteration", "Residual", "Step Norm", "Damping", "Time (ms)"
-        ])
+        self.history_table.setHorizontalHeaderLabels(self._DEFAULT_HISTORY_HEADERS)
         self.history_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
@@ -164,6 +167,8 @@ class DiagnosticsWidget(QWidget):
         self.residual_label.setText("-")
         self.reduction_label.setText("-")
         self.convergence_bar.setValue(0)
+        self.history_table.setColumnCount(5)
+        self.history_table.setHorizontalHeaderLabels(self._DEFAULT_HISTORY_HEADERS)
         self.history_table.setRowCount(0)
         self.log_text.clear()
 
@@ -194,6 +199,9 @@ class DiagnosticsWidget(QWidget):
         if result.pt_flash_result:
             diagnostics = result.pt_flash_result.diagnostics
             certificate = result.pt_flash_result.certificate
+        elif result.stability_analysis_result:
+            self._display_stability_analysis(result.stability_analysis_result)
+            return
         elif result.bubble_point_result:
             diagnostics = result.bubble_point_result.diagnostics
             certificate = result.bubble_point_result.certificate
@@ -209,6 +217,8 @@ class DiagnosticsWidget(QWidget):
 
     def _display_diagnostics(self, diag: SolverDiagnostics) -> None:
         """Display solver diagnostics."""
+        self.history_table.setColumnCount(5)
+        self.history_table.setHorizontalHeaderLabels(self._DEFAULT_HISTORY_HEADERS)
         # Status with color coding
         status = diag.status
         color_map = {
@@ -284,6 +294,104 @@ class DiagnosticsWidget(QWidget):
         self.log_text.append(
             f"Jacobian evaluations: {diag.n_jac_evals}"
         )
+
+    def _display_stability_analysis(self, result: StabilityAnalysisResult) -> None:
+        """Display standalone stability-analysis branch diagnostics."""
+        status_text = "STABLE" if result.stable else "UNSTABLE"
+        status_color = "green" if result.stable else "orange"
+        self.status_label.setText(status_text)
+        self.status_label.setStyleSheet(f"color: {status_color}; font-weight: bold;")
+
+        trials = [
+            ("Vapor-like", result.vapor_like_trial),
+            ("Liquid-like", result.liquid_like_trial),
+        ]
+        present_trials = [(label, trial) for label, trial in trials if trial is not None]
+        total_iterations = sum(trial.total_iterations for _label, trial in present_trials)
+        total_eos_failures = sum(trial.n_eos_failures for _label, trial in present_trials)
+        converged_trials = sum(1 for _label, trial in present_trials if trial.converged)
+
+        self.iterations_label.setText(str(total_iterations))
+        self.residual_label.setText(f"{result.tpd_min:.2e}")
+        self.reduction_label.setText("-")
+
+        if not present_trials:
+            self.convergence_bar.setValue(0)
+        else:
+            self.convergence_bar.setValue(int(round(100.0 * converged_trials / len(present_trials))))
+
+        self.history_table.setColumnCount(5)
+        self.history_table.setHorizontalHeaderLabels(
+            ["Trial", "TPD", "Iterations", "Phi Calls", "EOS Failures"]
+        )
+        self.history_table.setRowCount(len(present_trials))
+        for row, (label, trial) in enumerate(present_trials):
+            self.history_table.setItem(row, 0, QTableWidgetItem(label))
+            self.history_table.setItem(row, 1, QTableWidgetItem(f"{trial.tpd:.2e}"))
+            self.history_table.setItem(row, 2, QTableWidgetItem(str(trial.total_iterations)))
+            self.history_table.setItem(row, 3, QTableWidgetItem(str(trial.n_phi_calls)))
+            self.history_table.setItem(row, 4, QTableWidgetItem(str(trial.n_eos_failures)))
+
+        if self._matplotlib_available:
+            self.figure.clear()
+            ax = self.figure.add_subplot(111)
+            labels = [label for label, _trial in present_trials]
+            values = [trial.tpd for _label, trial in present_trials]
+            colors = ["#22c55e" if value >= 0.0 else "#ef4444" for value in values]
+            ax.bar(labels, values, color=colors, alpha=0.85)
+            ax.axhline(0.0, color="#94a3b8", linestyle="--", linewidth=1.2)
+            ax.set_title("TPD Trial Summary")
+            ax.set_ylabel("TPD")
+            self.figure.tight_layout()
+            self.canvas.draw()
+
+        self.log_text.append(f"Minimum TPD: {result.tpd_min:.6e}")
+        self.log_text.append(f"Phase regime: {result.phase_regime}")
+        self.log_text.append(f"Physical state hint: {result.physical_state_hint}")
+        self.log_text.append(f"Hint basis: {result.physical_state_hint_basis}")
+        self.log_text.append(f"Hint confidence: {result.physical_state_hint_confidence}")
+        self.log_text.append(f"Requested feed phase: {result.requested_feed_phase.value}")
+        self.log_text.append(f"Resolved feed phase: {result.resolved_feed_phase}")
+        self.log_text.append(f"Reference root used: {result.reference_root_used}")
+        if result.best_unstable_trial_kind is not None:
+            self.log_text.append(f"Best unstable trial: {result.best_unstable_trial_kind}")
+        self.log_text.append(f"Total EOS failures: {total_eos_failures}")
+        if result.liquid_root_z is not None:
+            self.log_text.append(f"Liquid root Z: {result.liquid_root_z:.6f}")
+        if result.vapor_root_z is not None:
+            self.log_text.append(f"Vapor root Z: {result.vapor_root_z:.6f}")
+        if result.root_gap is not None:
+            self.log_text.append(f"Root gap: {result.root_gap:.6e}")
+        if result.gibbs_gap is not None:
+            self.log_text.append(f"Gibbs gap: {result.gibbs_gap:.6e}")
+        if result.average_reduced_pressure is not None:
+            self.log_text.append(f"Average reduced pressure: {result.average_reduced_pressure:.6f}")
+        if result.bubble_pressure_hint_pa is not None:
+            self.log_text.append(f"Bubble pressure hint: {result.bubble_pressure_hint_pa:.6e} Pa")
+        if result.dew_pressure_hint_pa is not None:
+            self.log_text.append(f"Dew pressure hint: {result.dew_pressure_hint_pa:.6e} Pa")
+        if result.bubble_boundary_reason is not None:
+            self.log_text.append(f"Bubble boundary reason: {result.bubble_boundary_reason}")
+        if result.dew_boundary_reason is not None:
+            self.log_text.append(f"Dew boundary reason: {result.dew_boundary_reason}")
+
+        for label, trial in present_trials:
+            self.log_text.append("")
+            self.log_text.append(f"{label} branch: TPD={trial.tpd:.6e}, converged={trial.converged}")
+            self.log_text.append(
+                f"Seed attempts: {trial.seed_attempts}/{trial.candidate_seed_count}; "
+                f"best seed={trial.best_seed.seed_label}"
+            )
+            if trial.diagnostic_messages:
+                for message in trial.diagnostic_messages:
+                    if message:
+                        self.log_text.append(f"- {message}")
+            for seed in trial.seed_results:
+                self.log_text.append(
+                    "  "
+                    f"{seed.seed_label}: tpd={seed.tpd:.6e}, converged={seed.converged}, "
+                    f"iters={seed.iterations}, phi={seed.n_phi_calls}, eos_failures={seed.n_eos_failures}"
+                )
 
     def _append_certificate_summary(self, certificate: Optional[SolverCertificate]) -> None:
         """Append invariant-certificate status to the diagnostics log when available."""

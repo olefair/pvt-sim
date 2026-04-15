@@ -30,6 +30,7 @@ class PlusFractionPresetSettings:
     max_carbon_number: int
     lumping_enabled: bool
     lumping_n_groups: int
+    lumping_method: str
 
 
 PLUS_FRACTION_PRESET_LABELS: Mapping[PlusFractionCharacterizationPreset, str] = {
@@ -54,6 +55,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=11,
         lumping_enabled=True,
         lumping_n_groups=4,
+        lumping_method="whitson",
     ),
     PlusFractionCharacterizationPreset.CO2_RICH_GAS: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -61,6 +63,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=11,
         lumping_enabled=True,
         lumping_n_groups=4,
+        lumping_method="whitson",
     ),
     PlusFractionCharacterizationPreset.GAS_CONDENSATE: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -68,6 +71,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=18,
         lumping_enabled=True,
         lumping_n_groups=2,
+        lumping_method="whitson",
     ),
     PlusFractionCharacterizationPreset.VOLATILE_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -75,6 +79,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
+        lumping_method="whitson",
     ),
     PlusFractionCharacterizationPreset.BLACK_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -82,6 +87,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
+        lumping_method="whitson",
     ),
     PlusFractionCharacterizationPreset.SOUR_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -89,6 +95,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
+        lumping_method="whitson",
     ),
 }
 
@@ -126,6 +133,7 @@ def _is_gas_like_feed(
     *,
     calculation_type: CalculationType,
     methane: float,
+    acid_gas: float,
     plus_fraction_z: float,
 ) -> bool:
     """Classify the feed broadly as gas-like or oil-like for auto inference."""
@@ -135,7 +143,9 @@ def _is_gas_like_feed(
     if calculation_type in _OIL_FAMILY_CALC_TYPES:
         return False
 
-    return methane >= 0.55 and plus_fraction_z <= 0.12
+    if plus_fraction_z > 0.12:
+        return False
+    return methane >= 0.55 or (methane + acid_gas) >= 0.70
 
 
 def infer_plus_fraction_preset(
@@ -156,6 +166,7 @@ def infer_plus_fraction_preset(
     if _is_gas_like_feed(
         calculation_type=calculation_type,
         methane=methane,
+        acid_gas=acid,
         plus_fraction_z=plus_z,
     ):
         if acid >= 0.20:
@@ -198,6 +209,7 @@ def resolve_plus_fraction_entry(
             "max_carbon_number": settings.max_carbon_number,
             "lumping_enabled": settings.lumping_enabled,
             "lumping_n_groups": settings.lumping_n_groups,
+            "lumping_method": settings.lumping_method,
             "resolved_characterization_preset": resolved_preset,
         }
     )
@@ -229,6 +241,8 @@ def describe_plus_fraction_policy(
         f"split MW model {plus_fraction.split_mw_model}, "
         f"split to C{plus_fraction.max_carbon_number}, lumping {lumping_txt}"
     )
+    if plus_fraction.lumping_enabled:
+        description += f", lumping method {plus_fraction.lumping_method}"
     if plus_fraction.split_method == "pedersen":
         description += f", Pedersen A/B from {plus_fraction.pedersen_solve_ab_from}"
         if plus_fraction.tbp_cuts:

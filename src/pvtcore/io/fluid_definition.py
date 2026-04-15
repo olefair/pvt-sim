@@ -322,6 +322,18 @@ def _map_pedersen_solve_ab_from(mode: str) -> str:
     )
 
 
+def _map_lumping_method(method: str) -> str:
+    method_l = method.strip().lower()
+    if method_l in {"whitson", "contiguous"}:
+        return method_l
+    raise ConfigurationError(
+        "Unsupported lumping method.",
+        config_key="fluid.plus_fraction.lumping.method",
+        value=method,
+        supported=["whitson", "contiguous"],
+    )
+
+
 def load_fluid_definition(path: str | Path) -> dict[str, Any]:
     """Load a fluid definition document from JSON (and YAML if available)."""
     path = Path(path)
@@ -502,14 +514,9 @@ def characterize_from_schema(doc: Mapping[str, Any]) -> CharacterizationResult:
                 _get_optional(lumping, "n_groups", cfg.lumping_n_groups),
                 "fluid.plus_fraction.lumping.n_groups",
             )
-            method = _as_str(_get_optional(lumping, "method", "contiguous"), "fluid.plus_fraction.lumping.method")
-            if method != "contiguous":
-                raise ConfigurationError(
-                    "Unsupported lumping method.",
-                    config_key="fluid.plus_fraction.lumping.method",
-                    value=method,
-                    supported=["contiguous"],
-                )
+            method = _map_lumping_method(
+                _as_str(_get_optional(lumping, "method", "whitson"), "fluid.plus_fraction.lumping.method")
+            )
             cfg = replace(cfg, lumping_enabled=True, lumping_n_groups=n_groups, lumping_method=method)
         else:
             cfg = replace(cfg, lumping_enabled=False)

@@ -52,6 +52,7 @@ class EOSType(str, Enum):
 class CalculationType(str, Enum):
     """Type of PVT calculation to perform."""
     PT_FLASH = "pt_flash"
+    STABILITY_ANALYSIS = "stability_analysis"
     BUBBLE_POINT = "bubble_point"
     DEW_POINT = "dew_point"
     PHASE_ENVELOPE = "phase_envelope"
@@ -119,6 +120,48 @@ class ConvergenceStatusEnum(str, Enum):
     NUMERIC_ERROR = "numeric_error"
 
 
+RuntimeComponentBasis = Literal["scn_unlumped", "lumped"]
+ReportedComponentBasis = Literal["delumped_scn", "reconstructed_scn"]
+DetailedReconstructionComponentBasis = Literal["light_ends_plus_scn", "scn_only"]
+PTFlashReportedSurfaceStatus = Literal[
+    "available",
+    "withheld_single_phase_runtime",
+    "unavailable_no_detailed_reconstruction",
+    "failed_reconstruction",
+]
+
+
+def describe_runtime_component_basis(basis: Optional[RuntimeComponentBasis]) -> Optional[str]:
+    """Return a user-facing label for the runtime component basis."""
+    if basis is None:
+        return None
+    return "SCN (unlumped)" if basis == "scn_unlumped" else "Lumped"
+
+
+def describe_reported_component_basis(basis: Optional[ReportedComponentBasis]) -> Optional[str]:
+    """Return a user-facing label for a reported detailed component basis."""
+    if basis is None:
+        return None
+    return {
+        "delumped_scn": "Delumped SCN detail",
+        "reconstructed_scn": "Reconstructed SCN thermodynamics",
+    }[basis]
+
+
+def describe_pt_flash_reported_surface_status(
+    status: Optional[PTFlashReportedSurfaceStatus],
+) -> Optional[str]:
+    """Return a user-facing label for PT-flash reported-surface availability."""
+    if status is None:
+        return None
+    return {
+        "available": "Available",
+        "withheld_single_phase_runtime": "Withheld for single-phase runtime",
+        "unavailable_no_detailed_reconstruction": "Unavailable (no detailed reconstruction)",
+        "failed_reconstruction": "Reconstruction failed",
+    }[status]
+
+
 # ==============================================================================
 # Unit Conversion Helpers
 # ==============================================================================
@@ -162,6 +205,14 @@ def temperature_to_k(value: float, unit: TemperatureUnit) -> float:
     elif unit == TemperatureUnit.R:
         return value * 5 / 9
     raise ValueError(f"Unknown temperature unit: {unit}")
+
+
+class StabilityFeedPhase(str, Enum):
+    """Feed-phase policy for Michelsen / TPD stability analysis."""
+
+    AUTO = "auto"
+    LIQUID = "liquid"
+    VAPOR = "vapor"
 
 
 def temperature_from_k(value: float, unit: TemperatureUnit) -> float:
@@ -363,6 +414,10 @@ class PlusFractionEntry(BaseModel):
         ge=1,
         le=200,
         description="Target number of pseudo groups if lumping is enabled",
+    )
+    lumping_method: Literal["whitson", "contiguous"] = Field(
+        default="whitson",
+        description="Heavy-end lumping method used when lumping is enabled",
     )
     tbp_cuts: Optional[List[PlusFractionTBPCutEntry]] = Field(
         default=None,
@@ -575,6 +630,57 @@ class PTFlashConfig(BaseModel):
     temperature_unit: TemperatureUnit = Field(
         default=TemperatureUnit.C,
         description="Preferred temperature unit for GUI input/output"
+    )
+
+
+class StabilityAnalysisConfig(BaseModel):
+    """Configuration for standalone Michelsen / TPD stability analysis."""
+
+    pressure_pa: float = Field(
+        ...,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Pressure in Pascal",
+    )
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Temperature in Kelvin",
+    )
+    feed_phase: StabilityFeedPhase = Field(
+        default=StabilityFeedPhase.AUTO,
+        description="Feed-phase policy used to anchor the TPD reference state",
+    )
+    use_gdem: bool = Field(
+        default=True,
+        description="Enable GDEM acceleration for the log-space TPD solver",
+    )
+    n_random_trials: int = Field(
+        default=0,
+        ge=0,
+        le=12,
+        description="Additional random seed trials to probe alternative stationary points",
+    )
+    random_seed: Optional[int] = Field(
+        default=0,
+        ge=0,
+        le=2**31 - 1,
+        description="Deterministic seed used when random trials are enabled",
+    )
+    max_eos_failures_per_trial: int = Field(
+        default=5,
+        ge=0,
+        le=50,
+        description="Maximum transient EOS evaluation failures tolerated per trial branch",
+    )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output",
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output",
     )
 
 
@@ -1011,6 +1117,7 @@ class RunConfig(BaseModel):
 
     # Calculation-specific configuration (polymorphic)
     pt_flash_config: Optional[PTFlashConfig] = None
+    stability_analysis_config: Optional[StabilityAnalysisConfig] = None
     bubble_point_config: Optional[SaturationPointConfig] = None
     dew_point_config: Optional[SaturationPointConfig] = None
     phase_envelope_config: Optional[PhaseEnvelopeConfig] = None
@@ -1045,6 +1152,9 @@ class RunConfig(BaseModel):
         if self.calculation_type == CalculationType.PT_FLASH:
             if self.pt_flash_config is None:
                 raise ValueError("pt_flash_config is required for PT_FLASH calculation")
+        elif self.calculation_type == CalculationType.STABILITY_ANALYSIS:
+            if self.stability_analysis_config is None:
+                raise ValueError("stability_analysis_config is required for STABILITY_ANALYSIS calculation")
         elif self.calculation_type == CalculationType.BUBBLE_POINT:
             if self.bubble_point_config is None:
                 raise ValueError("bubble_point_config is required for BUBBLE_POINT calculation")
@@ -1135,8 +1245,221 @@ class PTFlashResult(BaseModel):
     K_values: Dict[str, float]
     liquid_fugacity: Dict[str, float]
     vapor_fugacity: Dict[str, float]
+    reported_surface_status: Optional[PTFlashReportedSurfaceStatus] = None
+    reported_surface_reason: Optional[str] = None
+    reported_component_basis: Optional[ReportedComponentBasis] = None
+    reported_liquid_composition: Optional[Dict[str, float]] = None
+    reported_vapor_composition: Optional[Dict[str, float]] = None
+    reported_k_values: Optional[Dict[str, float]] = None
+    reported_liquid_fugacity: Optional[Dict[str, float]] = None
+    reported_vapor_fugacity: Optional[Dict[str, float]] = None
+    liquid_density_kg_per_m3: Optional[float] = None
+    vapor_density_kg_per_m3: Optional[float] = None
+    liquid_viscosity_pa_s: Optional[float] = None
+    vapor_viscosity_pa_s: Optional[float] = None
+    interfacial_tension_n_per_m: Optional[float] = None
     diagnostics: SolverDiagnostics
     certificate: Optional[SolverCertificate] = None
+
+    @property
+    def has_reported_thermodynamic_surface(self) -> bool:
+        """Return True only when the reported PT-flash surface is complete."""
+        return (
+            self.reported_component_basis is not None
+            and self.reported_liquid_composition is not None
+            and self.reported_vapor_composition is not None
+            and self.reported_k_values is not None
+            and self.reported_liquid_fugacity is not None
+            and self.reported_vapor_fugacity is not None
+        )
+
+    @property
+    def display_liquid_composition(self) -> Dict[str, float]:
+        """Return the currently renderable liquid composition surface."""
+        if not self.has_reported_thermodynamic_surface:
+            return self.liquid_composition
+        return self.reported_liquid_composition  # type: ignore[return-value]
+
+    @property
+    def display_vapor_composition(self) -> Dict[str, float]:
+        """Return the currently renderable vapor composition surface."""
+        if not self.has_reported_thermodynamic_surface:
+            return self.vapor_composition
+        return self.reported_vapor_composition  # type: ignore[return-value]
+
+    @property
+    def display_k_values(self) -> Dict[str, float]:
+        """Return the currently renderable K-value surface."""
+        if not self.has_reported_thermodynamic_surface:
+            return self.K_values
+        return self.reported_k_values  # type: ignore[return-value]
+
+    @property
+    def display_liquid_fugacity(self) -> Dict[str, float]:
+        """Return the currently renderable liquid fugacity surface."""
+        if not self.has_reported_thermodynamic_surface:
+            return self.liquid_fugacity
+        return self.reported_liquid_fugacity  # type: ignore[return-value]
+
+    @property
+    def display_vapor_fugacity(self) -> Dict[str, float]:
+        """Return the currently renderable vapor fugacity surface."""
+        if not self.has_reported_thermodynamic_surface:
+            return self.vapor_fugacity
+        return self.reported_vapor_fugacity  # type: ignore[return-value]
+
+    @property
+    def liquid_viscosity_cp(self) -> Optional[float]:
+        """Liquid viscosity converted to centipoise for UI display."""
+        if self.liquid_viscosity_pa_s is None:
+            return None
+        return self.liquid_viscosity_pa_s * 1000.0
+
+    @property
+    def vapor_viscosity_cp(self) -> Optional[float]:
+        """Vapor viscosity converted to centipoise for UI display."""
+        if self.vapor_viscosity_pa_s is None:
+            return None
+        return self.vapor_viscosity_pa_s * 1000.0
+
+    @property
+    def interfacial_tension_mn_per_m(self) -> Optional[float]:
+        """Interfacial tension converted to mN/m for UI display."""
+        if self.interfacial_tension_n_per_m is None:
+            return None
+        return self.interfacial_tension_n_per_m * 1000.0
+
+
+class StabilitySeedResultData(BaseModel):
+    """Single seed attempt reported on the app/runtime surface."""
+
+    kind: str
+    trial_phase: str
+    seed_index: int
+    seed_label: str
+    initial_composition: Dict[str, float]
+    composition: Dict[str, float]
+    tpd: float
+    iterations: int
+    converged: bool
+    early_exit_unstable: bool
+    n_phi_calls: int
+    n_eos_failures: int
+    message: Optional[str] = None
+
+
+class StabilityTrialResultData(BaseModel):
+    """Aggregated trial-branch diagnostics for standalone stability analysis."""
+
+    kind: str
+    trial_phase: str
+    composition: Dict[str, float]
+    tpd: float
+    iterations: int
+    total_iterations: int
+    converged: bool
+    early_exit_unstable: bool
+    n_phi_calls: int
+    n_eos_failures: int
+    message: Optional[str] = None
+    best_seed_index: int
+    candidate_seed_labels: List[str] = Field(default_factory=list)
+    diagnostic_messages: List[str] = Field(default_factory=list)
+    seed_results: List[StabilitySeedResultData] = Field(default_factory=list)
+
+    @property
+    def seed_attempts(self) -> int:
+        return len(self.seed_results)
+
+    @property
+    def candidate_seed_count(self) -> int:
+        return len(self.candidate_seed_labels)
+
+    @property
+    def stopped_early(self) -> bool:
+        return self.seed_attempts < self.candidate_seed_count
+
+    @property
+    def best_seed(self) -> StabilitySeedResultData:
+        return self.seed_results[self.best_seed_index]
+
+
+class StabilityAnalysisResult(BaseModel):
+    """Standalone Michelsen / TPD stability-analysis result."""
+
+    stable: bool
+    tpd_min: float
+    pressure_pa: float
+    temperature_k: float
+    requested_feed_phase: StabilityFeedPhase
+    resolved_feed_phase: str
+    reference_root_used: str
+    phase_regime: Literal["single_phase", "two_phase"]
+    physical_state_hint: Literal[
+        "two_phase",
+        "single_phase_vapor_like",
+        "single_phase_liquid_like",
+        "single_phase_ambiguous",
+    ]
+    physical_state_hint_basis: Literal[
+        "two_phase_regime",
+        "direct_root_split",
+        "saturation_window",
+        "supercritical_guard",
+        "no_boundary_guard",
+        "heuristic_fallback",
+    ] = "heuristic_fallback"
+    physical_state_hint_confidence: Literal["high", "medium", "low"] = "low"
+    liquid_root_z: Optional[float] = None
+    vapor_root_z: Optional[float] = None
+    root_gap: Optional[float] = None
+    gibbs_gap: Optional[float] = None
+    average_reduced_pressure: Optional[float] = None
+    bubble_pressure_hint_pa: Optional[float] = None
+    dew_pressure_hint_pa: Optional[float] = None
+    bubble_boundary_reason: Optional[str] = None
+    dew_boundary_reason: Optional[str] = None
+    feed_composition: Dict[str, float]
+    best_unstable_trial_kind: Optional[str] = None
+    vapor_like_trial: Optional[StabilityTrialResultData] = None
+    liquid_like_trial: Optional[StabilityTrialResultData] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _backfill_legacy_fields(cls, data):
+        """Preserve compatibility with older saved runs."""
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if "reference_root_used" not in normalized and "resolved_reference_phase" in normalized:
+            normalized["reference_root_used"] = normalized["resolved_reference_phase"]
+        if "phase_regime" not in normalized:
+            normalized["phase_regime"] = "single_phase" if normalized.get("stable") else "two_phase"
+        if "physical_state_hint" not in normalized:
+            normalized["physical_state_hint"] = (
+                "two_phase"
+                if normalized.get("phase_regime") == "two_phase" or normalized.get("stable") is False
+                else "single_phase_ambiguous"
+            )
+        if "physical_state_hint_basis" not in normalized:
+            normalized["physical_state_hint_basis"] = (
+                "two_phase_regime"
+                if normalized.get("phase_regime") == "two_phase" or normalized.get("stable") is False
+                else "heuristic_fallback"
+            )
+        if "physical_state_hint_confidence" not in normalized:
+            normalized["physical_state_hint_confidence"] = (
+                "high"
+                if normalized.get("phase_regime") == "two_phase" or normalized.get("stable") is False
+                else "low"
+            )
+        return normalized
+
+    @property
+    def resolved_reference_phase(self) -> str:
+        """Backward-compatible alias for the old field name."""
+        return self.reference_root_used
 
 
 class PhaseEnvelopePoint(BaseModel):
@@ -1199,6 +1522,22 @@ class CCEStepResult(BaseModel):
     z_factor: Optional[float] = None
     liquid_density_kg_per_m3: Optional[float] = None
     vapor_density_kg_per_m3: Optional[float] = None
+    liquid_viscosity_pa_s: Optional[float] = None
+    vapor_viscosity_pa_s: Optional[float] = None
+
+    @property
+    def liquid_viscosity_cp(self) -> Optional[float]:
+        """Liquid viscosity converted to centipoise for UI display."""
+        if self.liquid_viscosity_pa_s is None:
+            return None
+        return self.liquid_viscosity_pa_s * 1000.0
+
+    @property
+    def vapor_viscosity_cp(self) -> Optional[float]:
+        """Vapor viscosity converted to centipoise for UI display."""
+        if self.vapor_viscosity_pa_s is None:
+            return None
+        return self.vapor_viscosity_pa_s * 1000.0
 
 
 class CCEResult(BaseModel):
@@ -1221,8 +1560,37 @@ class BubblePointResult(BaseModel):
     liquid_composition: Dict[str, float]
     vapor_composition: Dict[str, float]
     k_values: Dict[str, float]
+    reported_component_basis: Optional[ReportedComponentBasis] = None
+    reported_liquid_composition: Optional[Dict[str, float]] = None
+    reported_vapor_composition: Optional[Dict[str, float]] = None
+    reported_k_values: Optional[Dict[str, float]] = None
     diagnostics: Optional[SolverDiagnostics] = None
     certificate: Optional[SolverCertificate] = None
+
+    @property
+    def has_reported_surface(self) -> bool:
+        """Return True only when the reported saturation surface is complete."""
+        return (
+            self.reported_component_basis is not None
+            and self.reported_liquid_composition is not None
+            and self.reported_vapor_composition is not None
+            and self.reported_k_values is not None
+        )
+
+    @property
+    def display_liquid_composition(self) -> Dict[str, float]:
+        """Return the user-facing liquid composition basis."""
+        return self.liquid_composition if not self.has_reported_surface else self.reported_liquid_composition  # type: ignore[return-value]
+
+    @property
+    def display_vapor_composition(self) -> Dict[str, float]:
+        """Return the user-facing vapor composition basis."""
+        return self.vapor_composition if not self.has_reported_surface else self.reported_vapor_composition  # type: ignore[return-value]
+
+    @property
+    def display_k_values(self) -> Dict[str, float]:
+        """Return the user-facing K-value basis."""
+        return self.k_values if not self.has_reported_surface else self.reported_k_values  # type: ignore[return-value]
 
 
 class DewPointResult(BaseModel):
@@ -1237,8 +1605,37 @@ class DewPointResult(BaseModel):
     liquid_composition: Dict[str, float]
     vapor_composition: Dict[str, float]
     k_values: Dict[str, float]
+    reported_component_basis: Optional[ReportedComponentBasis] = None
+    reported_liquid_composition: Optional[Dict[str, float]] = None
+    reported_vapor_composition: Optional[Dict[str, float]] = None
+    reported_k_values: Optional[Dict[str, float]] = None
     diagnostics: Optional[SolverDiagnostics] = None
     certificate: Optional[SolverCertificate] = None
+
+    @property
+    def has_reported_surface(self) -> bool:
+        """Return True only when the reported saturation surface is complete."""
+        return (
+            self.reported_component_basis is not None
+            and self.reported_liquid_composition is not None
+            and self.reported_vapor_composition is not None
+            and self.reported_k_values is not None
+        )
+
+    @property
+    def display_liquid_composition(self) -> Dict[str, float]:
+        """Return the user-facing liquid composition basis."""
+        return self.liquid_composition if not self.has_reported_surface else self.reported_liquid_composition  # type: ignore[return-value]
+
+    @property
+    def display_vapor_composition(self) -> Dict[str, float]:
+        """Return the user-facing vapor composition basis."""
+        return self.vapor_composition if not self.has_reported_surface else self.reported_vapor_composition  # type: ignore[return-value]
+
+    @property
+    def display_k_values(self) -> Dict[str, float]:
+        """Return the user-facing K-value basis."""
+        return self.k_values if not self.has_reported_surface else self.reported_k_values  # type: ignore[return-value]
 
 
 class DLStepResult(BaseModel):
@@ -1250,7 +1647,27 @@ class DLStepResult(BaseModel):
     bo: float
     bt: float
     vapor_fraction: float
+    oil_density_kg_per_m3: Optional[float] = None
+    oil_viscosity_pa_s: Optional[float] = None
+    gas_gravity: Optional[float] = None
+    gas_z_factor: Optional[float] = None
+    gas_viscosity_pa_s: Optional[float] = None
+    cumulative_gas_produced: Optional[float] = None
     liquid_moles_remaining: Optional[float] = None
+
+    @property
+    def oil_viscosity_cp(self) -> Optional[float]:
+        """Oil viscosity converted to centipoise for UI display."""
+        if self.oil_viscosity_pa_s is None:
+            return None
+        return self.oil_viscosity_pa_s * 1000.0
+
+    @property
+    def gas_viscosity_cp(self) -> Optional[float]:
+        """Gas viscosity converted to centipoise for UI display."""
+        if self.gas_viscosity_pa_s is None:
+            return None
+        return self.gas_viscosity_pa_s * 1000.0
 
 
 class DLResult(BaseModel):
@@ -1260,6 +1677,7 @@ class DLResult(BaseModel):
     bubble_pressure_pa: float
     rsi: float
     boi: float
+    residual_oil_density_kg_per_m3: Optional[float] = None
     converged: bool
     steps: List[DLStepResult]
 
@@ -1275,6 +1693,22 @@ class CVDStepResult(BaseModel):
     z_two_phase: Optional[float] = None
     liquid_density_kg_per_m3: Optional[float] = None
     vapor_density_kg_per_m3: Optional[float] = None
+    liquid_viscosity_pa_s: Optional[float] = None
+    vapor_viscosity_pa_s: Optional[float] = None
+
+    @property
+    def liquid_viscosity_cp(self) -> Optional[float]:
+        """Liquid viscosity converted to centipoise for UI display."""
+        if self.liquid_viscosity_pa_s is None:
+            return None
+        return self.liquid_viscosity_pa_s * 1000.0
+
+    @property
+    def vapor_viscosity_cp(self) -> Optional[float]:
+        """Vapor viscosity converted to centipoise for UI display."""
+        if self.vapor_viscosity_pa_s is None:
+            return None
+        return self.vapor_viscosity_pa_s * 1000.0
 
 
 class CVDResult(BaseModel):
@@ -1313,6 +1747,10 @@ class SeparatorResult(BaseModel):
     bg: float
     api_gravity: float
     stock_tank_oil_density: float
+    stock_tank_oil_mw_g_per_mol: Optional[float] = None
+    stock_tank_oil_specific_gravity: Optional[float] = None
+    total_gas_moles: Optional[float] = None
+    shrinkage: Optional[float] = None
     converged: bool
     stages: List[SeparatorStageResult]
 
@@ -1336,14 +1774,68 @@ class TBPExperimentCutResult(BaseModel):
     boiling_point_source: Optional[Literal["input", "estimated_soreide"]] = None
 
 
+class TBPCharacterizationPedersenFit(BaseModel):
+    """Resolved Pedersen fit metadata for a TBP-derived characterization bridge."""
+
+    solve_ab_from: Literal["balances", "fit_to_tbp"] = Field(
+        ...,
+        description="How the Pedersen A/B coefficients were resolved",
+    )
+    A: float
+    B: float
+    tbp_cut_rms_relative_error: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="RMS relative cut-fit mismatch when TBP cuts constrained the split",
+    )
+
+
+class TBPCharacterizationSCNEntry(BaseModel):
+    """Derived SCN-level runtime characterization entry."""
+
+    component_id: str = Field(..., min_length=1, max_length=50)
+    carbon_number: int = Field(..., ge=1, le=200)
+    assay_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    normalized_mole_fraction: float = Field(..., ge=0.0, le=1.0)
+    normalized_mass_fraction: float = Field(..., ge=0.0, le=1.0)
+    molecular_weight_g_per_mol: float = Field(..., gt=0.0)
+    specific_gravity_60f: float = Field(..., gt=0.0)
+    boiling_point_k: float = Field(..., gt=0.0)
+    critical_temperature_k: float = Field(..., gt=0.0)
+    critical_pressure_pa: float = Field(..., gt=0.0)
+    critical_volume_m3_per_mol: float = Field(..., gt=0.0)
+    omega: float
+
+
+class TBPCharacterizationCutMapping(BaseModel):
+    """Observed TBP cut compared to the derived SCN split over the same range."""
+
+    cut_name: str = Field(..., min_length=1, max_length=50)
+    carbon_number: int = Field(..., ge=1, le=200)
+    carbon_number_end: int = Field(..., ge=1, le=200)
+    observed_mole_fraction: float = Field(..., gt=0.0, le=COMPOSITION_MAX)
+    observed_normalized_mole_fraction: float = Field(..., gt=0.0, le=1.0)
+    characterized_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    characterized_normalized_mole_fraction: float = Field(..., ge=0.0, le=1.0)
+    characterized_average_molecular_weight_g_per_mol: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+    )
+    normalized_relative_error: Optional[float] = None
+    scn_members: List[int] = Field(
+        default_factory=list,
+        description="SCN carbon numbers allocated inside this observed TBP cut",
+    )
+
+
 class TBPCharacterizationContext(BaseModel):
-    """Aggregate heavy-end context derived from a standalone TBP assay."""
+    """Derived heavy-end characterization context for a standalone TBP assay."""
 
     source: Literal["tbp_assay"] = Field(
         default="tbp_assay",
         description="Source used to derive this heavy-end bridge context",
     )
-    bridge_status: Literal["aggregate_only"] = Field(
+    bridge_status: Literal["aggregate_only", "characterized_scn"] = Field(
         default="aggregate_only",
         description="Current bridge fidelity into the broader runtime surface",
     )
@@ -1362,6 +1854,31 @@ class TBPCharacterizationContext(BaseModel):
         default=None,
         gt=0.0,
         description="Aggregate plus-fraction specific gravity when explicitly available",
+    )
+    characterization_method: Optional[str] = Field(
+        default=None,
+        description="Derived heavy-end characterization method used for the runtime bridge",
+    )
+    split_mw_model: Optional[str] = Field(
+        default=None,
+        description="SCN molecular-weight basis used while deriving the bridge context",
+    )
+    pseudo_property_correlation: Optional[str] = Field(
+        default=None,
+        description="Pseudo-component property correlation used for the derived SCN property table",
+    )
+    runtime_component_basis: Optional[RuntimeComponentBasis] = Field(
+        default=None,
+        description="Component basis represented by the derived runtime characterization context",
+    )
+    pedersen_fit: Optional[TBPCharacterizationPedersenFit] = None
+    cut_mappings: List[TBPCharacterizationCutMapping] = Field(
+        default_factory=list,
+        description="Observed TBP cuts compared to the derived SCN allocation over the same ranges",
+    )
+    scn_distribution: List[TBPCharacterizationSCNEntry] = Field(
+        default_factory=list,
+        description="Derived SCN-level property table and split distribution used by the runtime bridge",
     )
     notes: List[str] = Field(
         default_factory=list,
@@ -1408,6 +1925,161 @@ class TBPExperimentResult(BaseModel):
         return self
 
 
+class RuntimeCharacterizationSCNEntry(BaseModel):
+    """Resolved SCN-level characterization entry preserved for runtime reuse."""
+
+    component_id: str = Field(..., min_length=1, max_length=50)
+    carbon_number: int = Field(..., ge=1, le=200)
+    feed_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    normalized_plus_mole_fraction: float = Field(..., ge=0.0, le=1.0)
+    normalized_plus_mass_fraction: float = Field(..., ge=0.0, le=1.0)
+    molecular_weight_g_per_mol: float = Field(..., gt=0.0)
+    specific_gravity_60f: float = Field(..., gt=0.0)
+    boiling_point_k: float = Field(..., gt=0.0)
+    critical_temperature_k: float = Field(..., gt=0.0)
+    critical_pressure_pa: float = Field(..., gt=0.0)
+    critical_volume_m3_per_mol: float = Field(..., gt=0.0)
+    omega: float
+
+
+class RuntimeCharacterizationLumpMember(BaseModel):
+    """SCN member retained inside a runtime lump for delumping reconstruction."""
+
+    component_id: str = Field(..., min_length=1, max_length=50)
+    carbon_number: int = Field(..., ge=1, le=200)
+    feed_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    normalized_plus_mole_fraction: float = Field(..., ge=0.0, le=1.0)
+    delumping_weight: float = Field(..., ge=0.0, le=1.0)
+
+
+class RuntimeCharacterizationLumpEntry(BaseModel):
+    """Lumped runtime heavy-end group plus the SCN members needed to delump it."""
+
+    component_id: str = Field(..., min_length=1, max_length=50)
+    carbon_number_start: int = Field(..., ge=1, le=200)
+    carbon_number_end: int = Field(..., ge=1, le=200)
+    feed_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    normalized_plus_mole_fraction: float = Field(..., ge=0.0, le=1.0)
+    molecular_weight_g_per_mol: float = Field(..., gt=0.0)
+    member_count: int = Field(..., ge=1)
+    members: List[RuntimeCharacterizationLumpMember] = Field(default_factory=list)
+
+
+class RuntimeReconstructionComponentEntry(BaseModel):
+    """Detailed-basis component entry preserved for a second EOS pass."""
+
+    component_id: str = Field(..., min_length=1, max_length=50)
+    source: Literal["resolved_feed_component", "characterized_scn"] = Field(
+        ...,
+        description="Whether this detailed component came from the resolved feed or SCN characterization",
+    )
+    feed_mole_fraction: float = Field(..., ge=0.0, le=COMPOSITION_MAX)
+    molecular_weight_g_per_mol: float = Field(..., gt=0.0)
+    critical_temperature_k: float = Field(..., gt=0.0)
+    critical_pressure_pa: float = Field(..., gt=0.0)
+    critical_volume_m3_per_mol: float = Field(..., gt=0.0)
+    omega: float
+    boiling_point_k: Optional[float] = Field(default=None, gt=0.0)
+    specific_gravity_60f: Optional[float] = Field(default=None, gt=0.0)
+
+
+class RuntimeReconstructionBIPProvenance(BaseModel):
+    """How the preserved detailed-basis BIP matrix was materialized."""
+
+    source: Literal["characterization_static_matrix"] = Field(
+        default="characterization_static_matrix",
+        description="Detailed BIP matrix source used for reconstruction",
+    )
+    materialization: Literal["stored_matrix"] = Field(
+        default="stored_matrix",
+        description="Whether the detailed matrix is stored directly or must be rebuilt",
+    )
+    temperature_policy: Literal["static"] = Field(
+        default="static",
+        description="Whether the preserved detailed matrix is temperature-dependent",
+    )
+    materialized_temperature_k: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Run temperature used to materialize the matrix when temperature-dependent",
+    )
+    default_kij: float = Field(
+        default=0.0,
+        description="Default kij used before applying explicit overrides in the current runtime path",
+    )
+    override_pairs: List[str] = Field(
+        default_factory=list,
+        description="Override pair selectors applied while building the preserved detailed matrix",
+    )
+    notes: List[str] = Field(default_factory=list)
+
+
+class RuntimeDetailedReconstructionContext(BaseModel):
+    """Detailed component basis preserved for honest second-pass reconstruction."""
+
+    component_basis: DetailedReconstructionComponentBasis = Field(
+        ...,
+        description="Detailed component basis preserved for second-pass reconstruction",
+    )
+    components: List[RuntimeReconstructionComponentEntry] = Field(
+        default_factory=list,
+        description="Ordered detailed component entries; matrix rows and columns follow this order",
+    )
+    binary_interaction_matrix: List[List[float]] = Field(
+        default_factory=list,
+        description="Stored detailed-basis BIP matrix aligned to the preserved component order",
+    )
+    bip_provenance: RuntimeReconstructionBIPProvenance
+    notes: List[str] = Field(default_factory=list)
+
+
+class RuntimeCharacterizationResult(BaseModel):
+    """Reusable heavy-end characterization package preserved alongside a run."""
+
+    source: Literal["plus_fraction_runtime", "tbp_assay"] = Field(
+        ...,
+        description="Where the preserved runtime characterization originated",
+    )
+    plus_fraction_label: str = Field(..., min_length=1, max_length=50)
+    cut_start: int = Field(..., ge=1, le=200)
+    cut_end: int = Field(..., ge=1, le=200)
+    z_plus: float = Field(..., gt=0.0, le=COMPOSITION_MAX)
+    mw_plus_g_per_mol: float = Field(..., gt=0.0)
+    sg_plus_60f: Optional[float] = Field(default=None, gt=0.0)
+    split_method: Literal["pedersen", "katz", "lohrenz"] = Field(
+        ...,
+        description="Configured runtime split method that produced the preserved SCN basis",
+    )
+    split_mw_model: Optional[Literal["paraffin", "table"]] = Field(default=None)
+    pseudo_property_correlation: Optional[str] = Field(default=None)
+    lumping_method: Optional[Literal["whitson", "contiguous"]] = Field(
+        default=None,
+        description="Lumping method actually used when the runtime solved on lumped heavy-end groups",
+    )
+    runtime_component_basis: RuntimeComponentBasis = Field(
+        ...,
+        description="Whether the actual runtime solved on full SCNs or lumped heavy-end groups",
+    )
+    runtime_component_ids: List[str] = Field(
+        default_factory=list,
+        description="Component IDs used by the runtime after heavy-end preparation",
+    )
+    pedersen_fit: Optional[TBPCharacterizationPedersenFit] = None
+    cut_mappings: List[TBPCharacterizationCutMapping] = Field(default_factory=list)
+    scn_distribution: List[RuntimeCharacterizationSCNEntry] = Field(default_factory=list)
+    lump_distribution: List[RuntimeCharacterizationLumpEntry] = Field(default_factory=list)
+    delumping_basis: Optional[Literal["feed_scn_distribution"]] = Field(default=None)
+    detailed_reconstruction: Optional[RuntimeDetailedReconstructionContext] = Field(
+        default=None,
+        description="Detailed-basis component and BIP payload preserved for a second EOS pass",
+    )
+    detailed_reconstruction_unavailable_reason: Optional[str] = Field(
+        default=None,
+        description="Explicit reason when a detailed reconstruction payload could not be preserved",
+    )
+    notes: List[str] = Field(default_factory=list)
+
+
 # ==============================================================================
 # Run Result Container
 # ==============================================================================
@@ -1433,6 +2105,7 @@ class RunResult(BaseModel):
 
     # Results (polymorphic based on calculation type)
     pt_flash_result: Optional[PTFlashResult] = None
+    stability_analysis_result: Optional[StabilityAnalysisResult] = None
     bubble_point_result: Optional[BubblePointResult] = None
     dew_point_result: Optional[DewPointResult] = None
     phase_envelope_result: Optional[PhaseEnvelopeResult] = None
@@ -1441,6 +2114,7 @@ class RunResult(BaseModel):
     dl_result: Optional[DLResult] = None
     cvd_result: Optional[CVDResult] = None
     separator_result: Optional[SeparatorResult] = None
+    runtime_characterization: Optional[RuntimeCharacterizationResult] = None
 
 
 # ==============================================================================

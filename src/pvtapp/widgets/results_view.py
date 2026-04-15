@@ -44,6 +44,8 @@ from pvtapp.schemas import (
     RunStatus,
     PTFlashResult,
     PTFlashConfig,
+    StabilityAnalysisResult,
+    StabilityAnalysisConfig,
     BubblePointResult,
     DewPointResult,
     PhaseEnvelopeResult,
@@ -57,6 +59,9 @@ from pvtapp.schemas import (
     DLConfig,
     PressureUnit,
     TemperatureUnit,
+    describe_pt_flash_reported_surface_status,
+    describe_reported_component_basis,
+    describe_runtime_component_basis,
     pressure_to_pa,
     pressure_from_pa,
     temperature_from_k,
@@ -111,11 +116,19 @@ def _format_temperature(value_k: float, unit: TemperatureUnit, *, precision: int
     return f"{temperature_from_k(value_k, unit):.{precision}f} {_format_temperature_unit(unit)}"
 
 
+def _format_optional_measurement(value: Optional[float], *, precision: int, unit: str) -> str:
+    """Format an optional scalar measurement with units for summary tables."""
+    if value is None or not math.isfinite(value):
+        return "-"
+    return f"{value:.{precision}f} {unit}"
+
+
 def _format_calculation_type_label(calculation_type) -> str:
     """Render calculation-type labels for user-facing tables."""
     value = calculation_type.value
     labels = {
         "pt_flash": "PT Flash",
+        "stability_analysis": "Stability Analysis",
         "bubble_point": "Bubble Point",
         "dew_point": "Dew Point",
         "phase_envelope": "Phase Envelope",
@@ -597,6 +610,8 @@ class ResultsTableWidget(QWidget):
         # Display appropriate result type
         if result.pt_flash_result:
             self._display_pt_flash(result.pt_flash_result)
+        elif result.stability_analysis_result:
+            self._display_stability_analysis(result.stability_analysis_result)
         elif result.bubble_point_result:
             self._display_bubble_point(result.bubble_point_result)
         elif result.dew_point_result:
@@ -784,6 +799,15 @@ class ResultsTableWidget(QWidget):
             return PressureUnit.BAR, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
 
+    def _stability_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred standalone stability-analysis display units."""
+        config: Optional[StabilityAnalysisConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.stability_analysis_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
     def _cce_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
         """Return the preferred CCE display units."""
         config: Optional[CCEConfig] = None
@@ -810,22 +834,64 @@ class ResultsTableWidget(QWidget):
         ):
             return []
         plus_fraction = self._current_result.config.composition.plus_fraction
-        return [
+        rows = [
             ("C7+ Policy", describe_plus_fraction_policy(plus_fraction)),
             ("C7+ MW+", f"{plus_fraction.mw_plus_g_per_mol:.3f} g/mol"),
             ("C7+ SG+", "-" if plus_fraction.sg_plus_60f is None else f"{plus_fraction.sg_plus_60f:.3f}"),
         ]
+        rows.extend(self._runtime_characterization_summary_rows())
+        return rows
+
+    def _runtime_characterization_summary_rows(self) -> list[tuple[str, str]]:
+        if self._current_result is None or self._current_result.runtime_characterization is None:
+            return []
+
+        runtime = self._current_result.runtime_characterization
+        basis_label = describe_runtime_component_basis(runtime.runtime_component_basis)
+        rows = [
+            ("Runtime Basis", basis_label or runtime.runtime_component_basis),
+            ("Runtime Split", runtime.split_method.replace("_", " ")),
+            ("Runtime Components", str(len(runtime.runtime_component_ids))),
+            ("SCNs", str(len(runtime.scn_distribution))),
+        ]
+        if runtime.lumping_method is not None:
+            rows.append(("Runtime Lumping", runtime.lumping_method.title()))
+        if runtime.lump_distribution:
+            rows.append(("Lumps", str(len(runtime.lump_distribution))))
+        if runtime.delumping_basis is not None:
+            rows.append(("Delumping", runtime.delumping_basis.replace("_", " ")))
+        if runtime.pedersen_fit is not None:
+            rows.append(("Pedersen A/B", f"{runtime.pedersen_fit.A:.4f}, {runtime.pedersen_fit.B:.6f}"))
+            if runtime.pedersen_fit.tbp_cut_rms_relative_error is not None:
+                rows.append(("Cut Fit RMS", f"{runtime.pedersen_fit.tbp_cut_rms_relative_error:.4f}"))
+        return rows
 
     def _tbp_characterization_summary_rows(self, result: TBPExperimentResult) -> list[tuple[str, str]]:
         context = result.characterization_context
         if context is None:
             return []
-        return [
+        status_label = {
+            "aggregate_only": "Aggregate only",
+            "characterized_scn": "Characterized SCN",
+        }.get(context.bridge_status, context.bridge_status.replace("_", " ").title())
+        rows = [
             ("Bridge Source", "TBP assay"),
-            ("Bridge Status", "Aggregate only"),
+            ("Bridge Status", status_label),
             ("Bridge Label", context.plus_fraction_label),
-            ("Bridge SG+", "-" if context.sg_plus_60f is None else f"{context.sg_plus_60f:.3f}"),
         ]
+        if context.characterization_method is not None:
+            rows.append(("Characterization", context.characterization_method.replace("_", " ")))
+        if context.runtime_component_basis is not None:
+            basis_label = describe_runtime_component_basis(context.runtime_component_basis)
+            rows.append(("Runtime Basis", basis_label or context.runtime_component_basis))
+        if context.scn_distribution:
+            rows.append(("SCNs", str(len(context.scn_distribution))))
+        if context.pedersen_fit is not None:
+            rows.append(("Pedersen A/B", f"{context.pedersen_fit.A:.4f}, {context.pedersen_fit.B:.6f}"))
+            if context.pedersen_fit.tbp_cut_rms_relative_error is not None:
+                rows.append(("Cut Fit RMS", f"{context.pedersen_fit.tbp_cut_rms_relative_error:.4f}"))
+        rows.append(("Bridge SG+", "-" if context.sg_plus_60f is None else f"{context.sg_plus_60f:.3f}"))
+        return rows
 
     @staticmethod
     def _solver_summary_rows(
@@ -867,9 +933,70 @@ class ResultsTableWidget(QWidget):
                 ("Temperature", _format_temperature(config.temperature_k, temperature_unit)),
             ])
 
+        reported_surface_label = describe_pt_flash_reported_surface_status(
+            result.reported_surface_status
+        )
+        reported_basis_label = describe_reported_component_basis(result.reported_component_basis)
+        if reported_surface_label is not None:
+            summary_data.append(("Reported Surface", reported_surface_label))
+            if result.reported_surface_reason:
+                summary_data.append(("Reported Surface Note", result.reported_surface_reason))
+        if reported_basis_label is not None:
+            summary_data.extend([
+                ("Reported Basis", reported_basis_label),
+                (
+                    "Rendered Basis",
+                    reported_basis_label
+                    if result.has_reported_thermodynamic_surface
+                    else "Runtime thermodynamic basis",
+                ),
+            ])
+        elif reported_surface_label is not None:
+            summary_data.append(("Rendered Basis", "Runtime thermodynamic basis"))
+
         summary_data.extend([
             ("Vapor Fraction", f"{result.vapor_fraction:.6f}"),
             ("Liquid Fraction", f"{1 - result.vapor_fraction:.6f}"),
+            (
+                "Liquid Density",
+                _format_optional_measurement(
+                    result.liquid_density_kg_per_m3,
+                    precision=2,
+                    unit="kg/m³",
+                ),
+            ),
+            (
+                "Vapor Density",
+                _format_optional_measurement(
+                    result.vapor_density_kg_per_m3,
+                    precision=2,
+                    unit="kg/m³",
+                ),
+            ),
+            (
+                "Liquid Viscosity",
+                _format_optional_measurement(
+                    result.liquid_viscosity_cp,
+                    precision=4,
+                    unit="cP",
+                ),
+            ),
+            (
+                "Vapor Viscosity",
+                _format_optional_measurement(
+                    result.vapor_viscosity_cp,
+                    precision=4,
+                    unit="cP",
+                ),
+            ),
+            (
+                "Interfacial Tension",
+                _format_optional_measurement(
+                    result.interfacial_tension_mn_per_m,
+                    precision=4,
+                    unit="mN/m",
+                ),
+            ),
         ])
         summary_data.extend(self._plus_fraction_summary_rows())
         summary_data.extend(
@@ -887,7 +1014,13 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
         # Composition table
-        components = sorted(result.liquid_composition.keys())
+        components = sorted(
+            set(result.display_liquid_composition)
+            | set(result.display_vapor_composition)
+            | set(result.display_k_values)
+            | set(result.display_liquid_fugacity)
+            | set(result.display_vapor_fugacity)
+        )
         self.composition_table.setColumnCount(4)
         self.composition_table.setHorizontalHeaderLabels([
             "Component", "Feed (z)", "Liquid (x)", "Vapor (y)"
@@ -898,8 +1031,8 @@ class ResultsTableWidget(QWidget):
             self.composition_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
 
             # Calculate feed from material balance (approximate)
-            x = result.liquid_composition.get(comp, 0)
-            y = result.vapor_composition.get(comp, 0)
+            x = result.display_liquid_composition.get(comp, 0.0)
+            y = result.display_vapor_composition.get(comp, 0.0)
             nv = result.vapor_fraction
             z = (1 - nv) * x + nv * y
 
@@ -921,13 +1054,13 @@ class ResultsTableWidget(QWidget):
         for row, comp in enumerate(components):
             self.details_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.details_table.setItem(
-                row, 1, QTableWidgetItem(f"{result.K_values.get(comp, 0):.6f}")
+                row, 1, QTableWidgetItem(f"{result.display_k_values.get(comp, 0.0):.6f}")
             )
             self.details_table.setItem(
-                row, 2, QTableWidgetItem(f"{result.liquid_fugacity.get(comp, 0):.6e}")
+                row, 2, QTableWidgetItem(f"{result.display_liquid_fugacity.get(comp, 0.0):.6e}")
             )
             self.details_table.setItem(
-                row, 3, QTableWidgetItem(f"{result.vapor_fugacity.get(comp, 0):.6e}")
+                row, 3, QTableWidgetItem(f"{result.display_vapor_fugacity.get(comp, 0.0):.6e}")
             )
 
         self.details_table.horizontalHeader().setSectionResizeMode(
@@ -1070,6 +1203,17 @@ class ResultsTableWidget(QWidget):
             ("EOS", format_eos_label(self._current_result.config.eos_type)),
             (stability_label, "Yes" if stability_value else "No"),
         ]
+        reported_basis_label = describe_reported_component_basis(result.reported_component_basis)
+        if reported_basis_label is not None:
+            summary_data.extend([
+                ("Reported Basis", reported_basis_label),
+                (
+                    "Rendered Basis",
+                    reported_basis_label
+                    if result.has_reported_surface
+                    else "Runtime thermodynamic basis",
+                ),
+            ])
         summary_data.extend(self._plus_fraction_summary_rows())
         summary_data.extend(
             self._solver_summary_rows(
@@ -1087,9 +1231,9 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
         components = sorted(
-            set(result.liquid_composition)
-            | set(result.vapor_composition)
-            | set(result.k_values)
+            set(result.display_liquid_composition)
+            | set(result.display_vapor_composition)
+            | set(result.display_k_values)
         )
 
         self.composition_table.setColumnCount(3)
@@ -1105,16 +1249,140 @@ class ResultsTableWidget(QWidget):
         for row, comp in enumerate(components):
             self.composition_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.composition_table.setItem(
-                row, 1, QTableWidgetItem(f"{result.liquid_composition.get(comp, 0.0):.6f}")
+                row, 1, QTableWidgetItem(f"{result.display_liquid_composition.get(comp, 0.0):.6f}")
             )
             self.composition_table.setItem(
-                row, 2, QTableWidgetItem(f"{result.vapor_composition.get(comp, 0.0):.6f}")
+                row, 2, QTableWidgetItem(f"{result.display_vapor_composition.get(comp, 0.0):.6f}")
             )
 
             self.details_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(comp)))
             self.details_table.setItem(
-                row, 1, QTableWidgetItem(f"{result.k_values.get(comp, 0.0):.6f}")
+                row, 1, QTableWidgetItem(f"{result.display_k_values.get(comp, 0.0):.6f}")
             )
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
+    def _display_stability_analysis(self, result: StabilityAnalysisResult) -> None:
+        """Display standalone Michelsen / TPD stability-analysis results."""
+        self.composition_section.setTitle("Trial Compositions")
+        self.details_section.setTitle("Trial Diagnostics")
+
+        pressure_unit, temperature_unit = self._stability_display_units()
+        summary_data = [
+            ("Pressure", _format_pressure(result.pressure_pa, pressure_unit)),
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
+            ("EOS", format_eos_label(self._current_result.config.eos_type)),
+            ("Stable", "Yes" if result.stable else "No"),
+            ("Minimum TPD", f"{result.tpd_min:.6e}"),
+            ("Phase Regime", result.phase_regime.replace("_", " ").title()),
+            ("Physical State Hint", result.physical_state_hint.replace("_", " ").title()),
+            ("Requested Feed Phase", result.requested_feed_phase.value.replace("_", " ").title()),
+            ("Resolved Feed Phase", result.resolved_feed_phase.replace("_", " ").title()),
+            ("Reference Root Used", result.reference_root_used.replace("_", " ").title()),
+            (
+                "Best Unstable Trial",
+                "-" if result.best_unstable_trial_kind is None else result.best_unstable_trial_kind.replace("_", " ").title(),
+            ),
+        ]
+        summary_data.extend(self._plus_fraction_summary_rows())
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        vapor_comp = {} if result.vapor_like_trial is None else result.vapor_like_trial.composition
+        liquid_comp = {} if result.liquid_like_trial is None else result.liquid_like_trial.composition
+        components = sorted(set(result.feed_composition) | set(vapor_comp) | set(liquid_comp))
+
+        self.composition_table.setColumnCount(4)
+        self.composition_table.setHorizontalHeaderLabels(
+            ["Component", "Feed (z)", "Vapor-like", "Liquid-like"]
+        )
+        self.composition_table.setRowCount(len(components))
+        for row, component in enumerate(components):
+            self.composition_table.setItem(row, 0, QTableWidgetItem(self._component_display_label(component)))
+            self.composition_table.setItem(row, 1, QTableWidgetItem(f"{result.feed_composition.get(component, 0.0):.6f}"))
+            self.composition_table.setItem(
+                row,
+                2,
+                QTableWidgetItem("-" if component not in vapor_comp else f"{vapor_comp.get(component, 0.0):.6f}"),
+            )
+            self.composition_table.setItem(
+                row,
+                3,
+                QTableWidgetItem("-" if component not in liquid_comp else f"{liquid_comp.get(component, 0.0):.6f}"),
+            )
+
+        detail_rows: list[tuple[str, str]] = [
+            ("Interpretation Basis", result.physical_state_hint_basis.replace("_", " ").title()),
+            ("Hint Confidence", result.physical_state_hint_confidence.title()),
+        ]
+        if result.liquid_root_z is not None:
+            detail_rows.append(("Liquid Root Z", f"{result.liquid_root_z:.6f}"))
+        if result.vapor_root_z is not None:
+            detail_rows.append(("Vapor Root Z", f"{result.vapor_root_z:.6f}"))
+        if result.root_gap is not None:
+            detail_rows.append(("Root Gap", f"{result.root_gap:.6e}"))
+        if result.gibbs_gap is not None:
+            detail_rows.append(("Gibbs Gap", f"{result.gibbs_gap:.6e}"))
+        if result.average_reduced_pressure is not None:
+            detail_rows.append(("Average Reduced Pressure", f"{result.average_reduced_pressure:.6f}"))
+        if result.bubble_pressure_hint_pa is not None:
+            detail_rows.append(
+                ("Bubble Pressure Hint", _format_pressure(result.bubble_pressure_hint_pa, pressure_unit))
+            )
+        if result.dew_pressure_hint_pa is not None:
+            detail_rows.append(
+                ("Dew Pressure Hint", _format_pressure(result.dew_pressure_hint_pa, pressure_unit))
+            )
+        if result.bubble_boundary_reason:
+            detail_rows.append(("Bubble Boundary Reason", result.bubble_boundary_reason.replace("_", " ").title()))
+        if result.dew_boundary_reason:
+            detail_rows.append(("Dew Boundary Reason", result.dew_boundary_reason.replace("_", " ").title()))
+        for trial_label, trial in (
+            ("Vapor-like Trial", result.vapor_like_trial),
+            ("Liquid-like Trial", result.liquid_like_trial),
+        ):
+            if trial is None:
+                continue
+            detail_rows.extend(
+                [
+                    (f"{trial_label} TPD", f"{trial.tpd:.6e}"),
+                    (f"{trial_label} Converged", "Yes" if trial.converged else "No"),
+                    (f"{trial_label} Early Exit", "Yes" if trial.early_exit_unstable else "No"),
+                    (f"{trial_label} Iterations", str(trial.iterations)),
+                    (f"{trial_label} Total Iterations", str(trial.total_iterations)),
+                    (f"{trial_label} Phi Calls", str(trial.n_phi_calls)),
+                    (f"{trial_label} EOS Failures", str(trial.n_eos_failures)),
+                    (f"{trial_label} Best Seed", trial.best_seed.seed_label),
+                    (
+                        f"{trial_label} Seed Attempts",
+                        f"{trial.seed_attempts}/{trial.candidate_seed_count}",
+                    ),
+                ]
+            )
+            if trial.message:
+                detail_rows.append((f"{trial_label} Message", trial.message))
+            if trial.diagnostic_messages:
+                detail_rows.append(
+                    (
+                        f"{trial_label} Diagnostics",
+                        "; ".join(message for message in trial.diagnostic_messages if message),
+                    )
+                )
+
+        self.details_table.setColumnCount(2)
+        self.details_table.setHorizontalHeaderLabels(["Property", "Value"])
+        self.details_table.setRowCount(len(detail_rows))
+        for row, (prop, value) in enumerate(detail_rows):
+            self.details_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.details_table.setItem(row, 1, QTableWidgetItem(value))
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -1144,7 +1412,7 @@ class ResultsTableWidget(QWidget):
     def _display_cce(self, result: CCEResult) -> None:
         """Display CCE results."""
         self.composition_section.setTitle("Expansion")
-        self.details_section.setTitle("Densities")
+        self.details_section.setTitle("Phase Properties")
         pressure_unit, temperature_unit = self._cce_display_units()
 
         # Summary
@@ -1194,9 +1462,13 @@ class ResultsTableWidget(QWidget):
                 f"{zf:.4f}" if zf else "-"
             ))
 
-        self.details_table.setColumnCount(3)
+        self.details_table.setColumnCount(5)
         self.details_table.setHorizontalHeaderLabels([
-            f"Pressure ({pressure_unit.value})", "Liquid Density", "Vapor Density"
+            f"Pressure ({pressure_unit.value})",
+            "Liquid Density",
+            "Vapor Density",
+            "Liquid Viscosity",
+            "Vapor Viscosity",
         ])
         self.details_table.setRowCount(len(result.steps))
         for row, step in enumerate(result.steps):
@@ -1217,6 +1489,25 @@ class ResultsTableWidget(QWidget):
                     "-" if vapor_density is None or vapor_density <= 0 else f"{vapor_density:.2f}"
                 )
             )
+            liquid_viscosity = step.liquid_viscosity_cp
+            vapor_viscosity = step.vapor_viscosity_cp
+            self.details_table.setItem(
+                row, 3, QTableWidgetItem(
+                    "-" if liquid_viscosity is None or liquid_viscosity <= 0 else f"{liquid_viscosity:.4f}"
+                )
+            )
+            self.details_table.setItem(
+                row, 4, QTableWidgetItem(
+                    "-" if vapor_viscosity is None or vapor_viscosity <= 0 else f"{vapor_viscosity:.4f}"
+                )
+            )
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
 
     def _display_dl(self, result: DLResult) -> None:
         """Display DL results."""
@@ -1226,6 +1517,14 @@ class ResultsTableWidget(QWidget):
             ("Bubble Pressure", _format_pressure(result.bubble_pressure_pa, pressure_unit)),
             ("Initial Rs", f"{result.rsi:.4f}"),
             ("Initial Bo", f"{result.boi:.4f}"),
+            (
+                "Residual Oil Density",
+                _format_optional_measurement(
+                    result.residual_oil_density_kg_per_m3,
+                    precision=2,
+                    unit="kg/m³",
+                ),
+            ),
             ("Converged", "Yes" if result.converged else "No"),
             ("Steps", str(len(result.steps))),
         ]
@@ -1236,15 +1535,24 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        self.composition_table.setColumnCount(6)
+        self.composition_table.setColumnCount(7)
         self.composition_table.setHorizontalHeaderLabels(
-            [f"Pressure ({pressure_unit.value})", "RsD", "RsDi", "Bo", "Bg", "BtD"]
+            [f"Pressure ({pressure_unit.value})", "RsD", "RsDi", "Bo", "Bg", "BtD", "Cum. Gas"]
         )
         self.composition_table.setRowCount(len(result.steps))
 
-        self.details_table.setColumnCount(3)
+        self.details_table.setColumnCount(8)
         self.details_table.setHorizontalHeaderLabels(
-            ["Step", "Vapor Frac.", "Liquid Moles Remaining"]
+            [
+                "Step",
+                "Vapor Frac.",
+                "Oil Density",
+                "Oil Viscosity",
+                "Gas Gravity",
+                "Gas Z",
+                "Gas Viscosity",
+                "Liquid Moles Remaining",
+            ]
         )
         self.details_table.setRowCount(len(result.steps))
 
@@ -1263,15 +1571,44 @@ class ResultsTableWidget(QWidget):
                 QTableWidgetItem("-" if step.bg is None else f"{step.bg:.4f}"),
             )
             self.composition_table.setItem(row, 5, QTableWidgetItem(f"{step.bt:.4f}"))
+            self.composition_table.setItem(
+                row,
+                6,
+                QTableWidgetItem(
+                    "-" if step.cumulative_gas_produced is None else f"{step.cumulative_gas_produced:.4f}"
+                ),
+            )
 
             self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
             self.details_table.setItem(row, 1, QTableWidgetItem(f"{step.vapor_fraction:.4f}"))
+            oil_density = (
+                "-"
+                if step.oil_density_kg_per_m3 is None or step.oil_density_kg_per_m3 <= 0
+                else f"{step.oil_density_kg_per_m3:.2f}"
+            )
+            gas_gravity = "-" if step.gas_gravity is None else f"{step.gas_gravity:.4f}"
+            gas_z = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.4f}"
+            oil_viscosity = (
+                "-"
+                if step.oil_viscosity_cp is None or step.oil_viscosity_cp <= 0
+                else f"{step.oil_viscosity_cp:.4f}"
+            )
+            gas_viscosity = (
+                "-"
+                if step.gas_viscosity_cp is None or step.gas_viscosity_cp <= 0
+                else f"{step.gas_viscosity_cp:.4f}"
+            )
+            self.details_table.setItem(row, 2, QTableWidgetItem(oil_density))
+            self.details_table.setItem(row, 3, QTableWidgetItem(oil_viscosity))
+            self.details_table.setItem(row, 4, QTableWidgetItem(gas_gravity))
+            self.details_table.setItem(row, 5, QTableWidgetItem(gas_z))
+            self.details_table.setItem(row, 6, QTableWidgetItem(gas_viscosity))
             liquid_moles = (
                 "-"
                 if step.liquid_moles_remaining is None
                 else f"{step.liquid_moles_remaining:.6f}"
             )
-            self.details_table.setItem(row, 2, QTableWidgetItem(liquid_moles))
+            self.details_table.setItem(row, 7, QTableWidgetItem(liquid_moles))
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -1325,9 +1662,9 @@ class ResultsTableWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
 
-        self.details_table.setColumnCount(3)
+        self.details_table.setColumnCount(5)
         self.details_table.setHorizontalHeaderLabels(
-            ["Step", "Liquid Density", "Vapor Density"]
+            ["Step", "Liquid Density", "Vapor Density", "Liquid Viscosity", "Vapor Viscosity"]
         )
         self.details_table.setRowCount(len(result.steps))
         for row, step in enumerate(result.steps):
@@ -1344,6 +1681,18 @@ class ResultsTableWidget(QWidget):
             )
             self.details_table.setItem(row, 1, QTableWidgetItem(liquid_density))
             self.details_table.setItem(row, 2, QTableWidgetItem(vapor_density))
+            liquid_viscosity = (
+                "-"
+                if step.liquid_viscosity_cp is None or step.liquid_viscosity_cp <= 0
+                else f"{step.liquid_viscosity_cp:.4f}"
+            )
+            vapor_viscosity = (
+                "-"
+                if step.vapor_viscosity_cp is None or step.vapor_viscosity_cp <= 0
+                else f"{step.vapor_viscosity_cp:.4f}"
+            )
+            self.details_table.setItem(row, 3, QTableWidgetItem(liquid_viscosity))
+            self.details_table.setItem(row, 4, QTableWidgetItem(vapor_viscosity))
 
         self.details_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -1359,6 +1708,22 @@ class ResultsTableWidget(QWidget):
             ("Bg", f"{result.bg:.4f}"),
             ("API Gravity", f"{result.api_gravity:.2f}"),
             ("Oil Density", f"{result.stock_tank_oil_density:.4f}"),
+            (
+                "Stock-tank MW",
+                "-" if result.stock_tank_oil_mw_g_per_mol is None else f"{result.stock_tank_oil_mw_g_per_mol:.3f} g/mol",
+            ),
+            (
+                "Stock-tank SG",
+                "-" if result.stock_tank_oil_specific_gravity is None else f"{result.stock_tank_oil_specific_gravity:.4f}",
+            ),
+            (
+                "Total Gas Moles",
+                "-" if result.total_gas_moles is None else f"{result.total_gas_moles:.6f}",
+            ),
+            (
+                "Shrinkage",
+                "-" if result.shrinkage is None else f"{result.shrinkage:.4f}",
+            ),
             ("Stages", str(len(result.stages))),
         ]
         summary_data.extend(self._plus_fraction_summary_rows())
@@ -1822,6 +2187,8 @@ class ResultsPlotWidget(QWidget):
                 )
         elif result.pt_flash_result:
             self._plot_pt_flash(result.pt_flash_result)
+        elif result.stability_analysis_result:
+            self._plot_stability_analysis(result.stability_analysis_result)
         elif result.bubble_point_result:
             self._plot_bubble_point(result.bubble_point_result)
         elif result.dew_point_result:
@@ -1945,6 +2312,15 @@ class ResultsPlotWidget(QWidget):
         if config is None:
             return PressureUnit.BAR
         return config.pressure_unit
+
+    def _stability_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred standalone stability-analysis plot units."""
+        config: Optional[StabilityAnalysisConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.stability_analysis_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
 
     def _cce_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
         """Return the preferred CCE plot units."""
@@ -2174,6 +2550,25 @@ class ResultsPlotWidget(QWidget):
                 color="#8b5cf6",
                 marker="d",
             ),
+            "liquid_viscosity": PlotSeriesSpec(
+                key="liquid_viscosity",
+                label="Liquid Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.liquid_viscosity_cp for step in result.steps],
+                color="#0f766e",
+            ),
+            "vapor_viscosity": PlotSeriesSpec(
+                key="vapor_viscosity",
+                label="Vapor Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.vapor_viscosity_cp for step in result.steps],
+                color="#7c3aed",
+                marker="^",
+            ),
         }
 
     def _dl_plot_series_specs(self, result: DLResult) -> dict[str, PlotSeriesSpec]:
@@ -2229,6 +2624,25 @@ class ResultsPlotWidget(QWidget):
                 color="#f472b6",
                 default_selected=True,
                 linestyle="--",
+            ),
+            "oil_viscosity": PlotSeriesSpec(
+                key="oil_viscosity",
+                label="Oil Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.oil_viscosity_cp for step in result.steps],
+                color="#0f766e",
+            ),
+            "gas_viscosity": PlotSeriesSpec(
+                key="gas_viscosity",
+                label="Gas Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.gas_viscosity_cp for step in result.steps],
+                color="#7c3aed",
+                marker="^",
             ),
         }
 
@@ -2303,6 +2717,25 @@ class ResultsPlotWidget(QWidget):
                 values=[step.vapor_density_kg_per_m3 for step in result.steps],
                 color="#dc2626",
                 marker="s",
+            ),
+            "liquid_viscosity": PlotSeriesSpec(
+                key="liquid_viscosity",
+                label="Liquid Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.liquid_viscosity_cp for step in result.steps],
+                color="#0f766e",
+            ),
+            "vapor_viscosity": PlotSeriesSpec(
+                key="vapor_viscosity",
+                label="Vapor Viscosity",
+                axis_group="viscosity",
+                axis_label="Viscosity (cP)",
+                overlay_group="viscosity",
+                values=[step.vapor_viscosity_cp for step in result.steps],
+                color="#7c3aed",
+                marker="^",
             ),
         }
 
@@ -2503,6 +2936,54 @@ class ResultsPlotWidget(QWidget):
 
         self._tighten_composition_plot_layout()
 
+    def _plot_stability_analysis(self, result: StabilityAnalysisResult) -> None:
+        """Plot standalone stability-analysis TPD branch values."""
+        pressure_unit, temperature_unit = self._stability_plot_units()
+        series: list[tuple[str, float]] = []
+        if result.vapor_like_trial is not None:
+            series.append(("Vapor-like", result.vapor_like_trial.tpd))
+        if result.liquid_like_trial is not None:
+            series.append(("Liquid-like", result.liquid_like_trial.tpd))
+
+        if not series:
+            self._plot_placeholder("No trial branches are available for this stability result.", title="Stability Analysis")
+            return
+
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        labels = [label for label, _value in series]
+        values = [value for _label, value in series]
+        colors = ["#22c55e" if value >= 0.0 else "#ef4444" for value in values]
+        x = list(range(len(series)))
+
+        bars = ax.bar(x, values, color=colors, alpha=0.85)
+        ax.axhline(0.0, color="#94a3b8", linestyle="--", linewidth=1.2)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel("TPD")
+        ax.set_title(
+            "Stability Analysis at "
+            f"{_format_pressure(result.pressure_pa, pressure_unit)} / "
+            f"{_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+        )
+        self._apply_axes_theme(ax)
+
+        for bar, value in zip(bars, values, strict=True):
+            offset = 6 if value >= 0 else -14
+            va = "bottom" if value >= 0 else "top"
+            ax.annotate(
+                f"{value:.3e}",
+                xy=(bar.get_x() + bar.get_width() / 2.0, value),
+                xytext=(0, offset),
+                textcoords="offset points",
+                ha="center",
+                va=va,
+                color=PLOT_TEXT_COLOR,
+                fontsize=9,
+            )
+
+        self.figure.tight_layout()
+
     def _plot_phase_envelope(self, result: PhaseEnvelopeResult) -> None:
         """Plot phase envelope."""
         ax = self.figure.add_subplot(111)
@@ -2615,15 +3096,15 @@ class ResultsPlotWidget(QWidget):
         ax.set_facecolor(PLOT_CANVAS_COLOR)
 
         components = sorted(
-            set(result.liquid_composition)
-            | set(result.vapor_composition)
+            set(result.display_liquid_composition)
+            | set(result.display_vapor_composition)
         )
         display_labels = [self._component_display_label(component) for component in components]
         x = list(range(len(components)))
         width = 0.35
 
-        liquid_vals = [result.liquid_composition.get(c, 0.0) for c in components]
-        vapor_vals = [result.vapor_composition.get(c, 0.0) for c in components]
+        liquid_vals = [result.display_liquid_composition.get(c, 0.0) for c in components]
+        vapor_vals = [result.display_vapor_composition.get(c, 0.0) for c in components]
 
         ax.bar(
             [i - width / 2 for i in x],

@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Optional
 
 from pvtapp import __version__, __app_name__
-from pvtapp.schemas import RunConfig, RunResult, RunStatus
+from pvtapp.schemas import (
+    RunConfig,
+    RunResult,
+    RunStatus,
+    describe_pt_flash_reported_surface_status,
+    describe_reported_component_basis,
+    describe_runtime_component_basis,
+)
 from pvtapp.job_runner import run_calculation, validate_runtime_config
 
 
@@ -69,14 +76,38 @@ def print_result_summary(result: RunResult) -> None:
         print(f"  Phase: {res.phase}")
         print(f"  Vapor Fraction: {res.vapor_fraction:.6f}")
         print(f"  Iterations: {res.diagnostics.iterations}")
+        reported_surface_label = describe_pt_flash_reported_surface_status(
+            res.reported_surface_status
+        )
+        reported_basis_label = describe_reported_component_basis(res.reported_component_basis)
+        if reported_surface_label is not None:
+            print(f"  Reported Surface: {reported_surface_label}")
+            if res.reported_surface_reason:
+                print(f"  Reported Surface Note: {res.reported_surface_reason}")
+        if reported_basis_label is not None:
+            print(f"  Reported Basis: {reported_basis_label}")
+            print(
+                "  Rendered Basis: "
+                + (
+                    reported_basis_label
+                    if res.has_reported_thermodynamic_surface
+                    else "Runtime thermodynamic basis"
+                )
+            )
+        elif reported_surface_label is not None:
+            print("  Rendered Basis: Runtime thermodynamic basis")
 
         print(f"\n  {'Component':<10} {'Liquid':<12} {'Vapor':<12} {'K-value':<12}")
         print(f"  {'-'*10} {'-'*12} {'-'*12} {'-'*12}")
-        for comp in sorted(res.liquid_composition.keys()):
+        for comp in sorted(
+            set(res.display_liquid_composition)
+            | set(res.display_vapor_composition)
+            | set(res.display_k_values)
+        ):
             print(f"  {comp:<10} "
-                  f"{res.liquid_composition.get(comp, 0):<12.6f} "
-                  f"{res.vapor_composition.get(comp, 0):<12.6f} "
-                  f"{res.K_values.get(comp, 0):<12.4f}")
+                  f"{res.display_liquid_composition.get(comp, 0):<12.6f} "
+                  f"{res.display_vapor_composition.get(comp, 0):<12.6f} "
+                  f"{res.display_k_values.get(comp, 0):<12.4f}")
 
     elif result.phase_envelope_result:
         res = result.phase_envelope_result
@@ -100,8 +131,19 @@ def print_result_summary(result: RunResult) -> None:
         print(f"  MW+: {res.mw_plus_g_per_mol:.3f} g/mol")
         if res.characterization_context is not None:
             ctx = res.characterization_context
-            print("  Runtime Bridge: aggregate-only")
+            bridge_label = (
+                "characterized-scn"
+                if ctx.bridge_status == "characterized_scn"
+                else "aggregate-only"
+            )
+            print(f"  Runtime Bridge: {bridge_label}")
             print(f"  Bridge Label: {ctx.plus_fraction_label}")
+            if ctx.characterization_method is not None:
+                print(f"  Characterization: {ctx.characterization_method}")
+            if ctx.scn_distribution:
+                print(f"  SCNs: {len(ctx.scn_distribution)}")
+            if ctx.pedersen_fit is not None and ctx.pedersen_fit.tbp_cut_rms_relative_error is not None:
+                print(f"  Cut Fit RMS: {ctx.pedersen_fit.tbp_cut_rms_relative_error:.6f}")
 
     elif result.cce_result:
         res = result.cce_result
@@ -110,6 +152,21 @@ def print_result_summary(result: RunResult) -> None:
         print(f"  Steps: {len(res.steps)}")
         if res.saturation_pressure_pa:
             print(f"  Saturation Pressure: {res.saturation_pressure_pa / 1e5:.2f} bar")
+
+    if result.runtime_characterization is not None and result.config.calculation_type.value != "tbp":
+        runtime = result.runtime_characterization
+        print(f"\nRuntime Characterization:")
+        runtime_basis_label = describe_runtime_component_basis(runtime.runtime_component_basis)
+        print(f"  Basis: {runtime_basis_label or runtime.runtime_component_basis}")
+        print(f"  Split: {runtime.split_method}")
+        if runtime.lumping_method is not None:
+            print(f"  Lumping: {runtime.lumping_method}")
+        print(f"  Runtime Components: {len(runtime.runtime_component_ids)}")
+        print(f"  SCNs: {len(runtime.scn_distribution)}")
+        if runtime.lump_distribution:
+            print(f"  Lumps: {len(runtime.lump_distribution)}")
+        if runtime.pedersen_fit is not None and runtime.pedersen_fit.tbp_cut_rms_relative_error is not None:
+            print(f"  Cut Fit RMS: {runtime.pedersen_fit.tbp_cut_rms_relative_error:.6f}")
 
     print(f"{'='*60}\n")
 

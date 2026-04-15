@@ -7,6 +7,7 @@ from pvtapp.schemas import CalculationType, EOSType
 
 GUI_SUPPORTED_CALCULATION_TYPES: tuple[CalculationType, ...] = (
     CalculationType.PT_FLASH,
+    CalculationType.STABILITY_ANALYSIS,
     CalculationType.BUBBLE_POINT,
     CalculationType.DEW_POINT,
     CalculationType.PHASE_ENVELOPE,
@@ -19,6 +20,7 @@ GUI_SUPPORTED_CALCULATION_TYPES: tuple[CalculationType, ...] = (
 
 GUI_CALCULATION_TYPE_LABELS: dict[CalculationType, str] = {
     CalculationType.PT_FLASH: "PT Flash",
+    CalculationType.STABILITY_ANALYSIS: "Stability Analysis",
     CalculationType.BUBBLE_POINT: "Bubble Point",
     CalculationType.DEW_POINT: "Dew Point",
     CalculationType.PHASE_ENVELOPE: "Phase Envelope",

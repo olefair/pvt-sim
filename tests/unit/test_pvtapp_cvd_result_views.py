@@ -83,6 +83,8 @@ def _build_cvd_run_result() -> RunResult:
                     z_two_phase=0.92,
                     liquid_density_kg_per_m3=None,
                     vapor_density_kg_per_m3=120.0,
+                    liquid_viscosity_pa_s=None,
+                    vapor_viscosity_pa_s=0.000015,
                 ),
                 CVDStepResult(
                     pressure_pa=5.30e6,
@@ -93,6 +95,8 @@ def _build_cvd_run_result() -> RunResult:
                     z_two_phase=0.89,
                     liquid_density_kg_per_m3=510.0,
                     vapor_density_kg_per_m3=105.0,
+                    liquid_viscosity_pa_s=0.00042,
+                    vapor_viscosity_pa_s=0.000014,
                 ),
                 CVDStepResult(
                     pressure_pa=5.0e6,
@@ -103,6 +107,8 @@ def _build_cvd_run_result() -> RunResult:
                     z_two_phase=0.86,
                     liquid_density_kg_per_m3=535.0,
                     vapor_density_kg_per_m3=96.0,
+                    liquid_viscosity_pa_s=0.00055,
+                    vapor_viscosity_pa_s=0.000013,
                 ),
             ],
         ),
@@ -118,6 +124,7 @@ def test_cvd_results_table_displays_summary_instead_of_error(app: QApplication) 
     assert widget.composition_table.horizontalHeaderItem(2).text() == "Gas Produced"
     assert widget.composition_table.horizontalHeaderItem(4).text() == "Moles Remaining"
     assert widget.details_table.horizontalHeaderItem(1).text() == "Liquid Density"
+    assert widget.details_table.horizontalHeaderItem(3).text() == "Liquid Viscosity"
     assert widget.composition_table.rowCount() == 3
 
 
@@ -135,6 +142,8 @@ def test_cvd_plot_widget_renders_a_plot(app: QApplication) -> None:
         "Gas Produced",
         "Cumulative Gas",
         "Z-factor",
+        "Liquid Viscosity",
+        "Vapor Viscosity",
     }
 
 
@@ -147,3 +156,5 @@ def test_cvd_text_output_reports_dropout(app: QApplication) -> None:
     assert "Liquid Dropout" in text
     assert "Gas Prod." in text
     assert "Cum. Gas" in text
+    assert "muL" in text
+    assert "muV" in text

@@ -140,8 +140,27 @@ class StabilityOptions:
 
 
 @dataclass(frozen=True)
+class StabilitySeedResult:
+    """Result of one concrete seed attempt within a trial kind."""
+
+    kind: str
+    trial_phase: str
+    seed_index: int
+    seed_label: str
+    initial_w: NDArray[np.float64]
+    w: NDArray[np.float64]
+    tpd: float
+    iterations: int
+    converged: bool
+    early_exit_unstable: bool
+    n_phi_calls: int
+    n_eos_failures: int
+    message: str | None
+
+
+@dataclass(frozen=True)
 class StabilityTrialResult:
-    """Result of a single trial kind (vapor-like or liquid-like)."""
+    """Aggregated result of a trial kind over one or more concrete seeds."""
 
     kind: str
     trial_phase: str
@@ -153,6 +172,41 @@ class StabilityTrialResult:
     n_phi_calls: int
     n_eos_failures: int
     message: str | None
+    best_seed_index: int
+    candidate_seed_labels: tuple[str, ...]
+    seed_results: tuple[StabilitySeedResult, ...]
+
+    @property
+    def best_seed(self) -> StabilitySeedResult:
+        return self.seed_results[self.best_seed_index]
+
+    @property
+    def seed_attempts(self) -> int:
+        return len(self.seed_results)
+
+    @property
+    def candidate_seed_count(self) -> int:
+        return len(self.candidate_seed_labels)
+
+    @property
+    def stopped_early(self) -> bool:
+        return self.seed_attempts < self.candidate_seed_count
+
+    @property
+    def unattempted_seed_labels(self) -> tuple[str, ...]:
+        return self.candidate_seed_labels[self.seed_attempts :]
+
+    @property
+    def total_iterations(self) -> int:
+        return int(sum(seed.iterations for seed in self.seed_results))
+
+    @property
+    def diagnostic_messages(self) -> tuple[str, ...]:
+        return tuple(
+            f"{seed.seed_label}: {seed.message}"
+            for seed in self.seed_results
+            if seed.message is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -168,44 +222,50 @@ class StabilityAnalysisResult:
     liquid_like: StabilityTrialResult | None
 
 
-def _build_seed_list(
+@dataclass(frozen=True)
+class _StabilitySeedSpec:
+    label: str
+    w0: NDArray[np.float64]
+
+
+def _build_seed_specs(
     *,
     kind: str,
     z: NDArray[np.float64],
     K_wilson: NDArray[np.float64],
     options: StabilityOptions,
-) -> list[NDArray[np.float64]]:
+) -> list[_StabilitySeedSpec]:
     eps = options.epsilon
-    seeds: list[NDArray[np.float64]] = []
+    specs: list[_StabilitySeedSpec] = []
 
     if kind == "vapor_like":
         w0 = np.maximum(z, eps) * np.maximum(K_wilson, eps)
         w0 = w0 / float(np.sum(w0))
-        seeds.append(w0)
+        specs.append(_StabilitySeedSpec(label="wilson", w0=w0))
 
         # Extreme seed: pure lightest component by Wilson K.
         j = int(np.argmax(K_wilson))
         e = np.zeros_like(z)
         e[j] = 1.0
-        seeds.append(e)
+        specs.append(_StabilitySeedSpec(label="extreme_lightest", w0=e))
 
     elif kind == "liquid_like":
         w0 = np.maximum(z, eps) / np.maximum(K_wilson, eps)
         w0 = w0 / float(np.sum(w0))
-        seeds.append(w0)
+        specs.append(_StabilitySeedSpec(label="wilson", w0=w0))
 
         # Extreme seed: pure heaviest component by Wilson K.
         j = int(np.argmin(K_wilson))
         e = np.zeros_like(z)
         e[j] = 1.0
-        seeds.append(e)
+        specs.append(_StabilitySeedSpec(label="extreme_heaviest", w0=e))
 
     else:
         raise ValidationError("Unknown trial kind.", parameter="trial_kind", value=kind)
 
     # Warm starts
     if options.warm_start is not None and kind in options.warm_start:
-        for w in options.warm_start[kind]:
+        for idx, w in enumerate(options.warm_start[kind], start=1):
             w = np.asarray(w, dtype=np.float64)
             if w.shape != z.shape:
                 continue
@@ -214,19 +274,32 @@ def _build_seed_list(
                 continue
             w = np.maximum(w / s, eps)
             w = w / float(np.sum(w))
-            seeds.append(w)
+            specs.append(_StabilitySeedSpec(label=f"warm_start_{idx}", w0=w))
 
     # Random perturbations (optional)
     if options.n_random_trials > 0:
         rng = np.random.default_rng(options.random_seed)
         sigma = 0.3
-        for _ in range(int(options.n_random_trials)):
+        for idx in range(1, int(options.n_random_trials) + 1):
             noise = rng.standard_normal(z.shape)
             w = np.maximum(z, eps) * np.exp(sigma * noise)
             w = w / float(np.sum(w))
-            seeds.append(w)
+            specs.append(_StabilitySeedSpec(label=f"random_{idx}", w0=w))
 
-    return seeds
+    return specs
+
+
+def _build_seed_list(
+    *,
+    kind: str,
+    z: NDArray[np.float64],
+    K_wilson: NDArray[np.float64],
+    options: StabilityOptions,
+) -> list[NDArray[np.float64]]:
+    return [
+        np.asarray(spec.w0, dtype=np.float64).copy()
+        for spec in _build_seed_specs(kind=kind, z=z, K_wilson=K_wilson, options=options)
+    ]
 
 
 def _tpd_value(
@@ -252,9 +325,12 @@ def _run_single_seed(
     temperature: float,
     binary_interaction: Optional[NDArray[np.float64]],
     options: StabilityOptions,
-) -> StabilityTrialResult:
+    seed_index: int = 0,
+    seed_label: str = "seed",
+) -> StabilitySeedResult:
     eps = options.epsilon
-    logW = _safe_log(seed_w, eps)
+    initial_w = np.asarray(seed_w, dtype=np.float64).copy()
+    logW = _safe_log(initial_w, eps)
 
     n_phi_calls = 0
     n_eos_failures = 0
@@ -274,7 +350,7 @@ def _run_single_seed(
     gdem_ref_tpd: float | None = None
 
     tpd_last = float("inf")
-    w_last = np.asarray(seed_w, dtype=np.float64).copy()
+    w_last = initial_w.copy()
     tpd_prev: float | None = None
 
     for it in range(1, int(options.max_iter) + 1):
@@ -390,9 +466,12 @@ def _run_single_seed(
             n_eos_failures += 1
             message = message or f"EOS failed evaluating final converged iterate: {type(e).__name__}: {e}"
 
-    return StabilityTrialResult(
+    return StabilitySeedResult(
         kind=kind,
         trial_phase=str(trial_phase),
+        seed_index=int(seed_index),
+        seed_label=str(seed_label),
+        initial_w=initial_w,
         w=np.asarray(w_last, dtype=np.float64),
         tpd=float(tpd_last),
         iterations=int(it if "it" in locals() else 0),
@@ -416,16 +495,20 @@ def _run_trial_kind(
     options: StabilityOptions,
 ) -> StabilityTrialResult:
     K_w = wilson_k_values(pressure, temperature, eos.components)
-    seeds = _build_seed_list(kind=kind, z=z, K_wilson=K_w, options=options)
+    seed_specs = _build_seed_specs(kind=kind, z=z, K_wilson=K_w, options=options)
 
     trial_phase: Literal["liquid", "vapor"] = "vapor" if kind == "vapor_like" else "liquid"
 
-    best: StabilityTrialResult | None = None
-    for seed in seeds:
+    best: StabilitySeedResult | None = None
+    best_seed_index = -1
+    seed_results: list[StabilitySeedResult] = []
+    total_phi_calls = 0
+    total_eos_failures = 0
+    for idx, spec in enumerate(seed_specs):
         res = _run_single_seed(
             kind=kind,
             trial_phase=trial_phase,
-            seed_w=seed,
+            seed_w=spec.w0,
             z=z,
             d_terms=d_terms,
             eos=eos,
@@ -433,17 +516,48 @@ def _run_trial_kind(
             temperature=float(temperature),
             binary_interaction=binary_interaction,
             options=options,
+            seed_index=idx,
+            seed_label=spec.label,
         )
+        seed_results.append(res)
+        total_phi_calls += res.n_phi_calls
+        total_eos_failures += res.n_eos_failures
         if best is None or res.tpd < best.tpd:
             best = res
+            best_seed_index = idx
         # Proof of instability; no need to search more seeds for this kind.
         if res.early_exit_unstable:
             best = res
+            best_seed_index = idx
             break
 
     if best is None:
         raise CharacterizationError("No stability trial seeds were generated.")
-    return best
+    trial_message = best.message
+    if total_eos_failures > 0:
+        recovery_summary = (
+            f"Recovered from {total_eos_failures} EOS evaluation failure(s) "
+            f"across {len(seed_results)} seed attempt(s)."
+        )
+        trial_message = recovery_summary if trial_message is None else f"{recovery_summary} {trial_message}"
+    elif trial_message is None and not best.converged and not best.early_exit_unstable:
+        trial_message = "No seed converged within the iteration budget."
+
+    return StabilityTrialResult(
+        kind=best.kind,
+        trial_phase=best.trial_phase,
+        w=np.asarray(best.w, dtype=np.float64),
+        tpd=float(best.tpd),
+        iterations=int(best.iterations),
+        converged=bool(best.converged),
+        early_exit_unstable=bool(best.early_exit_unstable),
+        n_phi_calls=int(total_phi_calls),
+        n_eos_failures=int(total_eos_failures),
+        message=trial_message,
+        best_seed_index=int(best_seed_index),
+        candidate_seed_labels=tuple(spec.label for spec in seed_specs),
+        seed_results=tuple(seed_results),
+    )
 
 
 def tpd_single_trial(

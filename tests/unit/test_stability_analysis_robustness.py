@@ -125,5 +125,14 @@ def test_eos_failure_recovery_does_not_crash():
     trial = tpd_single_trial(z, P, T, eos, feed_phase="liquid", trial_kind="vapor_like", options=opts)
 
     assert trial.converged is True
-    assert trial.n_eos_failures >= 1
+    # Trial-kind diagnostics should retain failures seen on recovered seeds.
+    assert trial.n_eos_failures == 1
+    assert trial.seed_attempts == len(trial.seed_results) == 2
+    assert trial.candidate_seed_count == 2
+    assert trial.stopped_early is False
+    assert sum(seed.n_eos_failures for seed in trial.seed_results) == 1
+    assert any(seed.n_eos_failures == 1 for seed in trial.seed_results)
+    assert trial.best_seed.n_eos_failures == 0
+    assert trial.message is not None
+    assert "Recovered from 1 EOS evaluation failure" in trial.message
     assert np.isfinite(trial.tpd)
