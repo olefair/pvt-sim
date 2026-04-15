@@ -178,6 +178,7 @@ Laboratory test simulations.
 | `cce.py` | Constant Composition Expansion |
 | `dl.py` | Differential Liberation |
 | `cvd.py` | Constant Volume Depletion |
+| `swelling.py` | Fixed-temperature single-contact swelling test |
 | `separators.py` | Multi-stage separator optimization |
 
 ### confinement/

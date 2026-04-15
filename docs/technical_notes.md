@@ -419,7 +419,16 @@ At each step:
 - update overall composition accordingly
 This is coupled because “remove enough gas” is an additional constraint.
 
-### 10.4 Multistage separator train
+### 10.4 Swelling test
+- fixed temperature, explicit oil feed, explicit injection-gas feed
+- enrichment schedule is expressed as gas added per initial oil mole
+- each enrichment step recomputes bubble pressure on the enriched mixture
+- reported first-slice outputs are bubble pressure, saturated-liquid density /
+  molar volume, and swelling factor on the initial-oil basis
+- the current admitted runtime slice is single-contact enrichment only; this is
+  not slimtube, MMP, or multi-contact miscibility
+
+### 10.5 Multistage separator train
 - sequential flashes at separator conditions
 - final stock-tank flash
 - compute GOR, API, shrinkage, etc.

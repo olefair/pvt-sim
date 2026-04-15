@@ -4,6 +4,7 @@ This module provides simulations of standard laboratory PVT tests:
 - CCE (Constant Composition Expansion)
 - DL (Differential Liberation)
 - CVD (Constant Volume Depletion)
+- single-contact swelling tests
 - Multi-stage separator calculations
 
 These experiments are fundamental for:
@@ -46,6 +47,13 @@ from .cvd import (
     CVDStepResult,
 )
 
+# Swelling - Single-contact enrichment
+from .swelling import (
+    simulate_swelling,
+    SwellingResult,
+    SwellingStepResult,
+)
+
 # Multi-stage separators
 from .separators import (
     calculate_separator_train,
@@ -68,6 +76,10 @@ __all__ = [
     "simulate_cvd",
     "CVDResult",
     "CVDStepResult",
+    # Swelling
+    "simulate_swelling",
+    "SwellingResult",
+    "SwellingStepResult",
     # Separators
     "calculate_separator_train",
     "optimize_separator_pressures",

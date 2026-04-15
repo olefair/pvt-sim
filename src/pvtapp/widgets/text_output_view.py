@@ -19,6 +19,7 @@ from pvtapp.schemas import (
     SaturationPointConfig,
     CCEConfig,
     DLConfig,
+    SwellingTestConfig,
     StabilityAnalysisConfig,
     TemperatureUnit,
     describe_pt_flash_reported_surface_status,
@@ -86,6 +87,12 @@ def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit
 
 
 def _stability_units(config: Optional[StabilityAnalysisConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.BAR, TemperatureUnit.C
+    return config.pressure_unit, config.temperature_unit
+
+
+def _swelling_units(config: Optional[SwellingTestConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
         return PressureUnit.BAR, TemperatureUnit.C
     return config.pressure_unit, config.temperature_unit
@@ -729,6 +736,62 @@ class TextOutputWidget(QWidget):
                     f"{vapor_density:>9s} "
                     f"{liquid_viscosity:>8s} "
                     f"{vapor_viscosity:>8s}"
+                )
+            if len(r.steps) > 80:
+                lines.append(f"... ({len(r.steps) - 80} more)")
+            lines.append("")
+
+        elif result.swelling_test_result is not None:
+            r = result.swelling_test_result
+            pressure_unit, temperature_unit = _swelling_units(cfg.swelling_test_config)
+            certified_steps = sum(step.status == "certified" for step in r.steps)
+            lines.append("Swelling test")
+            lines.append("-------------")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(
+                "Baseline Pb = "
+                + (
+                    "-"
+                    if r.baseline_bubble_pressure_pa is None
+                    else _format_pressure(r.baseline_bubble_pressure_pa, pressure_unit)
+                )
+            )
+            lines.append(
+                "Baseline sat. Vm = "
+                + (
+                    "-"
+                    if r.baseline_saturated_liquid_molar_volume_m3_per_mol is None
+                    else f"{r.baseline_saturated_liquid_molar_volume_m3_per_mol:.6e} m³/mol"
+                )
+            )
+            lines.append(f"Certified steps = {certified_steps}/{len(r.steps)}")
+            lines.append(f"Overall status = {r.overall_status}")
+            lines.append(f"Fully certified = {r.fully_certified}")
+            lines.append("")
+            lines.append(
+                f"{'Step':>4s} {'AddedGas':>10s} {'BubbleP':>14s} {'SwellFact':>10s} "
+                f"{'rhoL':>10s} {'Status':>24s}  Message"
+            )
+            for step in r.steps[:80]:
+                bubble_pressure = (
+                    "-"
+                    if step.bubble_pressure_pa is None
+                    else f"{pressure_from_pa(step.bubble_pressure_pa, pressure_unit):.5f}"
+                )
+                swelling_factor = "-" if step.swelling_factor is None else f"{step.swelling_factor:.6f}"
+                liquid_density = (
+                    "-"
+                    if step.saturated_liquid_density_kg_per_m3 is None
+                    else f"{step.saturated_liquid_density_kg_per_m3:.2f}"
+                )
+                lines.append(
+                    f"{step.step_index:>4d} "
+                    f"{step.added_gas_moles_per_mole_oil:>10.5f} "
+                    f"{bubble_pressure:>14s} "
+                    f"{swelling_factor:>10s} "
+                    f"{liquid_density:>10s} "
+                    f"{step.status:>24s}  "
+                    f"{step.message or ''}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")

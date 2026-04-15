@@ -33,11 +33,14 @@ from PySide6.QtWidgets import (
 from pvtapp.schemas import (
     CalculationType,
     EOSType,
+    COMPOSITION_SUM_TOLERANCE,
     PhaseEnvelopeTracingMethod,
     PressureUnit,
     TemperatureUnit,
     StabilityFeedPhase,
     RunConfig,
+    FluidComposition,
+    ComponentEntry,
     PTFlashConfig,
     StabilityAnalysisConfig,
     PhaseEnvelopeConfig,
@@ -46,6 +49,7 @@ from pvtapp.schemas import (
     SaturationPointConfig,
     DLConfig,
     CVDConfig,
+    SwellingTestConfig,
     SeparatorConfig,
     SolverSettings,
     pressure_from_pa,
@@ -71,6 +75,7 @@ from pvtapp.widgets.combo_box import (
     NoWheelDoubleSpinBox,
     NoWheelSpinBox,
 )
+from pvtcore.models import load_components, resolve_component_id
 
 
 class ValidatedLineEdit(QLineEdit):
@@ -129,6 +134,7 @@ class ConditionsInputWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self._components_db = load_components()
         self._focus_tooltip_text_by_widget: dict[QWidget, str] = {}
         self._updating_cce_pressure_points = False
         self._cce_pressure_points_is_auto = True
@@ -220,6 +226,10 @@ class ConditionsInputWidget(QWidget):
         # CVD config
         self.cvd_widget = self._create_cvd_widget()
         self.config_stack.addWidget(self.cvd_widget)
+
+        # Swelling config
+        self.swelling_widget = self._create_swelling_widget()
+        self.config_stack.addWidget(self.swelling_widget)
 
         # Separator config
         self.separator_widget = self._create_separator_widget()
@@ -794,6 +804,75 @@ class ConditionsInputWidget(QWidget):
         )
         return widget
 
+    def _create_swelling_widget(self) -> QWidget:
+        """Create bounded first-slice swelling-test configuration controls."""
+        widget = QGroupBox("Swelling Test Settings")
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        note = QLabel(
+            "Oil feed comes from the main composition editor. Enter a fixed test "
+            "temperature, enrichment schedule, and an explicit injection-gas feed "
+            "with resolved component rows."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #9ca3af;")
+        layout.addWidget(note)
+
+        form_layout = QFormLayout()
+        self._configure_form_layout(form_layout)
+
+        t_layout = QHBoxLayout()
+        self.swelling_temperature = NoWheelDoubleSpinBox()
+        self.swelling_temperature.setRange(-200, 500)
+        self.swelling_temperature.setValue(76.85)
+        self.swelling_temperature.setDecimals(2)
+        self.swelling_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(self.swelling_temperature_unit, TemperatureUnit.C)
+        self._configure_unit_row(t_layout, self.swelling_temperature, self.swelling_temperature_unit)
+        form_layout.addRow("Temperature:", t_layout)
+
+        self.swelling_pressure_unit = NoWheelComboBox()
+        self._populate_pressure_units(self.swelling_pressure_unit, PressureUnit.BAR)
+        form_layout.addRow("Pressure Unit:", self.swelling_pressure_unit)
+
+        self.swelling_enrichment_steps = QLineEdit("0.05, 0.10, 0.20, 0.35")
+        self._register_focus_tooltip(
+            self.swelling_enrichment_steps,
+            "Comma- or space-separated gas additions in mol gas per mol initial oil. "
+            "The baseline 0.0 row is inserted automatically if omitted.",
+        )
+        form_layout.addRow("Enrichment Steps:", self.swelling_enrichment_steps)
+        layout.addLayout(form_layout)
+
+        gas_label = QLabel("Injection Gas Composition")
+        layout.addWidget(gas_label)
+
+        self.swelling_gas_table = QTableWidget(0, 2)
+        self.swelling_gas_table.setHorizontalHeaderLabels(["Component ID", "Mole Fraction"])
+        self.swelling_gas_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.swelling_gas_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.swelling_gas_table)
+
+        button_row = QHBoxLayout()
+        self.add_swelling_gas_row_btn = QPushButton("Add Gas Row")
+        self.remove_swelling_gas_row_btn = QPushButton("Remove Selected")
+        self.add_swelling_gas_row_btn.clicked.connect(self._add_swelling_gas_row)
+        self.remove_swelling_gas_row_btn.clicked.connect(self._remove_selected_swelling_gas_rows)
+        button_row.addWidget(self.add_swelling_gas_row_btn)
+        button_row.addWidget(self.remove_swelling_gas_row_btn)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        self._set_swelling_gas_rows(
+            [
+                {"component_id": "C1", "mole_fraction": 0.85},
+                {"component_id": "CO2", "mole_fraction": 0.15},
+            ]
+        )
+        return widget
+
     def _add_separator_stage_row(
         self,
         *,
@@ -823,6 +902,40 @@ class ConditionsInputWidget(QWidget):
                 pressure_bar=float(stage.get("pressure_bar", 10.0)),
                 temperature_c=float(stage.get("temperature_c", 25.0)),
             )
+
+    def _add_swelling_gas_row(
+        self,
+        *,
+        component_id: str = "",
+        mole_fraction: str = "",
+    ) -> None:
+        """Append one injection-gas composition row."""
+        row = self.swelling_gas_table.rowCount()
+        self.swelling_gas_table.insertRow(row)
+        self.swelling_gas_table.setItem(row, 0, QTableWidgetItem(component_id))
+        self.swelling_gas_table.setItem(row, 1, QTableWidgetItem(mole_fraction))
+
+    def _remove_selected_swelling_gas_rows(self) -> None:
+        """Remove selected injection-gas composition rows."""
+        rows = sorted({index.row() for index in self.swelling_gas_table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self.swelling_gas_table.removeRow(row)
+        self.conditions_changed.emit()
+
+    def _set_swelling_gas_rows(self, rows: list[dict[str, float | str]]) -> None:
+        """Replace the swelling injection-gas table contents."""
+        self.swelling_gas_table.blockSignals(True)
+        try:
+            self.swelling_gas_table.setRowCount(0)
+            for row in rows:
+                self._add_swelling_gas_row(
+                    component_id=str(row.get("component_id", "")),
+                    mole_fraction=f"{float(row.get('mole_fraction', 0.0)):.6f}"
+                    if "mole_fraction" in row
+                    else "",
+                )
+        finally:
+            self.swelling_gas_table.blockSignals(False)
 
     def _add_tbp_cut_row(
         self,
@@ -896,8 +1009,11 @@ class ConditionsInputWidget(QWidget):
         self.dl_temperature.valueChanged.connect(self._on_dl_temperature_changed)
         self.dl_p_end.valueChanged.connect(self._emit_conditions_changed)
         self.dl_n_steps.valueChanged.connect(self._emit_conditions_changed)
+        self.swelling_temperature.valueChanged.connect(self._emit_conditions_changed)
         self.cce_pressure_points.textChanged.connect(self._on_cce_pressure_points_changed)
         self.dl_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.swelling_enrichment_steps.textChanged.connect(self._emit_conditions_changed)
+        self.swelling_gas_table.itemChanged.connect(self._emit_conditions_changed)
         self.bubble_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.dew_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
@@ -906,6 +1022,8 @@ class ConditionsInputWidget(QWidget):
         self.cce_pressure_unit.currentIndexChanged.connect(self._on_cce_pressure_unit_changed)
         self.dl_temperature_unit.currentIndexChanged.connect(self._on_dl_temperature_unit_changed)
         self.dl_pressure_unit.currentIndexChanged.connect(self._on_dl_pressure_unit_changed)
+        self.swelling_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        self.swelling_pressure_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
         self.dew_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
         self.stability_pressure_unit.currentIndexChanged.connect(self._emit_conditions_changed)
@@ -942,6 +1060,8 @@ class ConditionsInputWidget(QWidget):
             self.config_stack.setCurrentWidget(self.dl_widget)
         elif calc_type == CalculationType.CVD:
             self.config_stack.setCurrentWidget(self.cvd_widget)
+        elif calc_type == CalculationType.SWELLING_TEST:
+            self.config_stack.setCurrentWidget(self.swelling_widget)
         elif calc_type == CalculationType.SEPARATOR:
             self.config_stack.setCurrentWidget(self.separator_widget)
         else:
@@ -1505,6 +1625,34 @@ class ConditionsInputWidget(QWidget):
         self.cvd_p_end.setValue(config.pressure_end_pa / 1e5)
         self.cvd_n_steps.setValue(config.n_steps)
 
+    def set_swelling_test_config(self, config: SwellingTestConfig) -> None:
+        """Load swelling-test config into widget controls."""
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.swelling_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.swelling_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.swelling_pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.swelling_pressure_unit.setCurrentIndex(p_index)
+
+        self.swelling_temperature.setValue(
+            temperature_from_k(config.temperature_k, temperature_unit)
+        )
+        self.swelling_enrichment_steps.setText(
+            ", ".join(f"{value:.12g}" for value in config.enrichment_steps_mol_per_mol_oil)
+        )
+        self._set_swelling_gas_rows(
+            [
+                {
+                    "component_id": entry.component_id,
+                    "mole_fraction": entry.mole_fraction,
+                }
+                for entry in config.injection_gas_composition.components
+            ]
+        )
+
     def set_separator_config(self, config: SeparatorConfig) -> None:
         """Load separator config into widget controls."""
         self.separator_reservoir_pressure.setValue(config.reservoir_pressure_pa / 1e5)
@@ -1563,6 +1711,10 @@ class ConditionsInputWidget(QWidget):
             if config.cvd_config is None:
                 raise ValueError("RunConfig missing cvd_config")
             self.set_cvd_config(config.cvd_config)
+        elif config.calculation_type == CalculationType.SWELLING_TEST:
+            if config.swelling_test_config is None:
+                raise ValueError("RunConfig missing swelling_test_config")
+            self.set_swelling_test_config(config.swelling_test_config)
         elif config.calculation_type == CalculationType.SEPARATOR:
             if config.separator_config is None:
                 raise ValueError("RunConfig missing separator_config")
@@ -1917,6 +2069,79 @@ class ConditionsInputWidget(QWidget):
             self.validation_error.emit(str(e))
             return None
 
+    def get_swelling_test_config(self) -> Optional[SwellingTestConfig]:
+        """Get swelling-test configuration if valid."""
+        try:
+            temperature_unit = self._coerce_combo_enum(
+                self.swelling_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
+            pressure_unit = self._coerce_combo_enum(
+                self.swelling_pressure_unit.currentData(),
+                PressureUnit,
+            )
+            schedule_text = self.swelling_enrichment_steps.text().strip()
+            if not schedule_text:
+                raise ValueError("At least one enrichment step is required")
+            schedule = [
+                float(token)
+                for token in re.split(r"[,\s;]+", schedule_text)
+                if token
+            ]
+
+            components: list[ComponentEntry] = []
+            seen_component_ids: set[str] = set()
+            total_mole_fraction = 0.0
+
+            for row in range(self.swelling_gas_table.rowCount()):
+                component_item = self.swelling_gas_table.item(row, 0)
+                mole_fraction_item = self.swelling_gas_table.item(row, 1)
+                raw_component_id = "" if component_item is None else component_item.text().strip()
+                raw_mole_fraction = "" if mole_fraction_item is None else mole_fraction_item.text().strip()
+
+                if not raw_component_id and not raw_mole_fraction:
+                    continue
+                if not raw_component_id:
+                    raise ValueError(f"Injection-gas row {row + 1} component ID is required")
+                if not raw_mole_fraction:
+                    raise ValueError(f"Injection-gas row {row + 1} mole fraction is required")
+
+                canonical_id = resolve_component_id(raw_component_id, self._components_db)
+                if canonical_id in seen_component_ids:
+                    raise ValueError(
+                        f"Injection gas contains duplicate component ID '{raw_component_id}' "
+                        "after alias resolution"
+                    )
+                seen_component_ids.add(canonical_id)
+
+                mole_fraction = float(raw_mole_fraction)
+                total_mole_fraction += mole_fraction
+                components.append(
+                    ComponentEntry(
+                        component_id=raw_component_id,
+                        mole_fraction=mole_fraction,
+                    )
+                )
+
+            if not components:
+                raise ValueError("Injection gas must include at least one component row")
+            if abs(total_mole_fraction - 1.0) > COMPOSITION_SUM_TOLERANCE:
+                raise ValueError(
+                    f"Injection gas mole fractions must sum to 1.0 within ±{COMPOSITION_SUM_TOLERANCE:.1e}; "
+                    f"got {total_mole_fraction:.8f}"
+                )
+
+            return SwellingTestConfig(
+                temperature_k=temperature_to_k(self.swelling_temperature.value(), temperature_unit),
+                enrichment_steps_mol_per_mol_oil=schedule,
+                injection_gas_composition=FluidComposition(components=components),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
     def get_separator_config(self) -> Optional[SeparatorConfig]:
         """Get separator configuration if valid."""
         try:
@@ -1997,6 +2222,10 @@ class ConditionsInputWidget(QWidget):
             config = self.get_cvd_config()
             if config is None:
                 return False, "Invalid CVD conditions"
+        elif calc_type == CalculationType.SWELLING_TEST:
+            config = self.get_swelling_test_config()
+            if config is None:
+                return False, "Invalid swelling-test conditions"
         elif calc_type == CalculationType.SEPARATOR:
             config = self.get_separator_config()
             if config is None:

@@ -91,10 +91,14 @@ surface as first-class supported features:
 - confinement workflows
 - ternary / iso-line envelope tooling
 - wider tuning/regression surface
-- swelling / slimtube / MMP workflows
+- slimtube / MMP workflows
 
 Some of these may remain future milestones, but they must not remain implied as
 app-supported if they are not wired.
+
+Current bounded state: the desktop/runtime surface now includes a first-slice
+single-contact swelling test. Slimtube, MMP, and broader miscibility workflows
+remain out of scope and must stay labeled as absent until separately wired.
 
 ---
 
@@ -328,7 +332,6 @@ properly surfaced.
 - confinement
 - ternary / iso-lines
 - tuning / regression
-- swelling
 - slimtube / MMP / miscibility workflows
 
 ### Rule

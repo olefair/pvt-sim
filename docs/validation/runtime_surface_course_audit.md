@@ -52,6 +52,7 @@ The canonical desktop runtime currently wires these workflows through
 - `CCE`
 - `Differential Liberation`
 - `CVD`
+- `Swelling Test`
 - `Separator`
 
 The current runtime EOS surface is:
@@ -135,7 +136,7 @@ fluid preparation.
 | Confinement | Present | Not wired | Present in `pvtcore.confinement` only |
 | Ternary / iso-line tools | Present | Not wired | Present in `pvtcore.envelope` only |
 | Tuning / regression | Present | Not wired | Present in `pvtcore.tuning` only |
-| Swelling / slimtube / MMP workflows | Not found as executable workflows | Not wired | Covered in lecture material but not present as first-class repo workflows |
+| Swelling / slimtube / MMP workflows | Present, but split | Swelling wired; slimtube/MMP not wired | The canonical desktop/runtime surface now exposes a bounded fixed-temperature single-contact swelling test with explicit oil/gas feeds; slimtube and miscibility workflows remain absent |
 | Standalone TBP experiment | Explicit stub only | Honest non-runtime | `pvtcore.experiments.tbp` raises `NotImplementedError` instead of pretending support |
 
 ---

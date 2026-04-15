@@ -201,7 +201,7 @@ Commercial/software cross-check policy:
 
 ---
 
-### 10. Lab Test Simulations (CCE, DL, CVD)
+### 10. Lab Test Simulations (CCE, DL, CVD, Swelling)
 
 **Validation Source:** Published PVT reports from literature
 
@@ -216,6 +216,16 @@ DL Test:
 | P (psia) | Rs (exp) | Bo (exp) | Rs (calc) | Bo (calc) |
 |----------|----------|----------|-----------|-----------|
 | TBD | TBD | TBD | | |
+
+Swelling Test:
+- Contract example: `examples/swelling_test_config.json`
+- Current admitted slice: fixed-temperature, single-contact enrichment of an
+  explicit oil feed by an explicit injection-gas feed
+- Primary reported outputs: bubble pressure, saturated-liquid density /
+  molar volume, and swelling factor versus added gas (mol/mol initial oil)
+- Explicit first-draft limit: both feeds use resolved component rows only;
+  `plus_fraction`, `inline_components`, slimtube, and MMP variants remain out
+  of scope for this runtime surface
 
 ---
 

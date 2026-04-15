@@ -15,6 +15,7 @@ GUI_SUPPORTED_CALCULATION_TYPES: tuple[CalculationType, ...] = (
     CalculationType.CCE,
     CalculationType.DL,
     CalculationType.CVD,
+    CalculationType.SWELLING_TEST,
     CalculationType.SEPARATOR,
 )
 
@@ -28,6 +29,7 @@ GUI_CALCULATION_TYPE_LABELS: dict[CalculationType, str] = {
     CalculationType.CCE: "CCE",
     CalculationType.DL: "Differential Liberation",
     CalculationType.CVD: "CVD",
+    CalculationType.SWELLING_TEST: "Swelling Test",
     CalculationType.SEPARATOR: "Separator",
 }
 

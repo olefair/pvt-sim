@@ -62,6 +62,35 @@ def _tbp_config() -> RunConfig:
     )
 
 
+def _swelling_config() -> RunConfig:
+    return RunConfig.model_validate(
+        {
+            "run_name": "Swelling Runtime Contract",
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.40},
+                    {"component_id": "C4", "mole_fraction": 0.30},
+                    {"component_id": "C10", "mole_fraction": 0.30},
+                ]
+            },
+            "calculation_type": "swelling_test",
+            "eos_type": "peng_robinson",
+            "swelling_test_config": {
+                "temperature_k": 350.0,
+                "enrichment_steps_mol_per_mol_oil": [0.05, 0.10, 0.20, 0.35],
+                "pressure_unit": "bar",
+                "temperature_unit": "C",
+                "injection_gas_composition": {
+                    "components": [
+                        {"component_id": "C1", "mole_fraction": 0.85},
+                        {"component_id": "CO2", "mole_fraction": 0.15},
+                    ]
+                },
+            },
+        }
+    )
+
+
 def _bubble_point_plus_fraction_config() -> RunConfig:
     return RunConfig.model_validate(
         {
@@ -282,6 +311,59 @@ def test_validate_runtime_config_accepts_peng_robinson() -> None:
     validate_runtime_config(config)
 
 
+def test_validate_runtime_config_accepts_swelling_test() -> None:
+    validate_runtime_config(_swelling_config())
+
+
+def test_run_config_rejects_swelling_oil_plus_fraction_surface() -> None:
+    with pytest.raises(ValueError, match="composition.plus_fraction is not supported for swelling_test"):
+        RunConfig.model_validate(
+            {
+                **_swelling_config().model_dump(mode="json"),
+                "composition": {
+                    "components": [
+                        {"component_id": "C1", "mole_fraction": 0.40},
+                        {"component_id": "C4", "mole_fraction": 0.30},
+                    ],
+                    "plus_fraction": {
+                        "label": "C7+",
+                        "cut_start": 7,
+                        "z_plus": 0.30,
+                        "mw_plus_g_per_mol": 150.0,
+                        "sg_plus_60f": 0.82,
+                    },
+                },
+            }
+        )
+
+
+def test_run_config_rejects_swelling_injection_gas_plus_fraction_surface() -> None:
+    with pytest.raises(
+        ValueError,
+        match="swelling_test_config.injection_gas_composition must not define plus_fraction",
+    ):
+        RunConfig.model_validate(
+            {
+                **_swelling_config().model_dump(mode="json"),
+                "swelling_test_config": {
+                    **_swelling_config().swelling_test_config.model_dump(mode="json"),
+                    "injection_gas_composition": {
+                        "components": [
+                            {"component_id": "C1", "mole_fraction": 0.85},
+                        ],
+                        "plus_fraction": {
+                            "label": "C7+",
+                            "cut_start": 7,
+                            "z_plus": 0.15,
+                            "mw_plus_g_per_mol": 130.0,
+                            "sg_plus_60f": 0.78,
+                        },
+                    },
+                },
+            }
+        )
+
+
 def test_validate_runtime_config_accepts_component_aliases_and_bip_aliases() -> None:
     config = RunConfig.model_validate(
         {
@@ -305,6 +387,26 @@ def test_validate_runtime_config_accepts_component_aliases_and_bip_aliases() -> 
     )
 
     validate_runtime_config(config)
+
+
+def test_run_calculation_executes_swelling_with_union_component_basis() -> None:
+    result = run_calculation(config=_swelling_config(), write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.swelling_test_result is not None
+    assert result.error_message is None
+    assert result.swelling_test_result.fully_certified is True
+    assert result.swelling_test_result.overall_status == "complete"
+    assert len(result.swelling_test_result.steps) == 5
+    assert result.swelling_test_result.enrichment_steps_mol_per_mol_oil == pytest.approx(
+        [0.0, 0.05, 0.10, 0.20, 0.35]
+    )
+    baseline_step = result.swelling_test_result.steps[0]
+    enriched_step = result.swelling_test_result.steps[-1]
+    assert baseline_step.enriched_feed_composition["CO2"] == pytest.approx(0.0)
+    assert enriched_step.enriched_feed_composition["CO2"] > 0.0
+    assert enriched_step.incipient_vapor_composition is not None
+    assert enriched_step.k_values is not None
 
 
 def test_validate_runtime_config_rejects_duplicate_alias_and_canonical_component_ids() -> None:

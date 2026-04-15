@@ -67,7 +67,12 @@ Current workflow surface exposed in the GUI/runtime, verified from
 - `CCE`
 - `Differential Liberation`
 - `CVD`
+- `Swelling Test`
 - `Separator`
+
+Canonical shipped examples currently include `examples/pt_flash_config.json`,
+`examples/phase_envelope_config.json`, and the bounded swelling example
+`examples/swelling_test_config.json`.
 
 Current runtime EOS surface:
 

@@ -117,6 +117,33 @@ def _separator_config() -> dict:
     }
 
 
+def _swelling_config() -> dict:
+    return {
+        "run_name": "Swelling Test - Happy Path",
+        "composition": {
+            "components": [
+                {"component_id": "C1", "mole_fraction": 0.40},
+                {"component_id": "C4", "mole_fraction": 0.30},
+                {"component_id": "C10", "mole_fraction": 0.30},
+            ]
+        },
+        "calculation_type": "swelling_test",
+        "eos_type": "peng_robinson",
+        "swelling_test_config": {
+            "temperature_k": 350.0,
+            "enrichment_steps_mol_per_mol_oil": [0.05, 0.10, 0.20, 0.35],
+            "pressure_unit": "bar",
+            "temperature_unit": "C",
+            "injection_gas_composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.85},
+                    {"component_id": "CO2", "mole_fraction": 0.15},
+                ]
+            },
+        },
+    }
+
+
 def test_bubble_point_workflow_happy_path() -> None:
     config = RunConfig.model_validate(_bubble_point_config())
     result = run_calculation(config=config, write_artifacts=False)
@@ -234,3 +261,16 @@ def test_separator_workflow_happy_path() -> None:
     assert result.separator_result.total_gas_moles is not None
     assert result.separator_result.shrinkage is not None
     assert len(result.separator_result.stages) >= 2
+
+
+def test_swelling_workflow_happy_path() -> None:
+    config = RunConfig.model_validate(_swelling_config())
+    result = run_calculation(config=config, write_artifacts=False)
+
+    assert result.status == RunStatus.COMPLETED
+    assert result.swelling_test_result is not None
+    assert result.swelling_test_result.overall_status == "complete"
+    assert result.swelling_test_result.fully_certified is True
+    assert len(result.swelling_test_result.steps) >= 2
+    assert result.swelling_test_result.steps[0].added_gas_moles_per_mole_oil == pytest.approx(0.0)
+    assert result.swelling_test_result.steps[1].bubble_pressure_pa is not None

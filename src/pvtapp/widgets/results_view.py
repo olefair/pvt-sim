@@ -53,10 +53,12 @@ from pvtapp.schemas import (
     CCEResult,
     DLResult,
     CVDResult,
+    SwellingTestResult,
     SeparatorResult,
     SaturationPointConfig,
     CCEConfig,
     DLConfig,
+    SwellingTestConfig,
     PressureUnit,
     TemperatureUnit,
     describe_pt_flash_reported_surface_status,
@@ -136,6 +138,7 @@ def _format_calculation_type_label(calculation_type) -> str:
         "cce": "CCE",
         "differential_liberation": "DL",
         "cvd": "CVD",
+        "swelling_test": "Swelling Test",
         "separator": "Separator",
     }
     return labels.get(value, value.replace("_", " ").title())
@@ -626,6 +629,8 @@ class ResultsTableWidget(QWidget):
             self._display_dl(result.dl_result)
         elif result.cvd_result:
             self._display_cvd(result.cvd_result)
+        elif result.swelling_test_result:
+            self._display_swelling(result.swelling_test_result)
         elif result.separator_result:
             self._display_separator(result.separator_result)
         else:
@@ -822,6 +827,15 @@ class ResultsTableWidget(QWidget):
         config: Optional[DLConfig] = None
         if self._current_result is not None:
             config = self._current_result.config.dl_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _swelling_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred swelling-test display units."""
+        config: Optional[SwellingTestConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.swelling_test_config
         if config is None:
             return PressureUnit.BAR, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
@@ -1698,6 +1712,113 @@ class ResultsTableWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
 
+    def _display_swelling(self, result: SwellingTestResult) -> None:
+        """Display swelling-test results."""
+        self.composition_section.setTitle("Step Summary")
+        self.details_section.setTitle("Step Diagnostics")
+
+        pressure_unit, temperature_unit = self._swelling_display_units()
+        certified_steps = sum(step.status == "certified" for step in result.steps)
+        summary_data = [
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
+            (
+                "Baseline Bubble Pressure",
+                "-"
+                if result.baseline_bubble_pressure_pa is None
+                else _format_pressure(result.baseline_bubble_pressure_pa, pressure_unit),
+            ),
+            (
+                "Baseline Sat. Liquid Vm",
+                "-"
+                if result.baseline_saturated_liquid_molar_volume_m3_per_mol is None
+                else f"{result.baseline_saturated_liquid_molar_volume_m3_per_mol:.6e} m³/mol",
+            ),
+            ("Steps", str(len(result.steps))),
+            ("Certified Steps", f"{certified_steps} / {len(result.steps)}"),
+            ("Overall Status", result.overall_status.replace("_", " ").title()),
+            ("Fully Certified", "Yes" if result.fully_certified else "No"),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        self.composition_table.setColumnCount(6)
+        self.composition_table.setHorizontalHeaderLabels(
+            [
+                "Step",
+                "Added Gas (mol/mol oil)",
+                f"Bubble Pressure ({pressure_unit.value})",
+                "Swelling Factor",
+                "Sat. Liquid Density (kg/m³)",
+                "Status",
+            ]
+        )
+        self.composition_table.setRowCount(len(result.steps))
+
+        self.details_table.setColumnCount(4)
+        self.details_table.setHorizontalHeaderLabels(
+            [
+                "Step",
+                "Total Moles (mol/mol oil)",
+                "Sat. Liquid Vm (m³/mol)",
+                "Message",
+            ]
+        )
+        self.details_table.setRowCount(len(result.steps))
+
+        for row, step in enumerate(result.steps):
+            bubble_pressure = (
+                "-"
+                if step.bubble_pressure_pa is None
+                else f"{pressure_from_pa(step.bubble_pressure_pa, pressure_unit):.4f}"
+            )
+            swelling_factor = (
+                "-"
+                if step.swelling_factor is None
+                else f"{step.swelling_factor:.6f}"
+            )
+            liquid_density = (
+                "-"
+                if step.saturated_liquid_density_kg_per_m3 is None
+                else f"{step.saturated_liquid_density_kg_per_m3:.2f}"
+            )
+            molar_volume = (
+                "-"
+                if step.saturated_liquid_molar_volume_m3_per_mol is None
+                else f"{step.saturated_liquid_molar_volume_m3_per_mol:.6e}"
+            )
+
+            self.composition_table.setItem(row, 0, QTableWidgetItem(str(step.step_index)))
+            self.composition_table.setItem(
+                row, 1, QTableWidgetItem(f"{step.added_gas_moles_per_mole_oil:.6f}")
+            )
+            self.composition_table.setItem(row, 2, QTableWidgetItem(bubble_pressure))
+            self.composition_table.setItem(row, 3, QTableWidgetItem(swelling_factor))
+            self.composition_table.setItem(row, 4, QTableWidgetItem(liquid_density))
+            self.composition_table.setItem(
+                row,
+                5,
+                QTableWidgetItem(step.status.replace("_", " ").title()),
+            )
+
+            self.details_table.setItem(row, 0, QTableWidgetItem(str(step.step_index)))
+            self.details_table.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{step.total_mixture_moles_per_mole_oil:.6f}"),
+            )
+            self.details_table.setItem(row, 2, QTableWidgetItem(molar_volume))
+            self.details_table.setItem(row, 3, QTableWidgetItem(step.message or ""))
+
+        self.composition_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+
     def _display_separator(self, result: SeparatorResult) -> None:
         """Display separator-train results."""
         summary_data = [
@@ -2203,6 +2324,8 @@ class ResultsPlotWidget(QWidget):
             self._plot_dl(result.dl_result)
         elif result.cvd_result:
             self._plot_cvd(result.cvd_result)
+        elif result.swelling_test_result:
+            self._plot_swelling(result.swelling_test_result)
         elif result.separator_result:
             self._plot_separator(result.separator_result)
 
@@ -2227,6 +2350,9 @@ class ResultsPlotWidget(QWidget):
         elif result.cvd_result is not None:
             plot_kind = "cvd"
             specs = self._cvd_plot_series_specs(result.cvd_result)
+        elif result.swelling_test_result is not None:
+            plot_kind = "swelling"
+            specs = self._swelling_plot_series_specs(result.swelling_test_result)
         elif result.separator_result is not None:
             plot_kind = "separator"
             specs = self._separator_plot_series_specs(result.separator_result)
@@ -2336,6 +2462,15 @@ class ResultsPlotWidget(QWidget):
         config: Optional[DLConfig] = None
         if self._current_result is not None:
             config = self._current_result.config.dl_config
+        if config is None:
+            return PressureUnit.BAR, TemperatureUnit.C
+        return config.pressure_unit, config.temperature_unit
+
+    def _swelling_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred swelling-test plot units."""
+        config: Optional[SwellingTestConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.swelling_test_config
         if config is None:
             return PressureUnit.BAR, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
@@ -2471,15 +2606,23 @@ class ResultsPlotWidget(QWidget):
         values: list[Optional[float]],
     ) -> tuple[list[float], list[float]]:
         """Filter a pressure series down to finite numeric values only."""
+        return ResultsPlotWidget._finite_xy_series(pressures, values)
+
+    @staticmethod
+    def _finite_xy_series(
+        xs_in: list[float],
+        values: list[Optional[float]],
+    ) -> tuple[list[float], list[float]]:
+        """Filter any x/y series pair down to finite numeric values only."""
         xs: list[float] = []
         ys: list[float] = []
-        for pressure, value in zip(pressures, values, strict=True):
+        for x_value, value in zip(xs_in, values, strict=True):
             if value is None:
                 continue
             numeric = float(value)
             if not math.isfinite(numeric):
                 continue
-            xs.append(pressure)
+            xs.append(x_value)
             ys.append(numeric)
         return xs, ys
 
@@ -2816,6 +2959,49 @@ class ResultsPlotWidget(QWidget):
             ),
         }
 
+    def _swelling_plot_series_specs(self, result: SwellingTestResult) -> dict[str, PlotSeriesSpec]:
+        """Return the available selectable swelling-test series."""
+        pressure_unit, _temperature_unit = self._swelling_plot_units()
+        return {
+            "bubble_pressure": PlotSeriesSpec(
+                key="bubble_pressure",
+                label="Bubble Pressure",
+                axis_group="pressure",
+                axis_label=f"Pressure ({pressure_unit.value})",
+                overlay_group="pressure",
+                values=[
+                    None
+                    if step.bubble_pressure_pa is None
+                    else pressure_from_pa(step.bubble_pressure_pa, pressure_unit)
+                    for step in result.steps
+                ],
+                color="#2563eb",
+                default_selected=True,
+            ),
+            "swelling_factor": PlotSeriesSpec(
+                key="swelling_factor",
+                label="Swelling Factor",
+                axis_group="dimensionless",
+                axis_label="Dimensionless",
+                overlay_group="swelling_factor",
+                values=[step.swelling_factor for step in result.steps],
+                color="#f59e0b",
+                default_selected=True,
+                linestyle="--",
+            ),
+            "liquid_density": PlotSeriesSpec(
+                key="liquid_density",
+                label="Sat. Liquid Density",
+                axis_group="density",
+                axis_label="Density (kg/m³)",
+                overlay_group="density",
+                values=[step.saturated_liquid_density_kg_per_m3 for step in result.steps],
+                color="#22c55e",
+                default_selected=True,
+                marker="s",
+            ),
+        }
+
     def _plot_selected_pressure_series(
         self,
         *,
@@ -2906,6 +3092,87 @@ class ResultsPlotWidget(QWidget):
 
         if len(axes) > 1:
             self.figure.subplots_adjust(left=0.12, right=0.97, top=0.93, bottom=0.09, hspace=0.34)
+        else:
+            self.figure.tight_layout()
+
+    def _plot_selected_enrichment_series(
+        self,
+        *,
+        enrichment_steps: list[float],
+        specs: list[PlotSeriesSpec],
+        title: str,
+        x_label: str = "Added Gas (mol/mol initial oil)",
+    ) -> None:
+        """Plot selected swelling-test series against enrichment/contact ratio."""
+        if not specs:
+            self._plot_placeholder("Select at least one series to display.", title=title)
+            return
+
+        clusters = self._cluster_selected_series(specs)
+        axes: list[object] = []
+        for index in range(len(clusters)):
+            share_axis = axes[0] if axes else None
+            axis = self.figure.add_subplot(len(clusters), 1, index + 1, sharex=share_axis)
+            axis.set_facecolor(PLOT_CANVAS_COLOR)
+            axes.append(axis)
+
+        plotted_any = False
+        for index, (axis, cluster) in enumerate(zip(axes, clusters, strict=True)):
+            cluster_plotted = False
+            for spec in cluster:
+                xs, ys = self._finite_xy_series(enrichment_steps, spec.values)
+                if not xs:
+                    continue
+                axis.plot(
+                    xs,
+                    ys,
+                    color=spec.color,
+                    marker=spec.marker,
+                    linestyle=spec.linestyle,
+                    linewidth=spec.linewidth,
+                    markersize=spec.markersize,
+                    label=spec.label,
+                )
+                cluster_plotted = True
+                plotted_any = True
+
+            if not cluster_plotted:
+                axis.text(
+                    0.5,
+                    0.5,
+                    "No finite data is available for the selected series.",
+                    color=PLOT_TEXT_COLOR,
+                    ha="center",
+                    va="center",
+                    wrap=True,
+                    transform=axis.transAxes,
+                )
+
+            preferred_ylim = next(
+                (spec.preferred_ylim for spec in cluster if spec.preferred_ylim is not None),
+                None,
+            )
+            if preferred_ylim is not None:
+                axis.set_ylim(*preferred_ylim)
+            axis.set_ylabel(self._cluster_axis_label(cluster))
+            axis.set_xlabel(x_label)
+            if index == 0:
+                axis.set_title(title)
+            self._apply_axes_theme(axis)
+
+            handles, labels = axis.get_legend_handles_labels()
+            if handles:
+                axis.legend(handles, labels, loc="best")
+                self._apply_axes_theme(axis)
+
+        if not plotted_any:
+            self.figure.clear()
+            self._apply_figure_theme()
+            self._plot_placeholder("No finite data is available for the selected series.", title=title)
+            return
+
+        if len(axes) > 1:
+            self.figure.subplots_adjust(left=0.12, right=0.97, top=0.93, bottom=0.10, hspace=0.34)
         else:
             self.figure.tight_layout()
 
@@ -3188,6 +3455,20 @@ class ResultsPlotWidget(QWidget):
             title=f"CVD Trends at {result.temperature_k - 273.15:.1f} {_format_temperature_unit(TemperatureUnit.C)}",
             reference_pressure=result.dew_pressure_pa / 1e5,
             reference_label=f"Pd = {result.dew_pressure_pa / 1e5:.2f} bar",
+        )
+
+    def _plot_swelling(self, result: SwellingTestResult) -> None:
+        """Plot swelling-test trends against enrichment rather than pressure."""
+        pressure_unit, temperature_unit = self._swelling_plot_units()
+        _ = pressure_unit
+        enrichment_steps = [step.added_gas_moles_per_mole_oil for step in result.steps]
+        self._plot_selected_enrichment_series(
+            enrichment_steps=enrichment_steps,
+            specs=self._current_series_specs(),
+            title=(
+                "Swelling Test at "
+                f"{_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+            ),
         )
 
     def _plot_separator(self, result: SeparatorResult) -> None:

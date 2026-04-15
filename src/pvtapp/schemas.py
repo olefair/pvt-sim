@@ -60,6 +60,7 @@ class CalculationType(str, Enum):
     CCE = "cce"
     DL = "differential_liberation"
     CVD = "cvd"
+    SWELLING_TEST = "swelling_test"
     SEPARATOR = "separator"
 
 
@@ -938,6 +939,63 @@ class CVDConfig(BaseModel):
         return self
 
 
+class SwellingTestConfig(BaseModel):
+    """Configuration for the first-slice swelling-test workflow."""
+
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Test temperature (K)",
+    )
+    enrichment_steps_mol_per_mol_oil: List[float] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Strictly increasing gas additions expressed as gas moles added "
+            "per initial mole of oil. The runtime inserts the baseline row at 0.0."
+        ),
+    )
+    injection_gas_composition: FluidComposition = Field(
+        ...,
+        description="Explicit resolved injection-gas composition on a component-row basis",
+    )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.BAR,
+        description="Preferred pressure unit for GUI input/output",
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.C,
+        description="Preferred temperature unit for GUI input/output",
+    )
+
+    @field_validator("enrichment_steps_mol_per_mol_oil")
+    @classmethod
+    def validate_enrichment_steps(cls, values: List[float]) -> List[float]:
+        normalized = [float(value) for value in values]
+        if any(value < 0.0 for value in normalized):
+            raise ValueError("enrichment_steps_mol_per_mol_oil must be non-negative")
+        if any(normalized[index] >= normalized[index + 1] for index in range(len(normalized) - 1)):
+            raise ValueError(
+                "enrichment_steps_mol_per_mol_oil must be strictly increasing and duplicate-free"
+            )
+        return normalized
+
+    @model_validator(mode='after')
+    def validate_feed_surface(self) -> 'SwellingTestConfig':
+        if self.injection_gas_composition.plus_fraction is not None:
+            raise ValueError(
+                "swelling_test_config.injection_gas_composition must not define plus_fraction "
+                "in the current first-draft runtime surface"
+            )
+        if self.injection_gas_composition.inline_components:
+            raise ValueError(
+                "swelling_test_config.injection_gas_composition must not define inline_components "
+                "in the current first-draft runtime surface"
+            )
+        return self
+
+
 class SeparatorStageConfig(BaseModel):
     """Configuration for a single separator stage."""
 
@@ -1125,6 +1183,7 @@ class RunConfig(BaseModel):
     cce_config: Optional[CCEConfig] = None
     dl_config: Optional[DLConfig] = None
     cvd_config: Optional[CVDConfig] = None
+    swelling_test_config: Optional[SwellingTestConfig] = None
     separator_config: Optional[SeparatorConfig] = None
 
     # Solver settings
@@ -1173,6 +1232,17 @@ class RunConfig(BaseModel):
         elif self.calculation_type == CalculationType.CVD:
             if self.cvd_config is None:
                 raise ValueError("cvd_config is required for CVD calculation")
+        elif self.calculation_type == CalculationType.SWELLING_TEST:
+            if self.swelling_test_config is None:
+                raise ValueError("swelling_test_config is required for SWELLING_TEST calculation")
+            if self.composition.plus_fraction is not None:
+                raise ValueError(
+                    "composition.plus_fraction is not supported for swelling_test in the current first-draft runtime surface"
+                )
+            if self.composition.inline_components:
+                raise ValueError(
+                    "composition.inline_components are not supported for swelling_test in the current first-draft runtime surface"
+                )
         elif self.calculation_type == CalculationType.SEPARATOR:
             if self.separator_config is None:
                 raise ValueError("separator_config is required for SEPARATOR calculation")
@@ -1721,6 +1791,42 @@ class CVDResult(BaseModel):
     steps: List[CVDStepResult]
 
 
+class SwellingStepResultData(BaseModel):
+    """Results for a single swelling-test enrichment step."""
+
+    step_index: int
+    added_gas_moles_per_mole_oil: float
+    total_mixture_moles_per_mole_oil: float
+    bubble_pressure_pa: Optional[float] = None
+    swelling_factor: Optional[float] = None
+    saturated_liquid_molar_volume_m3_per_mol: Optional[float] = None
+    saturated_liquid_density_kg_per_m3: Optional[float] = None
+    enriched_feed_composition: Dict[str, float] = Field(default_factory=dict)
+    incipient_vapor_composition: Optional[Dict[str, float]] = None
+    k_values: Optional[Dict[str, float]] = None
+    status: Literal[
+        "certified",
+        "failed_solver",
+        "failed_no_boundary",
+        "failed_ambiguous_boundary",
+    ]
+    message: Optional[str] = None
+
+
+class SwellingTestResult(BaseModel):
+    """Results from the first-slice swelling-test workflow."""
+
+    temperature_k: float
+    baseline_bubble_pressure_pa: Optional[float] = None
+    baseline_saturated_liquid_molar_volume_m3_per_mol: Optional[float] = None
+    enrichment_steps_mol_per_mol_oil: List[float]
+    steps: List[SwellingStepResultData]
+    bubble_pressures_pa: List[Optional[float]]
+    swelling_factors: List[Optional[float]]
+    fully_certified: bool
+    overall_status: Literal["complete", "partial", "failed"]
+
+
 class SeparatorStageResult(BaseModel):
     """Results for a single separator stage."""
 
@@ -2113,6 +2219,7 @@ class RunResult(BaseModel):
     cce_result: Optional[CCEResult] = None
     dl_result: Optional[DLResult] = None
     cvd_result: Optional[CVDResult] = None
+    swelling_test_result: Optional[SwellingTestResult] = None
     separator_result: Optional[SeparatorResult] = None
     runtime_characterization: Optional[RuntimeCharacterizationResult] = None
 

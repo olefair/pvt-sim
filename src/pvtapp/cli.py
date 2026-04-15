@@ -153,6 +153,23 @@ def print_result_summary(result: RunResult) -> None:
         if res.saturation_pressure_pa:
             print(f"  Saturation Pressure: {res.saturation_pressure_pa / 1e5:.2f} bar")
 
+    elif result.swelling_test_result:
+        res = result.swelling_test_result
+        certified_steps = sum(step.status == "certified" for step in res.steps)
+        print(f"\nSwelling Test Results:")
+        print(f"  Temperature: {res.temperature_k - 273.15:.2f} C")
+        print(f"  Steps: {len(res.steps)}")
+        print(f"  Certified Steps: {certified_steps}/{len(res.steps)}")
+        print(f"  Overall Status: {res.overall_status}")
+        print(f"  Fully Certified: {res.fully_certified}")
+        if res.baseline_bubble_pressure_pa is not None:
+            print(f"  Baseline Bubble Pressure: {res.baseline_bubble_pressure_pa / 1e5:.2f} bar")
+        if res.steps:
+            first = res.steps[0]
+            last = res.steps[-1]
+            print(f"  First Step: r={first.added_gas_moles_per_mole_oil:.3f}, status={first.status}")
+            print(f"  Last Step: r={last.added_gas_moles_per_mole_oil:.3f}, status={last.status}")
+
     if result.runtime_characterization is not None and result.config.calculation_type.value != "tbp":
         runtime = result.runtime_characterization
         print(f"\nRuntime Characterization:")

@@ -42,6 +42,7 @@ from pvtapp.schemas import (
     BubblePointResult, DewPointResult,
     DLResult, DLStepResult,
     CVDResult, CVDStepResult,
+    SwellingTestResult, SwellingStepResultData,
     SeparatorResult, SeparatorStageResult,
     SolverDiagnostics, IterationRecord, ConvergenceStatusEnum,
     InvariantCheck, SolverCertificate,
@@ -204,6 +205,18 @@ class PreparedFluidContext:
     runtime_characterization: RuntimeCharacterizationResult | None = None
     detailed_reconstruction: RuntimeDetailedReconstructionContext | None = None
     detailed_reconstruction_unavailable_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedSwellingContext:
+    """Explicit two-feed swelling runtime package on a shared component basis."""
+
+    component_ids: list[str]
+    components: list[object]
+    oil_composition: np.ndarray
+    injection_gas_composition: np.ndarray
+    eos: object
+    binary_interaction: np.ndarray | None
 
 
 @dataclass(frozen=True)
@@ -1960,6 +1973,115 @@ def _build_runtime_characterization_from_config(
     return prepared.runtime_characterization
 
 
+def _resolve_explicit_component_feed(
+    feed,
+    *,
+    label: str,
+    all_components: dict[str, object],
+) -> tuple[list[str], np.ndarray]:
+    """Resolve one explicit-feed composition onto canonical component IDs."""
+    from pvtcore.models import resolve_component_id
+
+    if feed.plus_fraction is not None:
+        raise ValueError(
+            f"{label} must not define plus_fraction in the current first-draft swelling runtime surface"
+        )
+    if feed.inline_components:
+        raise ValueError(
+            f"{label} must not define inline_components in the current first-draft swelling runtime surface"
+        )
+
+    raw_component_ids = [entry.component_id for entry in feed.components]
+    mole_fractions = np.asarray(
+        [float(entry.mole_fraction) for entry in feed.components],
+        dtype=np.float64,
+    )
+
+    component_ids: list[str] = []
+    missing: list[str] = []
+    for cid in raw_component_ids:
+        try:
+            component_ids.append(resolve_component_id(cid, all_components))
+        except KeyError:
+            missing.append(cid)
+
+    if missing:
+        raise ValueError(
+            f"Unknown component(s) in {label}: {missing}. Available: {sorted(all_components.keys())}"
+        )
+
+    duplicate_sources: dict[str, list[str]] = {}
+    for raw_id, canonical_id in zip(raw_component_ids, component_ids, strict=True):
+        duplicate_sources.setdefault(canonical_id, []).append(raw_id)
+    duplicates = {
+        canonical_id: raw_ids
+        for canonical_id, raw_ids in duplicate_sources.items()
+        if len(raw_ids) > 1
+    }
+    if duplicates:
+        raise ValueError(
+            f"Duplicate component IDs after alias resolution in {label}: {duplicates}"
+        )
+
+    return component_ids, mole_fractions
+
+
+def _prepare_swelling_inputs(config: RunConfig) -> PreparedSwellingContext:
+    """Build the bounded two-feed runtime package for swelling-test execution."""
+    from pvtcore.models import load_components
+
+    swelling_config = config.swelling_test_config
+    if swelling_config is None:
+        raise ValueError("swelling_test_config is required for SWELLING_TEST calculation")
+    if config.composition is None:
+        raise ValueError("composition is required for SWELLING_TEST calculation")
+
+    all_components = load_components()
+    oil_component_ids, oil_composition = _resolve_explicit_component_feed(
+        config.composition,
+        label="composition",
+        all_components=all_components,
+    )
+    gas_component_ids, injection_gas_composition = _resolve_explicit_component_feed(
+        swelling_config.injection_gas_composition,
+        label="swelling_test_config.injection_gas_composition",
+        all_components=all_components,
+    )
+
+    union_component_ids = list(oil_component_ids)
+    for component_id in gas_component_ids:
+        if component_id not in union_component_ids:
+            union_component_ids.append(component_id)
+
+    component_positions = {
+        component_id: index for index, component_id in enumerate(union_component_ids)
+    }
+    aligned_oil = np.zeros(len(union_component_ids), dtype=np.float64)
+    aligned_gas = np.zeros(len(union_component_ids), dtype=np.float64)
+
+    for component_id, fraction in zip(oil_component_ids, oil_composition, strict=True):
+        aligned_oil[component_positions[component_id]] = float(fraction)
+    for component_id, fraction in zip(gas_component_ids, injection_gas_composition, strict=True):
+        aligned_gas[component_positions[component_id]] = float(fraction)
+
+    components = [all_components[component_id] for component_id in union_component_ids]
+    eos = _build_runtime_eos(config, components)
+    binary_interaction = _build_binary_interaction_matrix(
+        union_component_ids,
+        components,
+        config,
+    )
+
+    return PreparedSwellingContext(
+        component_ids=union_component_ids,
+        components=components,
+        oil_composition=aligned_oil,
+        injection_gas_composition=aligned_gas,
+        eos=eos,
+        binary_interaction=binary_interaction,
+    )
+
+
 def _prepare_fluid_inputs(config: RunConfig) -> PreparedFluidContext:
     """Build the first-class runtime fluid package used by all non-TBP workflows."""
     from pvtcore.characterization import characterize_fluid
@@ -2437,6 +2559,9 @@ def validate_runtime_config(config: RunConfig) -> None:
     """Validate runtime prerequisites without executing a calculation."""
     if config.calculation_type == CalculationType.TBP:
         execute_tbp(config)
+        return
+    if config.calculation_type == CalculationType.SWELLING_TEST:
+        _prepare_swelling_inputs(config)
         return
     config = _resolve_config_characterization(config)
     _prepare_fluid_inputs(config)
@@ -3009,6 +3134,113 @@ def execute_cvd(
     )
 
 
+def execute_swelling_test(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+    prepared_swelling: Optional[PreparedSwellingContext] = None,
+) -> SwellingTestResult:
+    """Execute the first-slice swelling-test calculation."""
+    from pvtcore.experiments import simulate_swelling
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Validating swelling inputs...")
+
+    prepared = prepared_swelling or _prepare_swelling_inputs(config)
+    component_ids = prepared.component_ids
+    components = prepared.components
+    eos = prepared.eos
+    binary_interaction = prepared.binary_interaction
+
+    swelling_config = config.swelling_test_config
+    if swelling_config is None:
+        raise ValueError("swelling_test_config is required for SWELLING_TEST calculation")
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Building union fluid basis...")
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.6, "Running swelling test...")
+
+    kernel_result = simulate_swelling(
+        oil_composition=prepared.oil_composition,
+        injection_gas_composition=prepared.injection_gas_composition,
+        temperature=swelling_config.temperature_k,
+        components=components,
+        eos=eos,
+        enrichment_steps=swelling_config.enrichment_steps_mol_per_mol_oil,
+        binary_interaction=binary_interaction,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.9, "Packaging swelling results...")
+
+    steps: list[SwellingStepResultData] = []
+    for step in kernel_result.steps:
+        vapor_vector = np.asarray(step.incipient_vapor_composition, dtype=np.float64)
+        k_vector = np.asarray(step.k_values, dtype=np.float64)
+        incipient_vapor = (
+            None
+            if not np.all(np.isfinite(vapor_vector))
+            else {
+                component_id: float(vapor_vector[index])
+                for index, component_id in enumerate(component_ids)
+            }
+        )
+        k_values = (
+            None
+            if not np.all(np.isfinite(k_vector))
+            else {
+                component_id: float(k_vector[index])
+                for index, component_id in enumerate(component_ids)
+            }
+        )
+        steps.append(
+            SwellingStepResultData(
+                step_index=int(step.step_index),
+                added_gas_moles_per_mole_oil=float(step.added_gas_moles_per_mole_oil),
+                total_mixture_moles_per_mole_oil=float(step.total_mixture_moles_per_mole_oil),
+                bubble_pressure_pa=_finite_or_none(step.bubble_pressure),
+                swelling_factor=_finite_or_none(step.swelling_factor),
+                saturated_liquid_molar_volume_m3_per_mol=_finite_or_none(
+                    step.saturated_liquid_molar_volume
+                ),
+                saturated_liquid_density_kg_per_m3=_finite_or_none(
+                    step.saturated_liquid_density
+                ),
+                enriched_feed_composition={
+                    component_id: float(step.enriched_feed_composition[index])
+                    for index, component_id in enumerate(component_ids)
+                },
+                incipient_vapor_composition=incipient_vapor,
+                k_values=k_values,
+                status=str(step.status),
+                message=step.message,
+            )
+        )
+
+    return SwellingTestResult(
+        temperature_k=float(kernel_result.temperature),
+        baseline_bubble_pressure_pa=_finite_or_none(kernel_result.baseline_bubble_pressure),
+        baseline_saturated_liquid_molar_volume_m3_per_mol=_finite_or_none(
+            kernel_result.baseline_saturated_liquid_molar_volume
+        ),
+        enrichment_steps_mol_per_mol_oil=[
+            float(value) for value in np.asarray(kernel_result.enrichment_steps, dtype=np.float64)
+        ],
+        steps=steps,
+        bubble_pressures_pa=[
+            _finite_or_none(value)
+            for value in np.asarray(kernel_result.bubble_pressures, dtype=np.float64)
+        ],
+        swelling_factors=[
+            _finite_or_none(value)
+            for value in np.asarray(kernel_result.swelling_factors, dtype=np.float64)
+        ],
+        fully_certified=bool(kernel_result.fully_certified),
+        overall_status=str(kernel_result.overall_status),
+    )
+
+
 def execute_separator(
     config: RunConfig,
     callback: Optional[ProgressCallback] = None,
@@ -3151,11 +3383,15 @@ def run_calculation(
         cce_result = None
         dl_result = None
         cvd_result = None
+        swelling_test_result = None
         separator_result = None
         runtime_characterization = None
         prepared_fluid = None
+        prepared_swelling = None
 
-        if config.calculation_type != CalculationType.TBP:
+        if config.calculation_type == CalculationType.SWELLING_TEST:
+            prepared_swelling = _prepare_swelling_inputs(config)
+        elif config.calculation_type != CalculationType.TBP:
             prepared_fluid = _prepare_fluid_inputs(config)
 
         if config.calculation_type == CalculationType.PT_FLASH:
@@ -3188,6 +3424,13 @@ def run_calculation(
 
         elif config.calculation_type == CalculationType.CVD:
             cvd_result = execute_cvd(config, callback, prepared_fluid=prepared_fluid)
+
+        elif config.calculation_type == CalculationType.SWELLING_TEST:
+            swelling_test_result = execute_swelling_test(
+                config,
+                callback,
+                prepared_swelling=prepared_swelling,
+            )
 
         elif config.calculation_type == CalculationType.SEPARATOR:
             separator_result = execute_separator(config, callback, prepared_fluid=prepared_fluid)
@@ -3223,6 +3466,7 @@ def run_calculation(
             cce_result=cce_result,
             dl_result=dl_result,
             cvd_result=cvd_result,
+            swelling_test_result=swelling_test_result,
             separator_result=separator_result,
             runtime_characterization=runtime_characterization,
         )

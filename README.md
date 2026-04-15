@@ -44,6 +44,7 @@ pvtsim-gui
 ### CLI sanity check
 ```powershell
 pvtsim validate examples\pt_flash_config.json
+pvtsim validate examples\swelling_test_config.json
 ```
 
 ### Entry points
@@ -60,6 +61,7 @@ The current desktop `pvtapp` GUI surface includes:
 - CCE
 - differential liberation
 - CVD
+- swelling test
 - separator
 
 For additional packaging details and non-Windows launch routes, see `docs/packaging.md`.

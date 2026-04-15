@@ -1,0 +1,44 @@
+{
+  "run_name": "Swelling Test Example",
+  "composition": {
+    "components": [
+      {
+        "component_id": "C1",
+        "mole_fraction": 0.4
+      },
+      {
+        "component_id": "C4",
+        "mole_fraction": 0.3
+      },
+      {
+        "component_id": "C10",
+        "mole_fraction": 0.3
+      }
+    ]
+  },
+  "calculation_type": "swelling_test",
+  "eos_type": "peng_robinson",
+  "swelling_test_config": {
+    "temperature_k": 350.0,
+    "enrichment_steps_mol_per_mol_oil": [
+      0.05,
+      0.1,
+      0.2,
+      0.35
+    ],
+    "pressure_unit": "bar",
+    "temperature_unit": "C",
+    "injection_gas_composition": {
+      "components": [
+        {
+          "component_id": "C1",
+          "mole_fraction": 0.85
+        },
+        {
+          "component_id": "CO2",
+          "mole_fraction": 0.15
+        }
+      ]
+    }
+  }
+}

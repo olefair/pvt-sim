@@ -54,6 +54,8 @@ from pvtapp.schemas import (
     SeparatorResult,
     SeparatorStageResult,
     SolverDiagnostics,
+    SwellingStepResultData,
+    SwellingTestResult,
     TBPExperimentCutResult,
     TBPExperimentResult,
     PressureUnit,
@@ -448,6 +450,34 @@ def _separator_config() -> RunConfig:
     )
 
 
+def _swelling_config() -> RunConfig:
+    return _run_config(
+        {
+            "composition": {
+                "components": [
+                    {"component_id": "C1", "mole_fraction": 0.40},
+                    {"component_id": "C4", "mole_fraction": 0.30},
+                    {"component_id": "C10", "mole_fraction": 0.30},
+                ]
+            },
+            "calculation_type": "swelling_test",
+            "eos_type": "peng_robinson",
+            "swelling_test_config": {
+                "temperature_k": 350.0,
+                "enrichment_steps_mol_per_mol_oil": [0.05, 0.10, 0.20, 0.35],
+                "pressure_unit": "bar",
+                "temperature_unit": "C",
+                "injection_gas_composition": {
+                    "components": [
+                        {"component_id": "C1", "mole_fraction": 0.85},
+                        {"component_id": "CO2", "mole_fraction": 0.15},
+                    ]
+                },
+            },
+        }
+    )
+
+
 def _plus_fraction_oil_composition() -> dict:
     return {
         "components": [
@@ -519,6 +549,7 @@ DESKTOP_CONFIG_BUILDERS: tuple[Callable[[], RunConfig], ...] = (
     _cce_config,
     _dl_config,
     _cvd_config,
+    _swelling_config,
     _separator_config,
 )
 
@@ -837,6 +868,89 @@ def _separator_result() -> RunResult:
     )
 
 
+def _swelling_result() -> RunResult:
+    config = _swelling_config()
+    return _completed_run_result(
+        config,
+        swelling_test_result=SwellingTestResult(
+            temperature_k=350.0,
+            baseline_bubble_pressure_pa=1.236e7,
+            baseline_saturated_liquid_molar_volume_m3_per_mol=1.72e-4,
+            enrichment_steps_mol_per_mol_oil=[0.0, 0.05, 0.10, 0.20, 0.35],
+            bubble_pressures_pa=[1.236e7, 1.108e7, 9.92e6, 8.08e6, 5.86e6],
+            swelling_factors=[1.0, 1.036, 1.071, 1.152, 1.274],
+            fully_certified=False,
+            overall_status="partial",
+            steps=[
+                SwellingStepResultData(
+                    step_index=0,
+                    added_gas_moles_per_mole_oil=0.0,
+                    total_mixture_moles_per_mole_oil=1.0,
+                    bubble_pressure_pa=1.236e7,
+                    swelling_factor=1.0,
+                    saturated_liquid_molar_volume_m3_per_mol=1.72e-4,
+                    saturated_liquid_density_kg_per_m3=645.0,
+                    enriched_feed_composition={"C1": 0.40, "C4": 0.30, "C10": 0.30, "CO2": 0.0},
+                    incipient_vapor_composition={"C1": 0.80, "C4": 0.14, "C10": 0.05, "CO2": 0.01},
+                    k_values={"C1": 2.0, "C4": 0.47, "C10": 0.17, "CO2": 0.25},
+                    status="certified",
+                ),
+                SwellingStepResultData(
+                    step_index=1,
+                    added_gas_moles_per_mole_oil=0.05,
+                    total_mixture_moles_per_mole_oil=1.05,
+                    bubble_pressure_pa=1.108e7,
+                    swelling_factor=1.036,
+                    saturated_liquid_molar_volume_m3_per_mol=1.70e-4,
+                    saturated_liquid_density_kg_per_m3=637.0,
+                    enriched_feed_composition={"C1": 0.421429, "C4": 0.285714, "C10": 0.285714, "CO2": 0.007143},
+                    incipient_vapor_composition={"C1": 0.82, "C4": 0.12, "C10": 0.04, "CO2": 0.02},
+                    k_values={"C1": 1.95, "C4": 0.42, "C10": 0.14, "CO2": 0.31},
+                    status="certified",
+                ),
+                SwellingStepResultData(
+                    step_index=2,
+                    added_gas_moles_per_mole_oil=0.10,
+                    total_mixture_moles_per_mole_oil=1.10,
+                    bubble_pressure_pa=9.92e6,
+                    swelling_factor=1.071,
+                    saturated_liquid_molar_volume_m3_per_mol=1.675e-4,
+                    saturated_liquid_density_kg_per_m3=629.5,
+                    enriched_feed_composition={"C1": 0.440909, "C4": 0.272727, "C10": 0.272727, "CO2": 0.013636},
+                    incipient_vapor_composition={"C1": 0.84, "C4": 0.10, "C10": 0.03, "CO2": 0.03},
+                    k_values={"C1": 1.90, "C4": 0.38, "C10": 0.11, "CO2": 0.36},
+                    status="certified",
+                ),
+                SwellingStepResultData(
+                    step_index=3,
+                    added_gas_moles_per_mole_oil=0.20,
+                    total_mixture_moles_per_mole_oil=1.20,
+                    bubble_pressure_pa=None,
+                    swelling_factor=None,
+                    saturated_liquid_molar_volume_m3_per_mol=None,
+                    saturated_liquid_density_kg_per_m3=None,
+                    enriched_feed_composition={"C1": 0.475000, "C4": 0.250000, "C10": 0.250000, "CO2": 0.025000},
+                    status="failed_no_boundary",
+                    message="No non-trivial bubble boundary certified at this enrichment.",
+                ),
+                SwellingStepResultData(
+                    step_index=4,
+                    added_gas_moles_per_mole_oil=0.35,
+                    total_mixture_moles_per_mole_oil=1.35,
+                    bubble_pressure_pa=5.86e6,
+                    swelling_factor=1.274,
+                    saturated_liquid_molar_volume_m3_per_mol=1.625e-4,
+                    saturated_liquid_density_kg_per_m3=614.2,
+                    enriched_feed_composition={"C1": 0.518519, "C4": 0.222222, "C10": 0.222222, "CO2": 0.037037},
+                    incipient_vapor_composition={"C1": 0.89, "C4": 0.06, "C10": 0.01, "CO2": 0.04},
+                    k_values={"C1": 1.72, "C4": 0.27, "C10": 0.05, "CO2": 0.42},
+                    status="certified",
+                ),
+            ],
+        ),
+    )
+
+
 def _cancelled_result() -> RunResult:
     config = _pt_flash_config()
     return RunResult(
@@ -859,6 +973,7 @@ RESULT_BUILDERS: tuple[tuple[str, Callable[[], RunResult], str, str], ...] = (
     ("cce", _cce_result, "Pressure (bar)", "CCE"),
     ("dl", _dl_result, "Pressure (bar)", "Differential liberation"),
     ("cvd", _cvd_result, "Pressure (bar)", "CVD"),
+    ("swelling_test", _swelling_result, "Step", "Swelling test"),
     ("separator", _separator_result, "Stage", "Separator train"),
 )
 
@@ -935,6 +1050,21 @@ def _assert_configs_equivalent(actual: RunConfig, expected: RunConfig) -> None:
         assert actual.cvd_config.dew_pressure_pa == pytest.approx(expected.cvd_config.dew_pressure_pa)
         assert actual.cvd_config.pressure_end_pa == pytest.approx(expected.cvd_config.pressure_end_pa)
         assert actual.cvd_config.n_steps == expected.cvd_config.n_steps
+    elif expected.swelling_test_config is not None:
+        assert actual.swelling_test_config is not None
+        assert actual.swelling_test_config.temperature_k == pytest.approx(
+            expected.swelling_test_config.temperature_k
+        )
+        assert (
+            actual.swelling_test_config.enrichment_steps_mol_per_mol_oil
+            == pytest.approx(expected.swelling_test_config.enrichment_steps_mol_per_mol_oil)
+        )
+        assert actual.swelling_test_config.pressure_unit == expected.swelling_test_config.pressure_unit
+        assert actual.swelling_test_config.temperature_unit == expected.swelling_test_config.temperature_unit
+        assert (
+            actual.swelling_test_config.injection_gas_composition.model_dump(mode="json")
+            == expected.swelling_test_config.injection_gas_composition.model_dump(mode="json")
+        )
     elif expected.separator_config is not None:
         assert actual.separator_config is not None
         assert actual.separator_config.reservoir_pressure_pa == pytest.approx(
@@ -2289,6 +2419,42 @@ def test_separator_result_surface_exposes_additional_runtime_series(app: QApplic
     }
 
 
+def test_swelling_result_surface_uses_enrichment_axis(app: QApplication) -> None:
+    result = _swelling_result()
+
+    table = ResultsTableWidget()
+    table.display_result(result)
+    summary = _summary_values(table)
+    assert summary["Baseline Bubble Pressure"] == "123.60 bar"
+    assert summary["Certified Steps"] == "4 / 5"
+    assert summary["Overall Status"] == "Partial"
+    assert table.composition_table.horizontalHeaderItem(1).text() == "Added Gas (mol/mol oil)"
+    assert table.composition_table.horizontalHeaderItem(2).text() == "Bubble Pressure (bar)"
+    assert table.composition_table.item(3, 5).text() == "Failed No Boundary"
+    assert table.details_table.item(3, 3).text() == "No non-trivial bubble boundary certified at this enrichment."
+
+    text = TextOutputWidget()
+    text.display_result(result)
+    report = text.text.toPlainText()
+    assert "Swelling test" in report
+    assert "Certified steps = 4/5" in report
+    assert "failed_no_boundary" in report
+
+    plot = ResultsPlotWidget()
+    if not getattr(plot, "_matplotlib_available", False):
+        pytest.skip("matplotlib Qt backend unavailable")
+    plot.display_result(result)
+    assert {action.text() for action in plot.series_menu.actions()} >= {
+        "Bubble Pressure",
+        "Swelling Factor",
+        "Sat. Liquid Density",
+    }
+    assert plot.figure.axes[0].get_xlabel() == "Added Gas (mol/mol initial oil)"
+    assert plot.figure.axes[0].get_title() == "Swelling Test at 76.9 °C"
+    x_data = plot.figure.axes[0].lines[0].get_xdata()
+    assert list(x_data) == pytest.approx([0.0, 0.05, 0.10, 0.35])
+
+
 def test_pt_flash_result_widgets_honor_selected_display_units(app: QApplication) -> None:
     config = _run_config(
         {
@@ -3101,6 +3267,7 @@ def test_main_window_phase_envelope_view_rejects_non_envelope_plots(
         ("cce", _cce_result, "Pressure_bar", "200.0"),
         ("dl", _dl_result, "Pressure_bar", "150.0"),
         ("cvd", _cvd_result, "Pressure_bar", "56.52"),
+        ("swelling_test", _swelling_result, "AddedGas_mol_per_mol_oil", "0.35"),
         ("separator", _separator_result, "Stage", "HP"),
     ),
 )

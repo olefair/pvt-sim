@@ -771,6 +771,12 @@ class PVTSimulatorWindow(QMainWindow):
                 return None
             config_kwargs["cvd_config"] = cvd_config
 
+        elif calc_type == CalculationType.SWELLING_TEST:
+            swelling_config = self.conditions_widget.get_swelling_test_config()
+            if swelling_config is None:
+                return None
+            config_kwargs["swelling_test_config"] = swelling_config
+
         elif calc_type == CalculationType.SEPARATOR:
             separator_config = self.conditions_widget.get_separator_config()
             if separator_config is None:
@@ -1164,6 +1170,32 @@ class PVTSimulatorWindow(QMainWindow):
                             step.liquid_density_kg_per_m3,
                             step.vapor_density_kg_per_m3,
                         ])
+                elif result.swelling_test_result:
+                    writer.writerow(
+                        [
+                            "AddedGas_mol_per_mol_oil",
+                            "TotalMixture_mol_per_mol_oil",
+                            "BubblePressure_bar",
+                            "SwellingFactor",
+                            "SaturatedLiquidMolarVolume_m3_per_mol",
+                            "SaturatedLiquidDensity_kg_m3",
+                            "Status",
+                            "Message",
+                        ]
+                    )
+                    for step in result.swelling_test_result.steps:
+                        writer.writerow(
+                            [
+                                step.added_gas_moles_per_mole_oil,
+                                step.total_mixture_moles_per_mole_oil,
+                                None if step.bubble_pressure_pa is None else step.bubble_pressure_pa / 1e5,
+                                step.swelling_factor,
+                                step.saturated_liquid_molar_volume_m3_per_mol,
+                                step.saturated_liquid_density_kg_per_m3,
+                                step.status,
+                                step.message,
+                            ]
+                        )
                 elif result.separator_result:
                     writer.writerow(
                         [
