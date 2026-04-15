@@ -38,4 +38,4 @@ jobs:
           python -m pip install pytest scipy
 
       - name: Run extended validation tests
-        run: pytest tests/validation tests/contracts/test_robustness.py tests/unit/test_envelope_continuation.py -q
+        run: pytest tests/validation tests/unit/test_flash.py tests/unit/test_envelope_continuation.py -q

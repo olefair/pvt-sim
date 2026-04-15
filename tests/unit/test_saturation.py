@@ -255,3 +255,69 @@ class TestEdgeCases:
         binary = [components["C1"], components["C10"]]
         with pytest.raises(ValidationError):
             func(300.0, np.array([0.33, 0.33, 0.34]), binary, c1_c10_pr)
+
+    @pytest.mark.parametrize(
+        "func",
+        [calculate_bubble_point, calculate_dew_point],
+        ids=["bubble", "dew"],
+    )
+    def test_empty_component_list(self, func):
+        with pytest.raises(ValidationError, match="Component list cannot be empty"):
+            func(300.0, np.array([1.0]), [], None)
+
+    def test_bubble_point_nan_composition(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        with pytest.raises(ValidationError, match="NaN or Inf"):
+            calculate_bubble_point(300.0, np.array([np.nan, 0.5]), binary, c1_c4_pr)
+
+
+# ---------------------------------------------------------------------------
+# 6. Convergence history and iteration-budget tracking
+#    (absorbed from contracts/test_robustness.py)
+# ---------------------------------------------------------------------------
+
+class TestSaturationConvergenceTracking:
+
+    def test_bubble_point_populates_history(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_bubble_point(280.0, np.array([0.5, 0.5]), binary, c1_c4_pr)
+        assert result.status == ConvergenceStatus.CONVERGED
+        assert result.history is not None
+        assert isinstance(result.history.n_iterations, int)
+
+    def test_dew_point_populates_history(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_dew_point(280.0, np.array([0.5, 0.5]), binary, c1_c4_pr)
+        assert result.status == ConvergenceStatus.CONVERGED
+        assert result.history is not None
+        assert isinstance(result.history.n_iterations, int)
+
+    def test_bubble_point_max_iters_with_very_low_limit(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_bubble_point(250.0, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                                        max_iterations=2)
+        assert result is not None
+        assert result.status == ConvergenceStatus.MAX_ITERS
+        assert result.iterations <= 2
+        assert result.converged is False
+
+    def test_dew_point_max_iters_with_very_low_limit(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_dew_point(280.0, np.array([0.5, 0.5]), binary, c1_c4_pr,
+                                     max_iterations=2)
+        assert result is not None
+        assert result.status == ConvergenceStatus.MAX_ITERS
+        assert result.iterations <= 2
+        assert result.converged is False
+
+    def test_bubble_point_history_has_residuals(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_bubble_point(280.0, np.array([0.5, 0.5]), binary, c1_c4_pr)
+        if result.history and result.history.n_iterations > 0:
+            assert len(result.history.residuals) > 0
+
+    def test_dew_point_history_has_residuals(self, components, c1_c4_pr):
+        binary = [components["C1"], components["C4"]]
+        result = calculate_dew_point(280.0, np.array([0.5, 0.5]), binary, c1_c4_pr)
+        if result.history and result.history.n_iterations > 0:
+            assert len(result.history.residuals) > 0
