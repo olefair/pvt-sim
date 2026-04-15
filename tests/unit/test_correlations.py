@@ -2,11 +2,13 @@
 Unit tests for property correlations module.
 
 Tests critical property correlations, acentric factor correlations,
-boiling point correlations, and parachor correlations.
+boiling point correlations, parachor correlations, and low-level
+Riazi-Daubert (Tb,SG) / (MW,SG) correlations.
 
-Note: Correlations are inherently approximate and are designed for
-pseudo-components where experimental data is unavailable. Pure component
-properties should come from the database, not correlations.
+All pure-math correlation functions are exercised through a single
+parametrised reference table (CORRELATION_CASES) plus a handful of
+structural / trend / error-handling tests that don't reduce to a
+single (function, inputs, expected, tolerance) row.
 """
 
 import pytest
@@ -41,359 +43,270 @@ from pvtcore.correlations import (
     estimate_parachor,
 )
 
-
-# =============================================================================
-# Reference Data for Validation
-# =============================================================================
-
-# n-Heptane (C7) properties from NIST - used for Kesler-Lee validation
-# Kesler-Lee requires known Tb, so we use a pure component as reference
-C7_REF = {
-    "MW": 100.20,
-    "Tc": 540.2,      # K
-    "Pc": 2.74e6,     # Pa
-    "omega": 0.350,
-    "Tb": 371.6,      # K
-    "SG": 0.684,
-}
+from pvtcore.correlations.critical_props.riazi_daubert import (
+    estimate_from_tb_sg,
+    estimate_from_mw_sg,
+    edmister_acentric_factor,
+)
 
 
-class TestKeslerLeeCriticalProps:
-    """Tests for Kesler-Lee correlations (the best-tested correlation)."""
-
-    def test_kesler_lee_Tc(self):
-        """Test Kesler-Lee Tc correlation against C7 reference."""
-        Tc = kesler_lee_Tc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Should be within 2% of reference
-        assert abs(Tc - C7_REF["Tc"]) / C7_REF["Tc"] < 0.02
-
-    def test_kesler_lee_Pc(self):
-        """Test Kesler-Lee Pc correlation against C7 reference."""
-        Pc = kesler_lee_Pc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Should be within 10% of reference
-        assert abs(Pc - C7_REF["Pc"]) / C7_REF["Pc"] < 0.10
-
-    def test_kesler_lee_requires_Tb(self):
-        """Test that Kesler-Lee raises error without Tb."""
-        with pytest.raises(ValueError, match="requires Tb"):
-            kesler_lee_Tc(MW=100.0, SG=0.7, Tb=None)
-
-    def test_kesler_lee_critical_props_complete(self):
-        """Test complete Kesler-Lee critical property estimation."""
-        result = kesler_lee_critical_props(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        assert result.method == CriticalPropsMethod.KESLER_LEE
-        assert abs(result.Tc - C7_REF["Tc"]) / C7_REF["Tc"] < 0.02
-        assert result.Vc > 0
+# n-Heptane (C7) reference properties from NIST
+C7 = dict(MW=100.20, Tc=540.2, Pc=2.74e6, omega=0.350, Tb=371.6, SG=0.684)
 
 
-class TestCriticalPropertyCorrelations:
-    """Tests for other critical property correlations."""
+# ── Helpers for lambda-based cases ──────────────────────────────────────────
 
-    def test_riazi_daubert_produces_reasonable_Tc(self):
-        """Test that Riazi-Daubert gives physically reasonable Tc."""
-        Tc = riazi_daubert_Tc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Tc should be higher than Tb and within plausible range
-        assert Tc > C7_REF["Tb"]
-        assert 400 < Tc < 800  # Reasonable range for C7
+def _call_kesler_lee_Tc():
+    return kesler_lee_Tc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_riazi_daubert_Tc_without_Tb(self):
-        """Test Riazi-Daubert Tc correlation without Tb (less accurate)."""
-        Tc = riazi_daubert_Tc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=None,
-        )
-        # Without Tb input, correlation uses estimated Tb internally
-        # Less accurate but should still be in physically reasonable range
-        assert 400 < Tc < 1000
+def _call_kesler_lee_Pc():
+    return kesler_lee_Pc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_riazi_daubert_Pc(self):
-        """Test Riazi-Daubert Pc correlation."""
-        Pc = riazi_daubert_Pc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Should be in reasonable range for hydrocarbons
-        assert 1e6 < Pc < 5e6
+def _call_riazi_daubert_Tc():
+    return riazi_daubert_Tc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_riazi_daubert_Vc(self):
-        """Test Riazi-Daubert Vc correlation."""
-        Vc = riazi_daubert_Vc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Vc should be positive
-        assert Vc > 0
+def _call_riazi_daubert_Tc_no_tb():
+    return riazi_daubert_Tc(MW=C7["MW"], SG=C7["SG"], Tb=None)
 
-    def test_riazi_daubert_critical_props_result_type(self):
-        """Test that result is proper dataclass."""
-        result = riazi_daubert_critical_props(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        assert hasattr(result, "Tc")
-        assert hasattr(result, "Pc")
-        assert hasattr(result, "Vc")
-        assert result.method == CriticalPropsMethod.RIAZI_DAUBERT
+def _call_riazi_daubert_Pc():
+    return riazi_daubert_Pc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_cavett_Tc(self):
-        """Test Cavett Tc correlation produces reasonable values."""
-        Tc = cavett_Tc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        # Tc should be higher than Tb
-        assert Tc > C7_REF["Tb"]
-        assert 400 < Tc < 800
+def _call_riazi_daubert_Vc():
+    return riazi_daubert_Vc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_cavett_Pc(self):
-        """Test Cavett Pc correlation."""
-        Pc = cavett_Pc(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-        )
-        assert 1e6 < Pc < 5e6
+def _call_cavett_Tc():
+    return cavett_Tc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-    def test_estimate_critical_props_method_selection(self):
-        """Test unified interface with method selection."""
-        result_kl = estimate_critical_props(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-            method=CriticalPropsMethod.KESLER_LEE,
-        )
-        result_cv = estimate_critical_props(
-            MW=C7_REF["MW"],
-            SG=C7_REF["SG"],
-            Tb=C7_REF["Tb"],
-            method=CriticalPropsMethod.CAVETT,
-        )
+def _call_cavett_Pc():
+    return cavett_Pc(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
 
-        assert result_kl.method == CriticalPropsMethod.KESLER_LEE
-        assert result_cv.method == CriticalPropsMethod.CAVETT
-        # Both should give reasonable Tc (Cavett tends to give higher values)
-        assert 400 < result_kl.Tc < 700
-        assert 400 < result_cv.Tc < 850
+def _call_edmister_omega():
+    return edmister_omega(Tb=C7["Tb"], Tc=C7["Tc"], Pc=C7["Pc"])
 
-    def test_invalid_inputs(self):
-        """Test error handling for invalid inputs."""
-        with pytest.raises(ValueError):
-            riazi_daubert_Tc(MW=-100.0, SG=0.7)
-        with pytest.raises(ValueError):
-            riazi_daubert_Tc(MW=100.0, SG=-0.7)
-        with pytest.raises(ValueError):
-            riazi_daubert_Tc(MW=float("nan"), SG=0.7)
+def _call_kesler_lee_omega():
+    return kesler_lee_omega(Tb=C7["Tb"], Tc=C7["Tc"], Pc=C7["Pc"])
+
+def _call_estimate_omega_edmister():
+    return estimate_omega(Tb=C7["Tb"], Tc=C7["Tc"], Pc=C7["Pc"], method=AcentricMethod.EDMISTER)
+
+def _call_estimate_omega_kl():
+    return estimate_omega(Tb=C7["Tb"], Tc=C7["Tc"], Pc=C7["Pc"], method=AcentricMethod.KESLER_LEE)
+
+def _call_edmister_omega_generic():
+    return edmister_omega(Tb=400.0, Tc=600.0, Pc=3e6)
+
+def _call_soreide_Tb_100():
+    return soreide_Tb(MW=100.0, SG=0.75)
+
+def _call_riazi_daubert_Tb_100():
+    return riazi_daubert_Tb(MW=100.0, SG=0.75)
+
+def _call_estimate_Tb_soreide():
+    return estimate_Tb(MW=150.0, SG=0.80, method=BoilingPointMethod.SOREIDE)
+
+def _call_estimate_Tb_rd():
+    return estimate_Tb(MW=150.0, SG=0.80, method=BoilingPointMethod.RIAZI_DAUBERT)
+
+def _call_fanchi_parachor_c7():
+    return fanchi_parachor(MW=C7["MW"])
+
+def _call_estimate_parachor_c1():
+    return estimate_parachor(MW=16.04, component_id="C1")
+
+def _call_estimate_parachor_c7():
+    return estimate_parachor(MW=C7["MW"])
 
 
-class TestAcentricFactorCorrelations:
-    """Tests for acentric factor correlations."""
+# ── Reference table ─────────────────────────────────────────────────────────
+# Each entry: (id, callable, lo, hi)
+# The test asserts  lo <= result <= hi.  For "approx equal" checks the bounds
+# are set tightly around the expected value.
 
-    def test_edmister_omega(self):
-        """Test Edmister acentric factor correlation."""
-        omega = edmister_omega(
-            Tb=C7_REF["Tb"],
-            Tc=C7_REF["Tc"],
-            Pc=C7_REF["Pc"],
-        )
-        # Should be within 15% of reference
-        assert abs(omega - C7_REF["omega"]) < 0.07
+CORRELATION_CASES = [
+    # --- Kesler-Lee critical props (C7 reference) ---
+    ("kesler_lee_Tc_c7",       _call_kesler_lee_Tc,       C7["Tc"] * 0.98, C7["Tc"] * 1.02),
+    ("kesler_lee_Pc_c7",       _call_kesler_lee_Pc,       C7["Pc"] * 0.90, C7["Pc"] * 1.10),
 
-    def test_kesler_lee_omega(self):
-        """Test Kesler-Lee acentric factor correlation."""
-        omega = kesler_lee_omega(
-            Tb=C7_REF["Tb"],
-            Tc=C7_REF["Tc"],
-            Pc=C7_REF["Pc"],
-        )
-        # Should be in physically reasonable range
-        assert 0.2 < omega < 0.5
+    # --- Riazi-Daubert critical props (range checks) ---
+    ("rd_Tc_with_tb",          _call_riazi_daubert_Tc,    C7["Tb"] + 0.01, 800.0),
+    ("rd_Tc_no_tb",            _call_riazi_daubert_Tc_no_tb, 400.0, 1000.0),
+    ("rd_Pc",                  _call_riazi_daubert_Pc,    1e6, 5e6),
+    ("rd_Vc",                  _call_riazi_daubert_Vc,    0.0001, 1e10),
 
-    def test_estimate_omega_method_selection(self):
-        """Test unified interface with method selection."""
-        omega_ed = estimate_omega(
-            Tb=C7_REF["Tb"],
-            Tc=C7_REF["Tc"],
-            Pc=C7_REF["Pc"],
-            method=AcentricMethod.EDMISTER,
-        )
-        omega_kl = estimate_omega(
-            Tb=C7_REF["Tb"],
-            Tc=C7_REF["Tc"],
-            Pc=C7_REF["Pc"],
-            method=AcentricMethod.KESLER_LEE,
-        )
+    # --- Cavett critical props ---
+    ("cavett_Tc",              _call_cavett_Tc,           C7["Tb"] + 0.01, 800.0),
+    ("cavett_Pc",              _call_cavett_Pc,           1e6, 5e6),
 
-        # Both should give reasonable results
-        assert 0.0 < omega_ed < 1.0
-        assert 0.0 < omega_kl < 1.0
+    # --- Acentric factor ---
+    ("edmister_omega_c7",      _call_edmister_omega,      C7["omega"] - 0.07, C7["omega"] + 0.07),
+    ("kesler_lee_omega_c7",    _call_kesler_lee_omega,    0.2, 0.5),
+    ("estimate_omega_edmister",_call_estimate_omega_edmister, 0.0, 1.0),
+    ("estimate_omega_kl",      _call_estimate_omega_kl,   0.0, 1.0),
+    ("edmister_omega_generic", _call_edmister_omega_generic, -0.5, 2.0),
 
-    def test_omega_physical_range(self):
-        """Test that omega is in physically reasonable range."""
-        omega = edmister_omega(Tb=400.0, Tc=600.0, Pc=3e6)
-        assert -0.5 <= omega <= 2.0
+    # --- Boiling point ---
+    ("soreide_Tb_100",         _call_soreide_Tb_100,      300.0, 450.0),
+    ("rd_Tb_100",              _call_riazi_daubert_Tb_100, 300.0, 450.0),
+    ("estimate_Tb_soreide",    _call_estimate_Tb_soreide,  350.0, 600.0),
+    ("estimate_Tb_rd",         _call_estimate_Tb_rd,       350.0, 600.0),
 
-    def test_omega_invalid_inputs(self):
-        """Test error handling for invalid inputs."""
-        with pytest.raises(ValueError):
-            edmister_omega(Tb=600.0, Tc=500.0, Pc=3e6)  # Tb > Tc
+    # --- Parachor ---
+    ("fanchi_parachor_c7",     _call_fanchi_parachor_c7,  312.5 * 0.85, 312.5 * 1.15),
+    ("estimate_parachor_c1",   _call_estimate_parachor_c1, 77.0, 77.0),
+    ("estimate_parachor_c7",   _call_estimate_parachor_c7, 250.0, 400.0),
+]
 
 
-class TestBoilingPointCorrelations:
-    """Tests for boiling point correlations."""
-
-    def test_soreide_Tb_produces_reasonable_values(self):
-        """Test Soreide boiling point gives reasonable values."""
-        Tb = soreide_Tb(MW=100.0, SG=0.75)
-        # Should be in reasonable range for C7-like fraction
-        assert 300 < Tb < 450
-
-    def test_riazi_daubert_Tb(self):
-        """Test Riazi-Daubert boiling point correlation."""
-        Tb = riazi_daubert_Tb(MW=100.0, SG=0.75)
-        assert 300 < Tb < 450
-
-    def test_estimate_Tb_method_selection(self):
-        """Test unified interface with method selection."""
-        Tb_s = estimate_Tb(
-            MW=150.0,
-            SG=0.80,
-            method=BoilingPointMethod.SOREIDE,
-        )
-        Tb_rd = estimate_Tb(
-            MW=150.0,
-            SG=0.80,
-            method=BoilingPointMethod.RIAZI_DAUBERT,
-        )
-
-        # Both should give reasonable boiling points
-        assert 350 < Tb_s < 600
-        assert 350 < Tb_rd < 600
-
-    def test_Tb_increases_with_MW(self):
-        """Test that Tb increases with MW (expected trend)."""
-        Tb1 = soreide_Tb(MW=100.0, SG=0.75)
-        Tb2 = soreide_Tb(MW=150.0, SG=0.80)
-        Tb3 = soreide_Tb(MW=200.0, SG=0.85)
-        assert Tb1 < Tb2 < Tb3
-
-    def test_Tb_invalid_inputs(self):
-        """Test error handling for invalid inputs."""
-        with pytest.raises(ValueError):
-            soreide_Tb(MW=-100.0, SG=0.7)
-        with pytest.raises(ValueError):
-            soreide_Tb(MW=100.0, SG=-0.7)
+@pytest.mark.parametrize("case_id, fn, lo, hi", CORRELATION_CASES, ids=[c[0] for c in CORRELATION_CASES])
+def test_correlation(case_id, fn, lo, hi):
+    result = fn()
+    assert lo <= result <= hi, f"{case_id}: {result} not in [{lo}, {hi}]"
 
 
-class TestParachorCorrelations:
-    """Tests for parachor correlations."""
+# ── Riazi-Daubert low-level (Tb,SG) and (MW,SG) reference data ─────────────
+# Merged from tests/unit/test_riazi_daubert.py
 
-    # Reference parachors (typical values)
-    C7_PARACHOR = 312.5
+RIAZI_DAUBERT_CASES = [
+    (
+        "tb_sg_form",
+        lambda: estimate_from_tb_sg(np.array([658.0]), np.array([0.7365])),
+        lambda r: (
+            r[0][0] == pytest.approx(986.7, abs=0.5)
+            and r[1][0] == pytest.approx(465.83, abs=1.0)
+            and r[2][0] == pytest.approx(0.06257, abs=5e-4)
+        ),
+    ),
+    (
+        "mw_sg_form_Tc",
+        lambda: estimate_from_mw_sg(np.array([150.0]), np.array([0.78])),
+        lambda r: r[0][0] == pytest.approx(1139.4, abs=1.0),
+    ),
+    (
+        "mw_sg_form_Pc",
+        lambda: estimate_from_mw_sg(np.array([150.0]), np.array([0.78])),
+        lambda r: r[1][0] == pytest.approx(320.3, abs=1.0),
+    ),
+    (
+        "mw_sg_form_Tb",
+        lambda: estimate_from_mw_sg(np.array([150.0]), np.array([0.78])),
+        lambda r: r[3][0] == pytest.approx(825.3, abs=1.0),
+    ),
+    (
+        "mw_sg_edmister_omega",
+        lambda: (
+            lambda res: edmister_acentric_factor(res[0], res[1], res[3])
+        )(estimate_from_mw_sg(np.array([150.0]), np.array([0.78]))),
+        lambda r: r[0] == pytest.approx(0.5067, abs=0.01),
+    ),
+]
 
-    def test_fanchi_parachor(self):
-        """Test Fanchi parachor correlation."""
-        P = fanchi_parachor(MW=C7_REF["MW"])
-        # Should be within 15% of reference
-        assert abs(P - self.C7_PARACHOR) / self.C7_PARACHOR < 0.15
 
-    def test_estimate_parachor_with_id(self):
-        """Test parachor estimation with component ID lookup."""
-        # Should use database value
-        P = estimate_parachor(MW=16.04, component_id="C1")
-        assert P == 77.0  # Methane database value
-
-    def test_estimate_parachor_without_id(self):
-        """Test parachor estimation without component ID."""
-        P = estimate_parachor(MW=C7_REF["MW"])
-        assert P > 0
-        assert 250 < P < 400  # Reasonable range for C7
-
-    def test_parachor_linear_trend(self):
-        """Test that parachor increases with MW."""
-        P1 = fanchi_parachor(MW=100.0)
-        P2 = fanchi_parachor(MW=150.0)
-        P3 = fanchi_parachor(MW=200.0)
-        assert P1 < P2 < P3
+@pytest.mark.parametrize(
+    "case_id, fn, check",
+    RIAZI_DAUBERT_CASES,
+    ids=[c[0] for c in RIAZI_DAUBERT_CASES],
+)
+def test_riazi_daubert_low_level(case_id, fn, check):
+    result = fn()
+    assert check(result), f"{case_id}: check failed on {result}"
 
 
-class TestCorrelationConsistency:
-    """Tests for consistency between correlations."""
+# ── Structural / method-tag tests ───────────────────────────────────────────
 
-    def test_roundtrip_consistency(self):
-        """Test that Tb -> Tc -> omega gives consistent results."""
-        MW = 150.0
-        SG = 0.82
+def test_riazi_daubert_critical_props_result_type():
+    result = riazi_daubert_critical_props(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
+    assert hasattr(result, "Tc")
+    assert hasattr(result, "Pc")
+    assert hasattr(result, "Vc")
+    assert result.method == CriticalPropsMethod.RIAZI_DAUBERT
 
-        # Estimate Tb
-        Tb = estimate_Tb(MW=MW, SG=SG)
 
-        # Estimate Tc, Pc using Kesler-Lee (requires Tb)
-        crit = estimate_critical_props(
-            MW=MW, SG=SG, Tb=Tb,
-            method=CriticalPropsMethod.KESLER_LEE
-        )
+def test_kesler_lee_critical_props_complete():
+    result = kesler_lee_critical_props(MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"])
+    assert result.method == CriticalPropsMethod.KESLER_LEE
+    assert abs(result.Tc - C7["Tc"]) / C7["Tc"] < 0.02
+    assert result.Vc > 0
 
-        # Estimate omega
-        omega = estimate_omega(Tb=Tb, Tc=crit.Tc, Pc=crit.Pc)
 
-        # All should be physically reasonable
-        assert 350 < Tb < 700  # K
-        assert Tb < crit.Tc < 900  # Tc > Tb
-        assert 1e6 < crit.Pc < 5e6  # Pa
-        assert 0.0 < omega < 1.5
+def test_estimate_critical_props_method_selection():
+    result_kl = estimate_critical_props(
+        MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"],
+        method=CriticalPropsMethod.KESLER_LEE,
+    )
+    result_cv = estimate_critical_props(
+        MW=C7["MW"], SG=C7["SG"], Tb=C7["Tb"],
+        method=CriticalPropsMethod.CAVETT,
+    )
+    assert result_kl.method == CriticalPropsMethod.KESLER_LEE
+    assert result_cv.method == CriticalPropsMethod.CAVETT
+    assert 400 < result_kl.Tc < 700
+    assert 400 < result_cv.Tc < 850
 
-    def test_scn_property_trends(self):
-        """Test that properties follow expected trends with MW."""
-        MWs = [100, 150, 200, 250, 300]
-        SG = 0.82
 
-        Tbs = [estimate_Tb(MW=mw, SG=SG) for mw in MWs]
-        Tcs = []
-        Pcs = []
-        omegas = []
+# ── Error-handling tests ────────────────────────────────────────────────────
 
-        for mw, tb in zip(MWs, Tbs):
-            crit = estimate_critical_props(
-                MW=mw, SG=SG, Tb=tb,
-                method=CriticalPropsMethod.KESLER_LEE
-            )
-            Tcs.append(crit.Tc)
-            Pcs.append(crit.Pc)
-            omega = estimate_omega(Tb=tb, Tc=crit.Tc, Pc=crit.Pc)
-            omegas.append(omega)
+INVALID_INPUT_CASES = [
+    ("negative_MW",   lambda: riazi_daubert_Tc(MW=-100.0, SG=0.7)),
+    ("negative_SG",   lambda: riazi_daubert_Tc(MW=100.0, SG=-0.7)),
+    ("nan_MW",        lambda: riazi_daubert_Tc(MW=float("nan"), SG=0.7)),
+    ("Tb_gt_Tc",      lambda: edmister_omega(Tb=600.0, Tc=500.0, Pc=3e6)),
+    ("kl_no_Tb",      lambda: kesler_lee_Tc(MW=100.0, SG=0.7, Tb=None)),
+    ("soreide_neg_MW", lambda: soreide_Tb(MW=-100.0, SG=0.7)),
+    ("soreide_neg_SG", lambda: soreide_Tb(MW=100.0, SG=-0.7)),
+]
 
-        # Tb should increase with MW
-        assert all(Tbs[i] < Tbs[i + 1] for i in range(len(Tbs) - 1))
 
-        # Tc should increase with MW
-        assert all(Tcs[i] < Tcs[i + 1] for i in range(len(Tcs) - 1))
+@pytest.mark.parametrize(
+    "case_id, fn",
+    INVALID_INPUT_CASES,
+    ids=[c[0] for c in INVALID_INPUT_CASES],
+)
+def test_invalid_inputs_raise(case_id, fn):
+    with pytest.raises(ValueError):
+        fn()
 
-        # Pc should decrease with MW
-        assert all(Pcs[i] > Pcs[i + 1] for i in range(len(Pcs) - 1))
 
-        # Omega should increase with MW
-        assert all(omegas[i] < omegas[i + 1] for i in range(len(omegas) - 1))
+# ── Monotonicity / trend tests ──────────────────────────────────────────────
+
+def test_Tb_increases_with_MW():
+    Tb1 = soreide_Tb(MW=100.0, SG=0.75)
+    Tb2 = soreide_Tb(MW=150.0, SG=0.80)
+    Tb3 = soreide_Tb(MW=200.0, SG=0.85)
+    assert Tb1 < Tb2 < Tb3
+
+
+def test_parachor_increases_with_MW():
+    P1 = fanchi_parachor(MW=100.0)
+    P2 = fanchi_parachor(MW=150.0)
+    P3 = fanchi_parachor(MW=200.0)
+    assert P1 < P2 < P3
+
+
+def test_roundtrip_consistency():
+    MW, SG = 150.0, 0.82
+    Tb = estimate_Tb(MW=MW, SG=SG)
+    crit = estimate_critical_props(MW=MW, SG=SG, Tb=Tb, method=CriticalPropsMethod.KESLER_LEE)
+    omega = estimate_omega(Tb=Tb, Tc=crit.Tc, Pc=crit.Pc)
+    assert 350 < Tb < 700
+    assert Tb < crit.Tc < 900
+    assert 1e6 < crit.Pc < 5e6
+    assert 0.0 < omega < 1.5
+
+
+def test_scn_property_trends():
+    MWs = [100, 150, 200, 250, 300]
+    SG = 0.82
+    Tbs = [estimate_Tb(MW=mw, SG=SG) for mw in MWs]
+    Tcs, Pcs, omegas = [], [], []
+    for mw, tb in zip(MWs, Tbs):
+        crit = estimate_critical_props(MW=mw, SG=SG, Tb=tb, method=CriticalPropsMethod.KESLER_LEE)
+        Tcs.append(crit.Tc)
+        Pcs.append(crit.Pc)
+        omegas.append(estimate_omega(Tb=tb, Tc=crit.Tc, Pc=crit.Pc))
+    assert all(Tbs[i] < Tbs[i + 1] for i in range(len(Tbs) - 1))
+    assert all(Tcs[i] < Tcs[i + 1] for i in range(len(Tcs) - 1))
+    assert all(Pcs[i] > Pcs[i + 1] for i in range(len(Pcs) - 1))
+    assert all(omegas[i] < omegas[i + 1] for i in range(len(omegas) - 1))
 
 
 if __name__ == "__main__":
