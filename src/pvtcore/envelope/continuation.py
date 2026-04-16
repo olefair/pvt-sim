@@ -37,6 +37,11 @@ from ..flash.dew_point import (
 )
 from ..flash.rachford_rice import brent_method
 from ..models.component import Component
+from .fast_envelope import (
+    _newton_bubble_point,
+    _newton_dew_point,
+    _wilson_k,
+)
 from .local_roots import (
     BranchName,
     PRESSURE_MAX,
@@ -89,6 +94,7 @@ class ContinuationRuntimePolicy:
     pressure_window_log_span: float = DEFAULT_PRESSURE_WINDOW_LOG_SPAN
     bracket_window_log_span: float = 0.4
     allow_full_rescan_on_advance: bool = True
+    allow_newton_fast_path: bool = True
     use_predictive_pressure_hint: bool = True
     min_temperature_step_k: float = DEFAULT_MIN_TEMPERATURE_STEP_K
     max_temperature_step_k: float = DEFAULT_MAX_TEMPERATURE_STEP_K
@@ -605,6 +611,99 @@ def _build_state(
     )
 
 
+def _newton_saturation_state(
+    *,
+    branch: BranchName,
+    temperature: float,
+    pressure_init: float,
+    k_init: NDArray[np.float64],
+    feed: NDArray[np.float64],
+    eos: CubicEOS,
+    binary_interaction: Optional[NDArray[np.float64]],
+    max_iter: int = 15,
+    tol: float = 1e-10,
+) -> Optional[ContinuationState]:
+    """Fast-path Newton solve for one saturation point; returns None on failure.
+
+    Warm-starts from ``pressure_init`` and ``k_init`` (typically the previous
+    continuation state's converged values). Newton on the fugacity-equality
+    system converges in ~3 iterations from a good warm start; this replaces a
+    full TPD scan + Brent refinement at each continuation step.
+    """
+    feed_arr = np.asarray(feed, dtype=np.float64)
+    if not np.all(np.isfinite(feed_arr)) or feed_arr.sum() <= 0.0:
+        return None
+    k_arr = np.asarray(k_init, dtype=np.float64)
+    if not np.all(np.isfinite(k_arr)) or np.any(k_arr <= 0.0):
+        return None
+    p_init = float(pressure_init)
+    if not np.isfinite(p_init) or p_init <= 0.0:
+        return None
+
+    try:
+        if branch == "bubble":
+            pressure, y, k_values = _newton_bubble_point(
+                float(temperature), p_init, k_arr, feed_arr, eos,
+                binary_interaction=binary_interaction,
+                max_iter=max_iter, tol=tol,
+            )
+            liquid = feed_arr.copy()
+            vapor = np.asarray(y, dtype=np.float64)
+        elif branch == "dew":
+            pressure, x, k_values = _newton_dew_point(
+                float(temperature), p_init, k_arr, feed_arr, eos,
+                binary_interaction=binary_interaction,
+                max_iter=max_iter, tol=tol,
+            )
+            vapor = feed_arr.copy()
+            liquid = np.asarray(x, dtype=np.float64)
+        else:
+            return None
+    except Exception:
+        return None
+
+    if not np.isfinite(pressure) or pressure <= 0.0:
+        return None
+    if not np.all(np.isfinite(k_values)) or np.any(k_values <= 0.0):
+        return None
+    if not (np.all(np.isfinite(liquid)) and np.all(np.isfinite(vapor))):
+        return None
+
+    phase_gap = float(np.max(np.abs(vapor - liquid)))
+    k_deviation = float(np.max(np.abs(np.asarray(k_values) - 1.0)))
+    if _is_near_trivial_state(phase_gap, k_deviation):
+        return None
+
+    try:
+        liquid_density = float(
+            eos.density(
+                float(pressure), float(temperature), liquid,
+                phase="liquid", binary_interaction=binary_interaction,
+            )
+        )
+        vapor_density = float(
+            eos.density(
+                float(pressure), float(temperature), vapor,
+                phase="vapor", binary_interaction=binary_interaction,
+            )
+        )
+    except Exception:
+        return None
+
+    return ContinuationState(
+        branch=branch,
+        temperature=float(temperature),
+        pressure=float(pressure),
+        liquid_composition=liquid.astype(np.float64),
+        vapor_composition=vapor.astype(np.float64),
+        liquid_density=liquid_density,
+        vapor_density=vapor_density,
+        K_values=np.asarray(k_values, dtype=np.float64),
+        residual=0.0,
+        bracket=_synthetic_point_bracket(branch, float(pressure)),
+    )
+
+
 def _resolve_local_bracket(
     *,
     branch: BranchName,
@@ -1047,6 +1146,34 @@ def seed_continuation_state(
                 ).pressure
             )
 
+    # Fast-path: the seed pressure comes from a Newton-based bubble/dew solve
+    # already. Run one more Newton pass from Wilson K-values to obtain the
+    # incipient-phase composition + K vector directly, skipping the TPD
+    # pressure scan for the common case of a well-behaved seed. The transition
+    # check against the seed pressure is the basin-loss guard here.
+    if policy.allow_newton_fast_path and pressure_seed is not None:
+        try:
+            k_wilson = _wilson_k(components, float(temperature), float(pressure_seed))
+        except Exception:
+            k_wilson = None
+        if k_wilson is not None:
+            newton_state = _newton_saturation_state(
+                branch=branch,
+                temperature=float(temperature),
+                pressure_init=float(pressure_seed),
+                k_init=k_wilson,
+                feed=z,
+                eos=eos,
+                binary_interaction=binary_interaction,
+            )
+            if newton_state is not None:
+                # Guard against the Newton solver landing on a far-away root.
+                log_jump = abs(
+                    np.log(newton_state.pressure) - np.log(float(pressure_seed))
+                )
+                if log_jump <= float(max_log_pressure_jump):
+                    return newton_state
+
     candidates = resolve_local_branch_candidates(
         branch=branch,
         temperature=float(temperature),
@@ -1103,6 +1230,50 @@ def advance_continuation_state(
 ) -> ContinuationState:
     """Advance one continuation branch to the next temperature."""
     policy = _coerce_runtime_policy(runtime_policy)
+
+    # Fast-path: warm-start Newton from the previous converged state. A good
+    # warm start lets Newton converge in ~3 iterations, avoiding the full TPD
+    # scan + Brent refinement below. The transition check ensures we haven't
+    # jumped onto a spurious root family; if it fails we fall through to the
+    # certified-bracket path which acts as a TPD+Brent safety net.
+    if policy.allow_newton_fast_path:
+        newton_pressure_init = (
+            float(pressure_hint)
+            if (pressure_hint is not None and np.isfinite(pressure_hint) and pressure_hint > 0.0)
+            else float(previous_state.pressure)
+        )
+        newton_feed = (
+            previous_state.liquid_composition
+            if previous_state.branch == "bubble"
+            else previous_state.vapor_composition
+        )
+        newton_candidate = _newton_saturation_state(
+            branch=previous_state.branch,
+            temperature=float(temperature),
+            pressure_init=newton_pressure_init,
+            k_init=previous_state.K_values,
+            feed=np.asarray(newton_feed, dtype=np.float64),
+            eos=eos,
+            binary_interaction=binary_interaction,
+        )
+        if newton_candidate is not None:
+            metrics = _continuation_transition_metrics(previous_state, newton_candidate)
+            if _transition_is_acceptable(
+                metrics,
+                max_log_pressure_jump=max_log_pressure_jump,
+                max_phase_composition_jump=max_phase_composition_jump,
+                max_k_value_jump=max_k_value_jump,
+                density_march=density_march,
+            ):
+                try:
+                    return _accept_advanced_candidate(
+                        newton_candidate,
+                        temperature=float(temperature),
+                    )
+                except PhaseError as exc:
+                    if exc.details.get("reason") not in {"no_local_root_candidates"}:
+                        raise
+
     use_arclength_region = (
         pressure_hint is not None
         and np.isfinite(pressure_hint)
