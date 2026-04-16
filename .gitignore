@@ -56,6 +56,7 @@ assignment_run_*.json
 
 # Cursor — local MCP paths (see .cursor/mcp.json.example)
 .cursor/mcp.json
+.worktrees/
 
 # Private course / agent materials
 AGENTS.md

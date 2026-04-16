@@ -2,8 +2,15 @@
 """Run the fast pre-merge verification surface.
 
 This script is the intended lane/worktree gate before absorbing work back into
-the integration root. It always runs a small, fixed baseline and then adds
-focused test bundles based on files changed since the selected base ref.
+the integration root.
+
+* **Default (lane / worktree):** ``validate_modules``, a thin universal pytest pair
+  (contracts + CLI validate), **routed** canonical CLI examples (phase envelope /
+  PT flash only when matching paths changed), git-based **domain bundles**
+  (``FAST_GROUPS``), and any direct pytest targets for edited test files.
+* **``--baseline-only`` / ``--integration-root``:** the full fixed merge gate
+  (same as CI fast step): all merge-gate pytest files + both canonical CLI pairs.
+  Use before absorbing a lane into the integration root.
 
 Use ``scripts/run_full_validation.py`` for the longer validation surface.
 """
@@ -37,6 +44,38 @@ BASELINE_SMOKE_TESTS = frozenset(
     Path(item.split("::", 1)[0]).as_posix().lstrip("./") for item in BASELINE_MERGE_GATE_PYTEST_ITEMS
 )
 
+# Thin default lane: always run unless --baseline-only or full merge-gate conservative mode.
+UNIVERSAL_SMOKE_PYTEST_ITEMS: tuple[str, ...] = (
+    "tests/contracts/test_invariants.py",
+    "tests/unit/test_cli_validate.py",
+)
+
+# If any of these paths change, run the full merge-gate pytest list + both CLI pairs (like CI).
+FULL_MERGE_GATE_PATH_PREFIXES: tuple[str, ...] = (
+    "pyproject.toml",
+    "tests/conftest.py",
+    "scripts/run_premerge_checks.py",
+    ".github/workflows/",
+    "github/workflows/",  # some git outputs omit the leading dot
+)
+
+# Canonical CLI example: run only when related surface (or test file) changed.
+PHASE_ENVELOPE_EXAMPLE_PATH_PREFIXES: tuple[str, ...] = (
+    "src/pvtcore/envelope/",
+    "scripts/run_phase_envelope_validation.py",
+    "scripts/validate_envelope.py",
+    "examples/phase_envelope_config.json",
+    "tests/unit/test_envelope.py",
+    "tests/unit/test_envelope_continuation.py",
+    "tests/unit/test_pvtapp_phase_envelope_workflow.py",
+)
+PT_FLASH_EXAMPLE_PATH_PREFIXES: tuple[str, ...] = (
+    "src/pvtcore/flash/",
+    "src/pvtcore/eos/",
+    "examples/pt_flash_config.json",
+    "tests/unit/test_flash.py",
+)
+
 
 @dataclass(frozen=True)
 class CheckStep:
@@ -55,13 +94,14 @@ class CheckGroup:
     steps: tuple[CheckStep, ...]
 
 
-BASELINE_STEPS = (
+# Integration-root / CI ``--baseline-only``: full merge gate (pytest + both CLI examples).
+INTEGRATION_ROOT_BASELINE_STEPS = (
     CheckStep(
         "validate-modules",
         (PYTHON, "scripts/validate_modules.py"),
     ),
     CheckStep(
-        "baseline-smoke-tests",
+        "merge-gate-pytest",
         (PYTHON, "-m", "pytest", *BASELINE_MERGE_GATE_PYTEST_ITEMS, "-q"),
     ),
     CheckStep(
@@ -150,6 +190,8 @@ FAST_GROUPS = (
             "src/pvtcore/properties/",
             "src/pvtcore/core/",
             "src/pvtcore/confinement/",
+            "tests/unit/test_flash.py",
+            "examples/pt_flash_config.json",
         ),
         steps=(
             CheckStep(
@@ -158,6 +200,7 @@ FAST_GROUPS = (
                     PYTHON,
                     "-m",
                     "pytest",
+                    "tests/unit/test_flash.py",
                     "tests/unit/test_saturation.py",
                     "tests/unit/test_peng_robinson.py",
                     "tests/unit/test_pr78.py",
@@ -205,6 +248,8 @@ FAST_GROUPS = (
             "src/pvtcore/envelope/",
             "scripts/run_phase_envelope_validation.py",
             "scripts/validate_envelope.py",
+            "examples/phase_envelope_config.json",
+            "tests/unit/test_pvtapp_phase_envelope_workflow.py",
         ),
         steps=(
             CheckStep(
@@ -215,6 +260,28 @@ FAST_GROUPS = (
                     "pytest",
                     "tests/unit/test_envelope.py",
                     "tests/unit/test_envelope_continuation.py",
+                    "tests/unit/test_pvtapp_phase_envelope_workflow.py",
+                    "-q",
+                ),
+            ),
+        ),
+    ),
+    CheckGroup(
+        name="cce-workflow",
+        path_prefixes=(
+            "src/pvtcore/experiments/",
+            "tests/unit/test_pvtapp_cce_workflow.py",
+            "tests/unit/test_experiments.py",
+        ),
+        steps=(
+            CheckStep(
+                "cce-workflow-tests",
+                (
+                    PYTHON,
+                    "-m",
+                    "pytest",
+                    "tests/unit/test_pvtapp_cce_workflow.py",
+                    "tests/unit/test_experiments.py",
                     "-q",
                 ),
             ),
@@ -225,7 +292,6 @@ FAST_GROUPS = (
         path_prefixes=(
             "src/pvtapp/",
             "src/pvtcore/io/",
-            "src/pvtcore/experiments/",
         ),
         steps=(
             CheckStep(
@@ -309,6 +375,9 @@ FAST_GROUPS = (
     ),
 )
 
+# Backwards-compatible name for callers reading the module.
+BASELINE_STEPS = INTEGRATION_ROOT_BASELINE_STEPS
+
 
 def _normalize_path(path: str) -> str:
     return path.replace("\\", "/").lstrip("./")
@@ -390,6 +459,82 @@ def _triggered_groups(changed_files: list[str], *, all_fast: bool) -> list[Check
     return selected
 
 
+def _any_path_matches_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(_matches_prefix(path, prefix) for prefix in prefixes)
+
+
+def _should_run_full_merge_gate(changed_files: list[str]) -> bool:
+    """Conservative: same pytest + CLI bundle as CI when tooling / workflow config changes."""
+    if not changed_files:
+        return False
+    return any(
+        _any_path_matches_prefixes(path, FULL_MERGE_GATE_PATH_PREFIXES) for path in changed_files
+    )
+
+
+def _routed_cli_steps(changed_files: list[str]) -> list[CheckStep]:
+    """Canonical example validate/run only for touched surfaces."""
+    steps: list[CheckStep] = []
+    if any(
+        _any_path_matches_prefixes(path, PHASE_ENVELOPE_EXAMPLE_PATH_PREFIXES)
+        for path in changed_files
+    ):
+        steps.extend(
+            (
+                CheckStep(
+                    "validate-phase-envelope-example",
+                    (
+                        PYTHON,
+                        "-m",
+                        "pvtapp.cli",
+                        "validate",
+                        "examples/phase_envelope_config.json",
+                    ),
+                ),
+                CheckStep(
+                    "run-phase-envelope-example",
+                    (
+                        PYTHON,
+                        "-m",
+                        "pvtapp.cli",
+                        "run",
+                        "--no-artifacts",
+                        "examples/phase_envelope_config.json",
+                    ),
+                ),
+            )
+        )
+    if any(
+        _any_path_matches_prefixes(path, PT_FLASH_EXAMPLE_PATH_PREFIXES) for path in changed_files
+    ):
+        steps.extend(
+            (
+                CheckStep(
+                    "validate-pt-flash-example",
+                    (
+                        PYTHON,
+                        "-m",
+                        "pvtapp.cli",
+                        "validate",
+                        "examples/pt_flash_config.json",
+                    ),
+                ),
+                CheckStep(
+                    "run-pt-flash-example",
+                    (
+                        PYTHON,
+                        "-m",
+                        "pvtapp.cli",
+                        "run",
+                        "--no-artifacts",
+                        "examples/pt_flash_config.json",
+                    ),
+                ),
+            )
+        )
+    return steps
+
+
 def _changed_fast_tests(changed_files: list[str]) -> list[str]:
     paths = {
         path
@@ -400,11 +545,42 @@ def _changed_fast_tests(changed_files: list[str]) -> list[str]:
             or path == "tests/contracts/test_invariants.py"
         )
     }
-    return sorted(paths.difference(BASELINE_SMOKE_TESTS))
+    dedupe = BASELINE_SMOKE_TESTS | frozenset(UNIVERSAL_SMOKE_PYTEST_ITEMS)
+    return sorted(paths.difference(dedupe))
 
 
 def _selected_steps(changed_files: list[str], *, all_fast: bool) -> list[CheckStep]:
-    steps: list[CheckStep] = list(BASELINE_STEPS)
+    if all_fast:
+        steps: list[CheckStep] = list(INTEGRATION_ROOT_BASELINE_STEPS)
+        changed_test_paths = _changed_fast_tests(changed_files)
+        if changed_test_paths:
+            steps.append(
+                CheckStep(
+                    "changed-fast-tests",
+                    (PYTHON, "-m", "pytest", *changed_test_paths, "-q"),
+                )
+            )
+        for group in FAST_GROUPS:
+            steps.extend(group.steps)
+        return steps
+
+    steps: list[CheckStep] = [
+        CheckStep(
+            "validate-modules",
+            (PYTHON, "scripts/validate_modules.py"),
+        ),
+    ]
+
+    if _should_run_full_merge_gate(changed_files):
+        steps.extend(list(INTEGRATION_ROOT_BASELINE_STEPS[1:]))
+    else:
+        steps.append(
+            CheckStep(
+                "universal-smoke-tests",
+                (PYTHON, "-m", "pytest", *UNIVERSAL_SMOKE_PYTEST_ITEMS, "-q"),
+            )
+        )
+        steps.extend(_routed_cli_steps(changed_files))
 
     changed_test_paths = _changed_fast_tests(changed_files)
     if changed_test_paths:
@@ -415,7 +591,7 @@ def _selected_steps(changed_files: list[str], *, all_fast: bool) -> list[CheckSt
             )
         )
 
-    for group in _triggered_groups(changed_files, all_fast=all_fast):
+    for group in _triggered_groups(changed_files, all_fast=False):
         steps.extend(group.steps)
     return steps
 
@@ -429,11 +605,11 @@ def _print_plan(
     baseline_only: bool = False,
 ) -> None:
     if baseline_only:
-        mode = "baseline only (fixed CI fast gate)"
+        mode = "baseline only (fixed CI / integration-root merge gate)"
     elif all_fast:
-        mode = "all fast groups"
+        mode = "merge gate + every fast domain group"
     else:
-        mode = f"changed since {base_ref}"
+        mode = f"touched-surface routing vs merge-base of {base_ref}"
     print(f"Pre-merge verification plan ({mode})")
     print("=" * 72)
     if baseline_only:
@@ -495,17 +671,17 @@ def main() -> int:
         dest="baseline_only",
         action="store_true",
         help=(
-            "Run only the fixed baseline (validate_modules, curated smoke tests, "
-            "canonical CLI examples). Skips git diff routing and domain bundles. "
-            "Use before absorbing a lane worktree into the integration root; same as "
-            "CI fast gate (--integration-root is an alias)."
+            "Run the full integration-root / CI merge gate: validate_modules, all merge-gate "
+            "pytest files, and both canonical CLI example pairs. Skips git-based routing. "
+            "Use before absorbing a lane worktree into the integration root (--integration-root "
+            "is an alias)."
         ),
     )
     args = parser.parse_args()
 
     if args.baseline_only:
         changed_files: list[str] = []
-        steps = list(BASELINE_STEPS)
+        steps = list(INTEGRATION_ROOT_BASELINE_STEPS)
     else:
         changed_files = (
             sorted({_normalize_path(path) for path in args.files})

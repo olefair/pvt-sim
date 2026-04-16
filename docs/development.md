@@ -128,6 +128,33 @@ Environment-file contract:
 - editor/runtime defaults should point at `.env.defaults`, not `.env`
 - do not rely on a tracked `.env` for canonical repo behavior
 
+## Local Environment Setup
+
+Recommended local Windows setup:
+
+```powershell
+python.exe -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python.exe -m pip install -U pip
+python.exe -m pip install -e .[full,dev]
+```
+
+Environment rules:
+
+- `.env.defaults` is the tracked baseline. Only repo-safe, non-secret defaults
+  belong there.
+- `.env` remains ignored and is reserved for machine-local overrides or
+  secrets.
+- If a setting is required for everyone, add it to `.env.defaults` and
+  document it here. Do not rely on `.env` as canonical repo state.
+- Keep the editor/interpreter pointed at `.venv\Scripts\python.exe` and
+  `python.envFile=${workspaceFolder}/.env.defaults`.
+- Cursor and VS Code should inherit the repo default from
+  `.vscode/settings.json`; do not switch the shared setting back to `.env`.
+- Cursor MCP servers are machine-local. Copy `.cursor/mcp.json.example` to
+  `.cursor/mcp.json`, edit the local Python/server paths, and keep
+  `.cursor/mcp.json` uncommitted.
+
 ---
 
 ## Coding Conventions
@@ -226,3 +253,29 @@ python -m pytest tests/unit tests/contracts/test_invariants.py --durations=40 -q
 At the end, pytest prints the **slowest** tests; that tells you what dominates
 wall time (often a few large `pvtapp` runtime tests or envelope cases), not
 whether the suite is “hung.”
+
+### Merge / absorb reconciliation gate
+
+For any integration-root absorb or other `main`-affecting Git operation, the
+standard is semantic preservation, not mechanical cleanliness.
+
+Minimum required pass before calling a merge or absorb reconciled:
+
+1. Inventory what each side owns across shared runtime surfaces, GUI/app
+   behavior, schemas/contracts, tests, validation assets, scripts/docs, and
+   tracked config/env files.
+2. Confirm the merged outcome preserves the intended union of load-bearing
+   behavior, or record an explicit retirement approval for anything removed.
+3. Run targeted verification for the overlapping surface. For
+   thermo/numerical work, this means comparison against the prior validated
+   surface or equation/reference checks, not only import or smoke success.
+4. Report reconciliation level `R0` through `R4`, preserved/retired surfaces,
+   verification run, and residual risk.
+
+Additional rules:
+
+- Do not take `ours` or `theirs` wholesale on a shared surface unless a
+  deliberate rollback/retirement is explicitly approved.
+- Silence is not retirement.
+- A clean working tree or conflict-free merge is only `R1` mechanical work
+  until the accounting and targeted verification above are done.
