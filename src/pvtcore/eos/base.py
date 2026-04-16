@@ -184,6 +184,82 @@ class CubicEOS(ABC):
         """
         pass
 
+    def ln_fugacity_coefficient(
+        self,
+        pressure: float,
+        temperature: float,
+        composition: np.ndarray,
+        phase: Literal['liquid', 'vapor'] = 'vapor',
+        binary_interaction: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        """Return ln(φ_i) for all components.
+
+        Default implementation takes log of fugacity_coefficient().
+        Subclasses may override for efficiency (avoids exp then log).
+        """
+        return np.log(self.fugacity_coefficient(
+            pressure, temperature, composition, phase, binary_interaction
+        ))
+
+    def d_ln_phi_dP(
+        self,
+        pressure: float,
+        temperature: float,
+        composition: np.ndarray,
+        phase: Literal['liquid', 'vapor'] = 'vapor',
+        binary_interaction: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """∂ln(φ_i)/∂P at constant T, x. Analytical for cubic EOS.
+
+        Default: central finite-difference fallback. Subclasses should
+        override with the closed-form expression.
+        """
+        dP = max(pressure * 1e-6, 1.0)
+        ln_phi_p = self.ln_fugacity_coefficient(
+            pressure + dP, temperature, composition, phase, binary_interaction)
+        ln_phi_m = self.ln_fugacity_coefficient(
+            pressure - dP, temperature, composition, phase, binary_interaction)
+        return (ln_phi_p - ln_phi_m) / (2.0 * dP)
+
+    def d_ln_phi_dn(
+        self,
+        pressure: float,
+        temperature: float,
+        composition: np.ndarray,
+        phase: Literal['liquid', 'vapor'] = 'vapor',
+        binary_interaction: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """∂ln(φ_i)/∂n_j matrix (n_c × n_c) at constant T, P, n_{k≠j}.
+
+        This is the mole-number derivative used in the Newton Jacobian for
+        flash and saturation solvers.  Related to the composition derivative
+        by the chain rule, but the n-derivative form is what appears directly
+        in the Michelsen formulation.
+
+        Default: central finite-difference fallback. Subclasses should
+        override with the closed-form expression.
+        """
+        nc = len(composition)
+        x = np.asarray(composition, dtype=np.float64)
+        n_total = 1.0
+        n = x * n_total
+
+        dn = 1e-6
+        J = np.zeros((nc, nc))
+        for j in range(nc):
+            n_p = n.copy()
+            n_m = n.copy()
+            n_p[j] += dn
+            n_m[j] -= dn
+            x_p = n_p / n_p.sum()
+            x_m = n_m / n_m.sum()
+            ln_phi_p = self.ln_fugacity_coefficient(
+                pressure, temperature, x_p, phase, binary_interaction)
+            ln_phi_m = self.ln_fugacity_coefficient(
+                pressure, temperature, x_m, phase, binary_interaction)
+            J[:, j] = (ln_phi_p - ln_phi_m) / (2.0 * dn)
+        return J
+
     def fugacity(
         self,
         pressure: float,
