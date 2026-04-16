@@ -312,6 +312,56 @@ Mollerup (2007) Appendix A, or derive directly from the PR formulation.
 3. Run full test suite — should drop from ~8 min to ~2-3 min.
 4. Optional: deferred certificate generation.
 
+## Scope: cubic EOS with quadratic mixing rules only
+
+The analytical derivatives ∂ln(φ)/∂P and ∂ln(φ)/∂x_j have clean closed-form
+expressions **only** for cubic EOS (PR, SRK, PR78) with the standard van der
+Waals one-fluid quadratic mixing rules currently in the codebase:
+
+```
+a_mix = ΣΣ x_i x_j a_ij
+b_mix = Σ x_i b_i
+```
+
+This does NOT generalize for free to:
+
+- **Non-classical mixing rules** (Wong-Sandler, MHV2, Huron-Vidal): the
+  composition dependence of `a_mix` routes through an activity coefficient
+  model (NRTL, UNIQUAC, etc.), making ∂a_mix/∂x_j implicit and
+  model-dependent. The derivatives are still obtainable but require
+  chain-ruling through the activity coefficient layer.
+- **SAFT-type EOS** (PC-SAFT, CPA): fugacity expressions are not cubic;
+  derivatives exist but are structurally different and much more involved.
+- **Association terms** (CPA for water/glycol systems): the monomer fraction
+  X_A must be converged iteratively before φ can be evaluated, and
+  differentiating through that implicit solve requires either the implicit
+  function theorem or automatic differentiation.
+
+**Design implication:** the `d_ln_phi_dP` and `d_ln_phi_dx` methods belong on
+`CubicEOS` (the existing base class), not on a hypothetical `EOS` superclass.
+The base class should provide a finite-difference fallback so that any future
+non-cubic EOS can still use Newton at reduced efficiency:
+
+```python
+class CubicEOS:
+    def d_ln_phi_dP(self, P, T, x, phase, kij=None):
+        """Analytical for cubic EOS. Override in subclasses."""
+        raise NotImplementedError
+
+    def d_ln_phi_dP_numerical(self, P, T, x, phase, kij=None, dP=1e2):
+        """Central finite-difference fallback for any EOS."""
+        ln_phi_plus = self.ln_fugacity_coefficient(P + dP, T, x, phase, kij)
+        ln_phi_minus = self.ln_fugacity_coefficient(P - dP, T, x, phase, kij)
+        return (ln_phi_plus - ln_phi_minus) / (2.0 * dP)
+```
+
+The Newton envelope solver should call the analytical version when available
+and fall back to the numerical version otherwise. This keeps the fast path
+fast for cubic EOS while remaining correct for future EOS types.
+
+For the current codebase (PR76, PR78, SRK only), the analytical path covers
+100% of use cases.
+
 ## Risk and fallback
 
 The existing TPD-based solver is **more robust** for pathological fluids
