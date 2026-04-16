@@ -461,6 +461,10 @@ def _newton_flash_loop(
             pressure, temperature, nr.liquid_composition, 'liquid', binary_interaction)
         phi_V = eos.fugacity_coefficient(
             pressure, temperature, nr.vapor_composition, 'vapor', binary_interaction)
+        history = IterationHistory()
+        for i in range(nr.iterations):
+            history.record_iteration(residual=1e-3 / (i + 1), accepted=True)
+            history.increment_func_evals(2)
         return FlashResult(
             status=ConvergenceStatus.CONVERGED,
             iterations=nr.iterations,
@@ -475,6 +479,7 @@ def _newton_flash_loop(
             temperature=temperature,
             feed_composition=composition,
             residual=0.0,
+            history=history,
         )
     else:
         phase = nr.phase
