@@ -14,11 +14,9 @@ concurrency:
 
 jobs:
   validation:
-    name: Extended validation suite
+    name: Extended full validation suite
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      PVTSIM_RUN_SLOW: "1"
 
     steps:
       - name: Checkout
@@ -37,5 +35,5 @@ jobs:
           python -m pip install -e .
           python -m pip install pytest scipy
 
-      - name: Run extended validation tests
-        run: pytest tests/validation tests/unit/test_flash.py tests/unit/test_envelope_continuation.py -q
+      - name: Run full validation surface
+        run: python scripts/run_full_validation.py

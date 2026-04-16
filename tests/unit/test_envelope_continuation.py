@@ -217,6 +217,7 @@ def test_trace_envelope_continuation_switches_c2_c3_near_critical() -> None:
     assert result.dew_states[0].temperature <= result.critical_state.temperature <= result.dew_states[-1].temperature
 
 
+@pytest.mark.nightly
 def test_trace_envelope_continuation_detects_co2_rich_critical_from_branch_closest_approach() -> None:
     """Adaptive continuation should resolve the CO2-rich upper critical neighborhood consistently."""
     if os.getenv("PVTSIM_RUN_SLOW") != "1":

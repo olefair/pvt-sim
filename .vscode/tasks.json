@@ -1,0 +1,152 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install: editable full+dev",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        ".[full,dev]"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: pytest (routine)",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: baseline (CI parity)",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "scripts/run_premerge_checks.py",
+        "--baseline-only"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: pre-merge checks (full)",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "scripts/run_premerge_checks.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: full validation",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "scripts/run_full_validation.py"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: runtime contract",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "pytest",
+        "tests/unit/test_pvtapp_runtime_contract.py",
+        "-q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: GUI contracts",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "pytest",
+        "--run-gui-contracts",
+        "-m",
+        "gui_contract",
+        "-q"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}${/}src",
+          "QT_QPA_PLATFORM": "offscreen"
+        }
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build: package",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Quick check: like CI headless",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Test: baseline (CI parity)",
+        "Test: pytest (routine)",
+        "Build: package"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

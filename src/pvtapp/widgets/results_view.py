@@ -2258,8 +2258,11 @@ class ResultsPlotWidget(QWidget):
         """Match the Matplotlib figure size to the live Qt canvas size."""
         if not self._matplotlib_available:
             return
-        width = max(self.canvas.width(), 1)
-        height = max(self.canvas.height(), 1)
+        device_pixel_ratio = 1.0
+        if hasattr(self.canvas, "devicePixelRatioF"):
+            device_pixel_ratio = max(float(self.canvas.devicePixelRatioF()), 1.0)
+        width = max(self.canvas.width() * device_pixel_ratio, 1.0)
+        height = max(self.canvas.height() * device_pixel_ratio, 1.0)
         dpi = max(float(self.figure.get_dpi()), 1.0)
         self.figure.set_size_inches(width / dpi, height / dpi, forward=False)
 

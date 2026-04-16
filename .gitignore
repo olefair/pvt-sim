@@ -15,6 +15,7 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+# Local-only environment overrides. Safe tracked defaults live in .env.defaults.
 .env
 
 # Packaging artifacts
@@ -52,6 +53,9 @@ ehthumbs.db
 
 # Generated validation / assignment outputs
 assignment_run_*.json
+
+# Cursor — local MCP paths (see .cursor/mcp.json.example)
+.cursor/mcp.json
 
 # Private course / agent materials
 AGENTS.md

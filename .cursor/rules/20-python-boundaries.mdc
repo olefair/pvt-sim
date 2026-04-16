@@ -1,0 +1,13 @@
+---
+description: Python architecture, units, and error-boundary conventions
+globs:
+  - src/**/*.py
+  - tests/**/*.py
+---
+
+- Keep `src/pvtcore/` free of GUI dependencies. `src/pvtapp/` owns GUI, CLI, schemas, orchestration, and result presentation.
+- Prefer `from __future__ import annotations` in new Python modules.
+- Add type hints on public functions, dataclasses, and schema-facing APIs.
+- Keep unit conversions at I/O boundaries. Internal solver and thermo logic should use the canonical units described in `docs/units.md`.
+- Inside `pvtcore`, raise domain exceptions from `pvtcore.core.errors` for thermodynamic and numerical failures. At app/config boundaries, prefer validation errors such as `ValueError`, `FileNotFoundError`, or Pydantic errors.
+- Prefer small, auditable edits over cross-cutting rewrites.

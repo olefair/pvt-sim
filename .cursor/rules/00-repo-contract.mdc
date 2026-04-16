@@ -1,0 +1,13 @@
+---
+description: Repo-wide execution contract for PVT-SIM work
+alwaysApply: true
+---
+
+- `AGENTS.md` at the repo root is authoritative. Use it as the primary execution contract for Cursor agent work.
+- Start with real repo context, not guesses. For non-trivial work, read `README.md`, `docs/development.md`, and `docs/runtime_surface_standard.md`. Read `PVTSIM_DEPENDENCY_MAP.md` when concurrency, delegation, or lane ownership might matter.
+- Treat current code, tests, configs, and runtime scripts as source of truth. If docs drift from verified reality, update the docs.
+- Prefer the smallest coherent implementation that fully solves the task. Preserve existing behavior unless the request explicitly changes behavior.
+- Avoid broad refactors, file moves, dependency churn, or formatting sweeps unless they are required.
+- Before multi-file edits, state the intended scope and why each touched area is necessary.
+- After changes, run the smallest relevant verification and report pass/fail clearly.
+- If the task’s real target is outside this repo, stop and ask for the correct workspace instead of using this repo as scratch space.

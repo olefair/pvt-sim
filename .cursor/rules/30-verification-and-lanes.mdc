@@ -1,0 +1,18 @@
+---
+description: Verification defaults and lane/concurrency guardrails
+alwaysApply: true
+---
+
+- Verification order (smallest first):
+  1. Run the smallest targeted `pytest` subset for the touched surface.
+  2. Routine headless confidence: `python -m pytest -q` (collects `tests/unit` and `tests/contracts/test_invariants.py` per `pyproject.toml`; deselects `gui_contract` and `nightly` unless opted in).
+  3. CI / integration-root baseline: `python scripts/run_premerge_checks.py --baseline-only` — single source for `validate_modules`, **full** `test_flash.py`, workflow + CLI + invariant tests, and canonical CLI examples; do not duplicate those steps elsewhere. Routine `pytest` still runs the full headless suite after in CI. Merge conflicts: combine features from both sides; tests catch regressions, they do not replace careful conflict resolution.
+  4. Lane / worktree gate before integration-root absorb: `python scripts/run_premerge_checks.py` (fixed baseline + touched-surface add-ons vs `main`; use `--all-fast` for every fast domain bundle).
+  5. Long validation / release-style surface: `python scripts/run_full_validation.py` (includes `tests/validation`, nightly robustness, `PVTSIM_RUN_SLOW=1` unless `--without-slow`).
+  6. Desktop shell / layout work only: `python -m pytest --run-gui-contracts -m gui_contract -q` (advisory in CI).
+  7. Packaging or entrypoints: `python -m build` when `pyproject.toml`, packaging, or entrypoint surfaces change.
+  8. CLI / runtime wiring beyond the baseline: `python -m pvtapp.cli validate …` / `run … --no-artifacts` when those surfaces change (baseline already covers the canonical examples).
+- `scripts/validate_modules.py` is included in the pre-merge baseline; do not treat it as a separate mandatory manual step unless you are debugging that script alone.
+- Treat `pyproject.toml`, requirements files, repo-wide docs, and branch/worktree operations as shared or serial-only surfaces.
+- Read/update `PVTSIM_DEPENDENCY_MAP.md` before launching concurrent slices or changing touched repo surfaces.
+- Default to one normal branch in this checkout. Do not create extra worktrees or perform `main`-affecting git operations unless the user explicitly asks.

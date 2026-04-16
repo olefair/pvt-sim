@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "repo-engineer": {
+      "command": "C:\\path\\to\\python.exe",
+      "args": [
+        "C:\\path\\to\\repo-engineer-mcp\\server.py"
+      ],
+      "env": {
+        "REPO_ENGINEER_ROOT": "${workspaceFolder}"
+      }
+    }
+  }
+}

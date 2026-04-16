@@ -71,7 +71,7 @@ pvtsim-gui = "pvtapp.main:main"
 [tool.pytest.ini_options]
 addopts = "-q"
 cache_dir = ".pycache/pytest"
-testpaths = ["tests"]
+testpaths = ["tests/unit", "tests/contracts/test_invariants.py"]
 markers = [
   "slow: longer-running tests",
   "nightly: extended validation suite",

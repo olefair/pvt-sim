@@ -121,6 +121,13 @@ Install surfaces currently defined:
 - full desktop + developer/validation surface: `pip install -e .[full,dev]`
 - docs: `pip install -e .[docs]`
 
+Environment-file contract:
+
+- tracked repo-safe defaults live in `.env.defaults`
+- ignored machine-local overrides live in `.env`
+- editor/runtime defaults should point at `.env.defaults`, not `.env`
+- do not rely on a tracked `.env` for canonical repo behavior
+
 ---
 
 ## Coding Conventions
@@ -180,10 +187,13 @@ confused:
 
 Current verification surfaces:
 
-- `python .\scripts\validate_modules.py`
-- `pytest` for the default high-signal kernel/runtime surface
+- **CI (`.github/workflows/ci.yml`)** — `python scripts/run_premerge_checks.py --baseline-only`, then routine `pytest`, plus a parallel `python -m build` job. The baseline script is the only place the “smoke” file list and example CLI runs should be defined.
+- **Integration-root / merge gate (`--baseline-only` / `--integration-root`)** — **not** a minimal vanity check: it includes full `tests/unit/test_flash.py`, workflow + CLI + invariant tests, `validate_modules.py`, and canonical example validate/run steps. It is meant to be **firm on regressions** before absorb. Routine `pytest` afterward still runs the full headless suite. **Merge conflicts** must be resolved by **combining** the intended behavior from both sides (preserve features, no silent deletion); tests validate the result — they do not perform the merge.
+- `pytest` for the default routine headless kernel/runtime surface
+- `python .\scripts\run_premerge_checks.py` for the full lane/worktree gate (baseline + touched-surface add-ons)
+- `python .\scripts\run_full_validation.py` for the long-form validation lane
 - `pytest --run-gui-contracts` for optional desktop layout/style contract checks
-- `pvtsim validate <config>`
+- `pvtsim validate <config>` for ad hoc configs
 - manual CLI/GUI validation against literature data, MI PVT, lab reports, and
   physical invariants
 
@@ -191,7 +201,28 @@ Current verification surfaces:
 the validation plan and external reference cases when judging whether the
 simulator is actually right.
 
-The default `pytest` path intentionally deselects tests marked `gui_contract`.
-Those checks cover desktop layout, styling, zoom, and other presentation
-contracts that are useful when changing the GUI shell but are lower signal than
-kernel correctness and runtime-surface wiring for routine verification.
+The default `pytest` path intentionally keeps the routine surface narrow:
+
+- it only collects `tests/unit` plus `tests/contracts/test_invariants.py`
+- it deselects tests marked `gui_contract`
+- it deselects tests marked `nightly`
+
+That keeps the default regression lane aligned with everyday work while the
+longer validation and robustness surfaces stay explicit.
+
+### Due-date posture (small edits, no accidental loss)
+
+For the last stretch of a project, prioritize **not losing work** over perfect
+process: commit or stash before edits, skim **diffs for unintended deletions**
+before merging worktrees, and use **`python scripts/run_premerge_checks.py --baseline-only`**
+when folding a lane into the integration root. The **full** routine `pytest` run
+is still the broad regression net — if it feels too slow, **profile** instead of
+rerunning blindly:
+
+```bash
+python -m pytest tests/unit tests/contracts/test_invariants.py --durations=40 -q --tb=no
+```
+
+At the end, pytest prints the **slowest** tests; that tells you what dominates
+wall time (often a few large `pvtapp` runtime tests or envelope cases), not
+whether the suite is “hung.”

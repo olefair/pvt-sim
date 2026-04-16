@@ -1,0 +1,13 @@
+# Keep Cursor indexing focused on the live implementation surface.
+__DEPRECATED/
+vault/
+.claude/
+docs/.smart-env/
+docs/_archive/
+docs/claude/_archive/
+docs/handoffs/
+docs/audits/
+tools/SKILLS/provisional/
+*.zip
+*.7z
+*.log

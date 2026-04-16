@@ -22,6 +22,12 @@ def pytest_addoption(parser) -> None:
         default=False,
         help="include optional desktop GUI contract/layout tests",
     )
+    parser.addoption(
+        "--run-nightly",
+        action="store_true",
+        default=False,
+        help="include nightly/extended robustness tests in collection",
+    )
 
 
 def pytest_configure() -> None:
@@ -31,15 +37,22 @@ def pytest_configure() -> None:
 
 
 def pytest_collection_modifyitems(config, items) -> None:
-    if config.getoption("--run-gui-contracts"):
-        return
+    run_gui_contracts = config.getoption("--run-gui-contracts")
+    run_nightly = config.getoption("--run-nightly")
 
-    deselected = [item for item in items if "gui_contract" in item.keywords]
-    if not deselected:
-        return
+    deselected = []
+    kept = []
+    for item in items:
+        if not run_gui_contracts and "gui_contract" in item.keywords:
+            deselected.append(item)
+            continue
+        if not run_nightly and "nightly" in item.keywords:
+            deselected.append(item)
+            continue
+        kept.append(item)
 
-    kept = [item for item in items if "gui_contract" not in item.keywords]
-    config.hook.pytest_deselected(items=deselected)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
     items[:] = kept
 
 

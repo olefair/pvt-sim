@@ -1,0 +1,15 @@
+---
+description: Runtime parity and user-facing simulator surface rules
+globs:
+  - src/pvtapp/**/*.py
+  - src/pvtcore/**/*.py
+  - tests/**/*.py
+  - README.md
+  - docs/runtime_surface_standard.md
+---
+
+- Enforce `docs/runtime_surface_standard.md`. Domain-level features in `pvtcore` must be runtime-wired, explicitly marked experimental/not app-supported, or removed.
+- GUI controls and runtime config must drive the actual calculation path. Display-only controls that imply runtime behavior are not acceptable.
+- Preserve method context and artifact provenance through the run: EOS, characterization, BIP handling, lumping/delumping, and reported basis should stay auditable.
+- `src/pvtapp/capabilities.py`, `src/pvtapp/schemas.py`, and `src/pvtapp/job_runner.py` are the main runtime choke points for supported workflows.
+- If runtime support changes, update `README.md` and the relevant `docs/` files in the same slice.

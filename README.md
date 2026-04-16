@@ -92,11 +92,14 @@ command is:
 python.exe -m pip install -e .[full,dev]
 ```
 
-Run tests:
+Verification entrypoints (details in `docs/development.md`):
 
-```bash
-pytest
-```
+| Surface | Command |
+|--------|---------|
+| Routine headless | `pytest` |
+| CI / integration-root gate (`--baseline-only`, `--integration-root`) | `python scripts/run_premerge_checks.py --baseline-only` — strong regression signal, then routine `pytest` for full headless suite (see `docs/development.md`) |
+| Lane pre-merge (baseline + touched-surface) | `python scripts/run_premerge_checks.py` |
+| Full validation | `python scripts/run_full_validation.py` |
 
 ## Install (runtime only)
 

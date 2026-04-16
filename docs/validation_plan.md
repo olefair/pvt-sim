@@ -290,16 +290,13 @@ MI-PVT cross-check lane separated cleanly.
 The current CI surface should match the repo's verified reality rather than the
 longer-term aspiration.
 
-### Pull Request / Push Smoke
-- `python scripts/validate_modules.py`
-- fast headless smoke subset covering flash, selected runtime workflows, CLI
-  validation, and core invariants
-- `pvtsim validate` / `pvtsim run --no-artifacts` on the canonical example
-  configs
+### GitHub Actions `ci` workflow (PRs + pushes to `main`)
+- **`python scripts/run_premerge_checks.py --baseline-only`** — single entry for the fast baseline (module validation, the same curated unit/contract files, and canonical `pvtapp.cli` validate/run on the example configs). Do not re-list those steps in other workflows.
+- **`python -m pytest`** — routine headless surface from `pyproject.toml` (`tests/unit` + `tests/contracts/test_invariants.py`, with `gui_contract` / `nightly` deselected unless opted in).
+- **`python -m build`** — parallel job; packaging sanity.
 
-### Pull Request Headless CI
-- default `pytest` path for the headless kernel/runtime surface
-- `python -m build` to verify source and wheel packaging still work
+### Lane / worktree pre-merge (local or integration root)
+- **`python scripts/run_premerge_checks.py`** — baseline plus git-based touched-surface add-ons vs `main` (or `--all-fast` / `--files` as documented on the script).
 
 ### Advisory CI Lanes
 - `black --check`, `flake8`, and `mypy` run as advisory checks until the
@@ -309,9 +306,10 @@ longer-term aspiration.
   desktop surface is stable enough to require on every pull request
 
 ### Scheduled Extended Validation
-- scheduled validation targets `tests/validation/` plus robustness coverage
+- `python scripts/run_full_validation.py`
+- targets `tests/validation/` plus nightly robustness coverage
 - `PVTSIM_RUN_SLOW=1` is enabled in that lane so slow continuation-path checks
-  run there instead of on every routine pull request
+  stay out of routine pre-merge verification
 
 ### Release Validation
 - full regression / literature / external-reference signoff remains a separate
