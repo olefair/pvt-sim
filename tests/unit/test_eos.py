@@ -106,6 +106,59 @@ def test_eos_fugacity(components, eos_tag, comp_ids, T, P):
     np.testing.assert_allclose(f, phi * z * P, rtol=1e-10)
 
 
+def _fd_d_ln_phi_dP(eos, P, T, z, phase, kij):
+    dP = max(P * 1e-6, 1.0)
+    lp = eos.ln_fugacity_coefficient(P + dP, T, z, phase, kij)
+    lm = eos.ln_fugacity_coefficient(P - dP, T, z, phase, kij)
+    return (lp - lm) / (2.0 * dP)
+
+
+def _fd_d_ln_phi_dn(eos, P, T, z, phase, kij):
+    nc = len(z)
+    x = np.asarray(z, dtype=np.float64)
+    n = x.copy()
+    dn = 1e-6
+    J = np.zeros((nc, nc))
+    for j in range(nc):
+        n_p = n.copy()
+        n_m = n.copy()
+        n_p[j] += dn
+        n_m[j] -= dn
+        x_p = n_p / n_p.sum()
+        x_m = n_m / n_m.sum()
+        lp = eos.ln_fugacity_coefficient(P, T, x_p, phase, kij)
+        lm = eos.ln_fugacity_coefficient(P, T, x_m, phase, kij)
+        J[:, j] = (lp - lm) / (2.0 * dn)
+    return J
+
+
+_DERIV_CASES = [
+    ("PR76", ["C1", "C2"], 320.0, 5e6),
+    ("SRK", ["C1", "C2"], 320.0, 5e6),
+]
+
+
+@pytest.mark.parametrize(
+    "eos_tag, comp_ids, T, P",
+    _DERIV_CASES,
+    ids=[f"{c[0]}-{'_'.join(c[1])}" for c in _DERIV_CASES],
+)
+def test_eos_ln_phi_derivatives_match_finite_differences(
+    components, eos_tag, comp_ids, T, P
+):
+    """Analytical ∂lnφ/∂P and ∂lnφ/∂n match finite differences (PR and SRK)."""
+    eos = _make_eos(EOS_CLASSES[eos_tag], components, *comp_ids)
+    z = np.ones(len(comp_ids)) / len(comp_ids)
+    kij = None
+    ana_p = eos.d_ln_phi_dP(P, T, z, phase="vapor", binary_interaction=kij)
+    fd_p = _fd_d_ln_phi_dP(eos, P, T, z, "vapor", kij)
+    np.testing.assert_allclose(ana_p, fd_p, rtol=5e-5, atol=1e-9)
+
+    ana_n = eos.d_ln_phi_dn(P, T, z, phase="vapor", binary_interaction=kij)
+    fd_n = _fd_d_ln_phi_dn(eos, P, T, z, "vapor", kij)
+    np.testing.assert_allclose(ana_n, fd_n, rtol=5e-5, atol=1e-9)
+
+
 # ---------------------------------------------------------------------------
 # 3. test_eos_mixing_rules
 # ---------------------------------------------------------------------------
