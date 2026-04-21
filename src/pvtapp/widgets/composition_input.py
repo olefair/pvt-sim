@@ -486,7 +486,11 @@ class CompositionInputWidget(QWidget):
         inline_pc_row = QHBoxLayout()
         self._configure_unit_row(inline_pc_row, self.inline_pc_edit, self.inline_pc_unit)
 
-        inline_form.addRow("Label", self.inline_name_edit)
+        # The inline-pseudo label field is redundant with the 'Pseudo+'
+        # section tab and is effectively always 'PSEUDO+'. The backing
+        # QLineEdit (self.inline_name_edit) is kept so the existing label-
+        # sync / config-build wiring continues to function, but it's not
+        # added to the visible form.
         inline_form.addRow("MW (g/mol)", self.inline_mw_edit)
         # Use HTML rich text for critical-property labels so the c renders
         # as a proper subscript; Unicode has no dedicated subscript-c, and
