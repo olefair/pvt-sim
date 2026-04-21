@@ -3252,8 +3252,13 @@ class ResultsPlotWidget(QWidget):
                 axis.set_ylim(*preferred_ylim)
             axis.set_ylabel(self._cluster_axis_label(cluster))
             axis.set_xlabel(f"Pressure ({pressure_unit.value})")
-            axis.invert_xaxis()
+            # invert_xaxis() TOGGLES the axis direction, and with sharex all
+            # subplots share the same underlying x-axis state. Calling it on
+            # every axis flipped the direction even-vs-odd across the plot
+            # count (2 clusters = upright, 3 = inverted, 4 = upright, etc.).
+            # Apply once on the first axis; sharex propagates to the rest.
             if index == 0:
+                axis.invert_xaxis()
                 axis.set_title(title)
             self._apply_axes_theme(axis)
 

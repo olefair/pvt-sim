@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from pvtcore.core.constants import R
 from pvtcore.models.component import Component
+from pvtcore.models import resolve_component_id
 
 
 class CriticalPropsWidget(QWidget):
@@ -62,7 +63,19 @@ class CriticalPropsWidget(QWidget):
         self.table.setRowCount(len(component_ids))
 
         for row, cid in enumerate(component_ids):
+            # The GUI picker uses n-alkane aliases like 'nC4' / 'nC5' that
+            # the component database stores as canonical 'C4' / 'C5'.
+            # Route the lookup through resolve_component_id so aliases
+            # find their canonical entry instead of falling through to
+            # '(unknown)'.
             comp = self._db.get(cid)
+            if comp is None:
+                try:
+                    canonical = resolve_component_id(cid, self._db)
+                except KeyError:
+                    canonical = None
+                if canonical is not None:
+                    comp = self._db.get(canonical)
 
             name = comp.name if comp else "(unknown)"
             Tc = comp.Tc if comp else None
