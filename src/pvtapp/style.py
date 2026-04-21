@@ -200,29 +200,32 @@ QComboBox {{
 QComboBox::drop-down {{
   subcontrol-origin: padding;
   subcontrol-position: top right;
-  width: {px(22)}px;
+  width: {px(24)}px;
   border: none;
-  background: transparent;
+  border-left: 1px solid {palette['border']};
+  background: {palette['surface_elevated_bg']};
   border-top-right-radius: {px(6)}px;
   border-bottom-right-radius: {px(6)}px;
 }}
+QComboBox:hover::drop-down {{
+  background: {palette['surface_hover_bg']};
+}}
 QComboBox::down-arrow {{
   image: none;
-  border-left: {px(4)}px solid transparent;
-  border-right: {px(4)}px solid transparent;
-  border-top: {px(5)}px solid {palette['text_muted']};
+  border-left: {px(6)}px solid transparent;
+  border-right: {px(6)}px solid transparent;
+  border-top: {px(7)}px solid {palette['text']};
   width: 0px;
   height: 0px;
-  margin-right: {px(8)}px;
 }}
 QComboBox::down-arrow:on {{
   border-top: none;
-  border-left: {px(4)}px solid transparent;
-  border-right: {px(4)}px solid transparent;
-  border-bottom: {px(5)}px solid {palette['text']};
+  border-left: {px(6)}px solid transparent;
+  border-right: {px(6)}px solid transparent;
+  border-bottom: {px(7)}px solid {palette['text']};
 }}
 QComboBox:hover::down-arrow {{
-  border-top-color: {palette['text']};
+  border-top-color: {palette['selection_bg']};
 }}
 QComboBox:hover {{
   background: {palette['surface_hover_bg']};
