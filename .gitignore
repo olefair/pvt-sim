@@ -59,8 +59,9 @@ outputs/
 .cursor/mcp.json
 .worktrees/
 
-# Claude Code local settings (machine-specific)
+# Claude Code local settings / runtime (machine-specific)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Scratch diagnostic scripts (throwaway, not committed)
 _diag_*.py
