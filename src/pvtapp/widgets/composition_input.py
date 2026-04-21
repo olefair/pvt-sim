@@ -484,9 +484,12 @@ class CompositionInputWidget(QWidget):
 
         inline_form.addRow("Label", self.inline_name_edit)
         inline_form.addRow("MW (g/mol)", self.inline_mw_edit)
-        inline_form.addRow("Tc", inline_tc_row)
-        inline_form.addRow("Pc", inline_pc_row)
-        inline_form.addRow("Omega", self.inline_omega_edit)
+        # Use HTML rich text for critical-property labels so the c/b renders
+        # as a proper subscript; Unicode has no dedicated subscript-c, and
+        # the inline form labels are plain QLabels which auto-detect HTML.
+        inline_form.addRow("T<sub>c</sub>", inline_tc_row)
+        inline_form.addRow("P<sub>c</sub>", inline_pc_row)
+        inline_form.addRow("\u03c9", self.inline_omega_edit)
         self.heavy_tabs.addTab(inline_page, "Pseudo+")
 
         heavy_layout.addWidget(self.heavy_tabs)
