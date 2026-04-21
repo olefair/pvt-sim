@@ -54,8 +54,19 @@ def test_assignment_runner_smoke() -> None:
     assert result["selected_temperature_f"] == pytest.approx(125.0)
     assert result["saturation_pressure"]["converged"] is True
     assert [step["pressure_psia"] for step in result["cce"]["steps"]] == pytest.approx([1500.0, 1250.0, 1000.0])
-    assert [step["pressure_psia"] for step in result["dl"]["steps"]] == pytest.approx([500.0, 300.0, 100.0])
-    assert all("bg" in step for step in result["dl"]["steps"])
+
+    dl_steps = result["dl"]["steps"]
+    schedule_pressures = [
+        step["pressure_psia"]
+        for step in dl_steps
+        if step.get("phase") == "reservoir"
+    ]
+    assert schedule_pressures == pytest.approx([500.0, 300.0, 100.0])
+    assert all("bg" in step for step in dl_steps)
+    assert any(step.get("phase") == "bubble" for step in dl_steps)
+    assert any(step.get("phase") == "stock_tank" for step in dl_steps)
+    assert result["dl"]["validations"]["stock_bo_close_to_one"]["ok"] is True
+    assert result["dl"]["validations"]["stock_rs_close_to_zero"]["ok"] is True
 
 
 def test_assignment_bubble_point_is_robust_to_bad_initial_guesses() -> None:

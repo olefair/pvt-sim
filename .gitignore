@@ -52,6 +52,7 @@ ehthumbs.db
 
 # Generated validation / assignment outputs
 assignment_run_*.json
+outputs/
 
 # Private course / agent materials
 AGENTS.md
