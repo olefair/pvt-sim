@@ -271,7 +271,7 @@ class CompositionInputWidget(QWidget):
         """Create the widget UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(2)
 
         # Group box for composition
         group = QGroupBox("Fluid Composition")
@@ -339,7 +339,7 @@ class CompositionInputWidget(QWidget):
 
         layout.addWidget(group)
 
-        heavy_group = QGroupBox("Heavy Fraction / Inline Pseudo")
+        heavy_group = QGroupBox("Plus Fraction Details")
         heavy_layout = QVBoxLayout(heavy_group)
         self.heavy_mode = NoWheelComboBox()
         self.heavy_mode.addItem("None", HEAVY_MODE_NONE)
@@ -441,7 +441,7 @@ class CompositionInputWidget(QWidget):
         plus_tbp_button_row.addStretch()
         plus_tbp_layout.addLayout(plus_tbp_button_row)
         plus_form.addRow("TBP Cut Fit", self.plus_tbp_fit_widget)
-        self.heavy_tabs.addTab(plus_page, "Plus Fraction")
+        self.heavy_tabs.addTab(plus_page, "C7+")
 
         inline_page = QWidget()
         inline_form = QFormLayout(inline_page)
@@ -474,7 +474,7 @@ class CompositionInputWidget(QWidget):
         inline_form.addRow("Tc", inline_tc_row)
         inline_form.addRow("Pc", inline_pc_row)
         inline_form.addRow("Omega", self.inline_omega_edit)
-        self.heavy_tabs.addTab(inline_page, "Inline Pseudo")
+        self.heavy_tabs.addTab(inline_page, "Pseudo+")
 
         heavy_layout.addWidget(self.heavy_tabs)
         layout.addWidget(heavy_group)

@@ -169,7 +169,7 @@ class ConditionsInputWidget(QWidget):
         """Create the widget UI."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(1)
 
         # Calculation type selection
         calc_group = QGroupBox("Calculation Type")
@@ -329,7 +329,7 @@ class ConditionsInputWidget(QWidget):
 
     def apply_ui_scale(self, ui_scale: float) -> None:
         """Scale sidebar-only geometry that is not controlled by QSS."""
-        scaled_gap = scale_metric(5, ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        scaled_gap = scale_metric(2, ui_scale, reference_scale=DEFAULT_UI_SCALE)
         scaled_row_gap = scale_metric(4, ui_scale, reference_scale=DEFAULT_UI_SCALE)
         scaled_unit_width = scale_metric(96, ui_scale, reference_scale=DEFAULT_UI_SCALE)
 
