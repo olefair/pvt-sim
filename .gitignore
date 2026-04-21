@@ -55,22 +55,26 @@ ehthumbs.db
 assignment_run_*.json
 outputs/
 
-# Cursor — local MCP paths (see .cursor/mcp.json.example)
-.cursor/mcp.json
+# Worktrees
 .worktrees/
-
-# Claude Code local settings / runtime (machine-specific)
-.claude/settings.local.json
-.claude/scheduled_tasks.lock
 
 # Scratch diagnostic scripts (throwaway, not committed)
 _diag_*.py
 
-# Private course / agent materials
-AGENTS.md
+# Loose dev / test output captures kept on disk, never committed
+full_pytest*.txt
+full_after_install.txt
+
+# AI-assistance tooling (kept on disk for local dev, never committed)
 .agents/
+.claude/
+.cursor/
+.cursorindexingignore
+AGENTS.md
+CLAUDE.md
+PVTSIM_DEPENDENCY_MAP.md
+
+# Private course materials (kept on disk, never committed)
 LECTURE_SLIDES_MERGED.md
-TERM_PROJECT_ASSIGNMENT.md
 *lecture*slides*
-*term*project*assignment*
 *assignment*prompt*
