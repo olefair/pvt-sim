@@ -499,14 +499,19 @@ class TextOutputWidget(QWidget):
             if r.certificate is not None:
                 lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
-            lines.append("Component       x            y            K")
+            lines.append(
+                f"{'Component':<10s} "
+                f"{'x':>12s} "
+                f"{'y':>12s} "
+                f"{'K':>12s}"
+            )
             for cid in sorted(
                 set(r.display_liquid_composition)
                 | set(r.display_vapor_composition)
                 | set(r.display_k_values)
             ):
                 lines.append(
-                    f"{cid:<8s} "
+                    f"{_display_component_id(cid):<10s} "
                     f"{r.display_liquid_composition.get(cid, 0.0):>12.6f} "
                     f"{r.display_vapor_composition.get(cid, 0.0):>12.6f} "
                     f"{r.display_k_values.get(cid, 0.0):>12.6f}"
@@ -540,14 +545,19 @@ class TextOutputWidget(QWidget):
             if r.certificate is not None:
                 lines.append(f"Invariant certificate: {'pass' if r.certificate.passed else 'fail'}")
             lines.append("")
-            lines.append("Component       x            y            K")
+            lines.append(
+                f"{'Component':<10s} "
+                f"{'x':>12s} "
+                f"{'y':>12s} "
+                f"{'K':>12s}"
+            )
             for cid in sorted(
                 set(r.display_liquid_composition)
                 | set(r.display_vapor_composition)
                 | set(r.display_k_values)
             ):
                 lines.append(
-                    f"{cid:<8s} "
+                    f"{_display_component_id(cid):<10s} "
                     f"{r.display_liquid_composition.get(cid, 0.0):>12.6f} "
                     f"{r.display_vapor_composition.get(cid, 0.0):>12.6f} "
                     f"{r.display_k_values.get(cid, 0.0):>12.6f}"
