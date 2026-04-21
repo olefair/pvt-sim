@@ -77,7 +77,7 @@ PLOT_TEXT_COLOR = "#e5e7eb"
 PLOT_GRID_COLOR = "#223044"
 PLOT_LEGEND_FACE_COLOR = "#121f34"
 INLINE_PSEUDO_TOKEN = "PSEUDO_PLUS"
-INLINE_PSEUDO_FALLBACK_LABEL = "Pseudo+"
+INLINE_PSEUDO_FALLBACK_LABEL = "PSEUDO+"
 
 
 def _display_component_label(
@@ -235,6 +235,11 @@ class ResultsTableWidget(QWidget):
         self.composition_section = self._build_table_section("Compositions", self.composition_table)
         self.details_section = self._build_table_section("Details", self.details_table)
 
+        # Auxiliary table used by _display_cce to present viscosities in a
+        # separate, un-cramped section beneath phase densities.
+        self.viscosity_table = self._create_section_table()
+        self.viscosity_section = self._build_table_section("Phase Viscosities", self.viscosity_table)
+
         # Display-unit selector for saturation-point results. Hidden by default;
         # shown from _display_saturation_result so the user can flip between
         # e.g. bar and psia without re-running the calculation.
@@ -303,6 +308,7 @@ class ResultsTableWidget(QWidget):
             self.summary_section,
             self.composition_section,
             self.details_section,
+            self.viscosity_section,
             self.captured_section,
         )
 
@@ -319,6 +325,7 @@ class ResultsTableWidget(QWidget):
         self._sections_layout.addWidget(self.summary_section)
         self._sections_layout.addWidget(self.composition_section)
         self._sections_layout.addWidget(self.details_section)
+        self._sections_layout.addWidget(self.viscosity_section)
         self._sections_layout.addWidget(self.captured_section)
         self._sections_layout.addStretch(1)
 
@@ -571,16 +578,30 @@ class ResultsTableWidget(QWidget):
         self._compact_summary_columns()
         self._compact_data_columns(self.composition_table)
         self._compact_data_columns(self.details_table)
+        self._compact_data_columns(self.viscosity_table)
         self._compact_data_columns(self.captured_table)
-        for table in (self.summary_table, self.composition_table, self.details_table, self.captured_table):
+        for table in (
+            self.summary_table,
+            self.composition_table,
+            self.details_table,
+            self.viscosity_table,
+            self.captured_table,
+        ):
             self._expand_columns_to_fill(table)
 
-        for table in (self.summary_table, self.composition_table, self.details_table, self.captured_table):
+        for table in (
+            self.summary_table,
+            self.composition_table,
+            self.details_table,
+            self.viscosity_table,
+            self.captured_table,
+        ):
             self._sync_table_height(table)
 
         self.summary_section.setVisible(True)
         self.composition_section.setVisible(self._section_has_content(self.composition_table))
         self.details_section.setVisible(self._section_has_content(self.details_table))
+        self.viscosity_section.setVisible(self._section_has_content(self.viscosity_table))
         self.captured_section.setVisible(bool(self._captured_rows))
 
     def resizeEvent(self, event) -> None:
@@ -602,9 +623,12 @@ class ResultsTableWidget(QWidget):
         self.summary_section.setTitle("Summary")
         self.composition_section.setTitle("Compositions")
         self.details_section.setTitle("Details")
+        self.viscosity_section.setTitle("Phase Viscosities")
         self.summary_table.setRowCount(0)
         self.composition_table.setRowCount(0)
         self.details_table.setRowCount(0)
+        self.viscosity_table.setRowCount(0)
+        self.viscosity_table.setColumnCount(0)
         if clear_captured:
             self.clear_captured()
         self._finalize_section_tables()
@@ -641,6 +665,11 @@ class ResultsTableWidget(QWidget):
         self.summary_section.setTitle("Summary")
         self.composition_section.setTitle("Compositions")
         self.details_section.setTitle("Details")
+        self.viscosity_section.setTitle("Phase Viscosities")
+        # Reset the auxiliary viscosity table so non-CCE result types don't
+        # carry over a stale section.
+        self.viscosity_table.setRowCount(0)
+        self.viscosity_table.setColumnCount(0)
 
         # Reset per-result view state (e.g. saturation display-unit override).
         self._saturation_unit_override = None
@@ -1512,7 +1541,8 @@ class ResultsTableWidget(QWidget):
     def _display_cce(self, result: CCEResult) -> None:
         """Display CCE results."""
         self.composition_section.setTitle("Expansion")
-        self.details_section.setTitle("Phase Properties")
+        self.details_section.setTitle("Phase Densities")
+        self.viscosity_section.setTitle("Phase Viscosities")
         pressure_unit, temperature_unit = self._cce_display_units()
 
         # Summary
@@ -1533,10 +1563,10 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        # Steps in composition table
+        # Expansion table (kept compact so all 5 columns fit the right rail).
         self.composition_table.setColumnCount(5)
         self.composition_table.setHorizontalHeaderLabels([
-            f"Pressure ({pressure_unit.value})", "Rel. Volume", "Liquid Frac.", "Vapor Frac.", "Z-factor"
+            f"P ({pressure_unit.value})", "Rel. Vol.", "Liquid", "Vapor", "Z-factor"
         ])
         self.composition_table.setRowCount(len(result.steps))
 
@@ -1562,13 +1592,12 @@ class ResultsTableWidget(QWidget):
                 f"{zf:.4f}" if zf else "-"
             ))
 
-        self.details_table.setColumnCount(5)
+        # Phase Densities - smaller so column titles aren't clipped.
+        self.details_table.setColumnCount(3)
         self.details_table.setHorizontalHeaderLabels([
-            f"Pressure ({pressure_unit.value})",
+            f"P ({pressure_unit.value})",
             "Liquid Density",
             "Vapor Density",
-            "Liquid Viscosity",
-            "Vapor Viscosity",
         ])
         self.details_table.setRowCount(len(result.steps))
         for row, step in enumerate(result.steps):
@@ -1589,15 +1618,31 @@ class ResultsTableWidget(QWidget):
                     "-" if vapor_density is None or vapor_density <= 0 else f"{vapor_density:.2f}"
                 )
             )
+
+        # Phase Viscosities - companion table beneath Phase Densities so
+        # nothing gets cramped.
+        self.viscosity_table.setColumnCount(3)
+        self.viscosity_table.setHorizontalHeaderLabels([
+            f"P ({pressure_unit.value})",
+            "Liquid Viscosity",
+            "Vapor Viscosity",
+        ])
+        self.viscosity_table.setRowCount(len(result.steps))
+        for row, step in enumerate(result.steps):
+            self.viscosity_table.setItem(
+                row,
+                0,
+                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
+            )
             liquid_viscosity = step.liquid_viscosity_cp
             vapor_viscosity = step.vapor_viscosity_cp
-            self.details_table.setItem(
-                row, 3, QTableWidgetItem(
+            self.viscosity_table.setItem(
+                row, 1, QTableWidgetItem(
                     "-" if liquid_viscosity is None or liquid_viscosity <= 0 else f"{liquid_viscosity:.4f}"
                 )
             )
-            self.details_table.setItem(
-                row, 4, QTableWidgetItem(
+            self.viscosity_table.setItem(
+                row, 2, QTableWidgetItem(
                     "-" if vapor_viscosity is None or vapor_viscosity <= 0 else f"{vapor_viscosity:.4f}"
                 )
             )
@@ -1606,6 +1651,9 @@ class ResultsTableWidget(QWidget):
             QHeaderView.ResizeMode.Stretch
         )
         self.details_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.viscosity_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
 

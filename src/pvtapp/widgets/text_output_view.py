@@ -30,6 +30,16 @@ from pvtapp.schemas import (
 )
 
 
+_COMPONENT_DISPLAY_OVERRIDES = {
+    "PSEUDO_PLUS": "PSEUDO+",
+}
+
+
+def _display_component_id(comp_id: str) -> str:
+    """Map a runtime component id to the user-facing token for text reports."""
+    return _COMPONENT_DISPLAY_OVERRIDES.get(comp_id.strip(), comp_id.strip())
+
+
 def _fmt_dt(dt: Optional[datetime]) -> str:
     if dt is None:
         return ""
@@ -98,6 +108,34 @@ def _swelling_units(config: Optional[SwellingTestConfig]) -> tuple[PressureUnit,
     return config.pressure_unit, config.temperature_unit
 
 
+def _classify_omitted_step(step, field: str) -> str:
+    """Return ``"single-phase"`` or ``"missing"`` for a step with no composition.
+
+    For a liquid-composition pass, a step without a liquid phase (no liquid
+    density) is single-phase vapor rather than missing data, and vice versa
+    for vapor-composition passes.
+    """
+    if field == "liquid_composition":
+        density = getattr(step, "liquid_density_kg_per_m3", None)
+        fraction = getattr(step, "liquid_fraction", None)
+    elif field == "vapor_composition":
+        density = getattr(step, "vapor_density_kg_per_m3", None)
+        fraction = getattr(step, "vapor_fraction", None)
+    elif field == "gas_composition":
+        density = getattr(step, "gas_density_kg_per_m3", None) or getattr(
+            step, "gas_density_kg_per_sm3", None
+        )
+        fraction = None
+    else:
+        density = None
+        fraction = None
+    if density is None or (isinstance(density, (int, float)) and density <= 0):
+        return "single-phase"
+    if fraction is not None and isinstance(fraction, (int, float)) and fraction <= 0:
+        return "single-phase"
+    return "missing"
+
+
 def _format_per_step_composition_table(
     *,
     title: str,
@@ -113,10 +151,13 @@ def _format_per_step_composition_table(
     Returns [] when no step has any data in the requested field.
     """
     rows: list[tuple[float, dict[str, float]]] = []
+    omitted_reasons: dict[str, int] = {"single-phase": 0, "missing": 0}
     component_ids: list[str] = []
     for step in steps[:max_steps]:
         comp = getattr(step, field, None)
         if not comp:
+            reason = _classify_omitted_step(step, field)
+            omitted_reasons[reason] = omitted_reasons.get(reason, 0) + 1
             continue
         if not component_ids:
             component_ids = list(comp.keys())
@@ -124,17 +165,28 @@ def _format_per_step_composition_table(
     if not rows:
         return []
 
-    header = f"P ({pressure_unit.value})".rjust(10) + "  " + "  ".join(
-        f"{cid:>10s}" for cid in component_ids
+    col_width = 12
+    pressure_col_width = 10
+    header = (
+        f"{f'P ({pressure_unit.value})':>{pressure_col_width}s}"
+        + "".join(
+            f"{_display_component_id(cid):>{col_width}s}" for cid in component_ids
+        )
     )
     out = [title, header]
     for p_pa, comp in rows:
         pressure = pressure_from_pa(p_pa, pressure_unit)
-        cells = "  ".join(f"{comp.get(cid, 0.0):>10.6f}" for cid in component_ids)
-        out.append(f"{pressure:>10.3f}  {cells}")
-    omitted = len(steps) - len(rows)
-    if omitted > 0:
-        out.append(f"... ({omitted} step(s) omitted: single-phase or missing data)")
+        row_cells = "".join(
+            f"{comp.get(cid, 0.0):>{col_width}.6f}" for cid in component_ids
+        )
+        out.append(f"{pressure:>{pressure_col_width}.3f}{row_cells}")
+    omitted_bits: list[str] = []
+    if omitted_reasons["single-phase"]:
+        omitted_bits.append(f"{omitted_reasons['single-phase']} single-phase")
+    if omitted_reasons["missing"]:
+        omitted_bits.append(f"{omitted_reasons['missing']} missing data")
+    if omitted_bits:
+        out.append(f"... ({', '.join(omitted_bits)})")
     out.append("")
     return out
 
@@ -201,10 +253,14 @@ class TextOutputWidget(QWidget):
             lines.append("Feed composition (z)")
             lines.append("------------------")
             for entry in cfg.composition.components:
-                lines.append(f"{entry.component_id:<8s} {entry.mole_fraction:>12.6f}")
+                lines.append(
+                    f"{_display_component_id(entry.component_id):<8s} {entry.mole_fraction:>12.6f}"
+                )
             if cfg.composition.plus_fraction is not None:
                 plus_fraction = cfg.composition.plus_fraction
-                lines.append(f"{plus_fraction.label:<8s} {plus_fraction.z_plus:>12.6f}")
+                lines.append(
+                    f"{_display_component_id(plus_fraction.label):<8s} {plus_fraction.z_plus:>12.6f}"
+                )
             lines.append("")
             if cfg.composition.plus_fraction is not None:
                 plus_fraction = cfg.composition.plus_fraction
@@ -656,11 +712,17 @@ class TextOutputWidget(QWidget):
                 lines.append(f"Psat = {_format_pressure(r.saturation_pressure_pa, pressure_unit)}")
             lines.append("")
             lines.append(
-                f"P ({pressure_unit.value})        RelVol      rhoL      rhoV      muL      muV        z"
+                f"{f'P ({pressure_unit.value})':>10s} "
+                f"{'RelVol':>10s} "
+                f"{'\u03c1L':>9s} "
+                f"{'\u03c1V':>9s} "
+                f"{'\u03bcL':>8s} "
+                f"{'\u03bcV':>8s} "
+                f"{'Z-factor':>10s}"
             )
             for step in r.steps[:80]:
                 z = step.z_factor
-                z_txt = f"{z:.5f}" if z is not None else ""
+                z_txt = f"{z:.5f}" if z is not None else "-"
                 liquid_density = step.liquid_density_kg_per_m3
                 vapor_density = step.vapor_density_kg_per_m3
                 liquid_viscosity = step.liquid_viscosity_cp
@@ -692,7 +754,7 @@ class TextOutputWidget(QWidget):
                     f"{vapor_txt:>9s} "
                     f"{liquid_viscosity_txt:>8s} "
                     f"{vapor_viscosity_txt:>8s} "
-                    f"{z_txt:>8s}"
+                    f"{z_txt:>10s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
