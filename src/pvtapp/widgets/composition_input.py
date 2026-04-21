@@ -339,8 +339,8 @@ class CompositionInputWidget(QWidget):
 
         layout.addWidget(group)
 
-        heavy_group = QGroupBox("Plus Fraction Details")
-        heavy_layout = QVBoxLayout(heavy_group)
+        self.heavy_group = QGroupBox("Plus Fraction Details")
+        heavy_layout = QVBoxLayout(self.heavy_group)
         self.heavy_mode = NoWheelComboBox()
         self.heavy_mode.addItem("None", HEAVY_MODE_NONE)
         self.heavy_mode.addItem("Plus Fraction", HEAVY_MODE_PLUS)
@@ -477,7 +477,14 @@ class CompositionInputWidget(QWidget):
         self.heavy_tabs.addTab(inline_page, "Pseudo+")
 
         heavy_layout.addWidget(self.heavy_tabs)
-        layout.addWidget(heavy_group)
+        layout.addWidget(self.heavy_group)
+
+        # The "None" tab is retained only for backward-compat with the mode
+        # state machine (index 0 == NONE). The user-facing model is: Plus
+        # Fraction Details only surfaces when the composition has a C7+ or
+        # PSEUDO+ row, and only the matching tab(s) are visible.
+        self.heavy_tabs.tabBar().setTabVisible(0, False)
+        self.heavy_group.setVisible(False)
 
         self._sync_heavy_tab_spacing()
         self._on_heavy_mode_changed()
@@ -644,6 +651,36 @@ class CompositionInputWidget(QWidget):
             if widget is not None and widget.property("special_role") == role:
                 return row
         return None
+
+    def _sync_heavy_section_visibility(self) -> None:
+        """Show Plus Fraction Details only when the composition has a heavy row.
+
+        Visibility rules:
+        - Entire section hidden when neither C7+ nor PSEUDO+ is present.
+        - Each tab visible only when its corresponding component row exists.
+        - Auto-selects a visible tab when the previously selected one has
+          been hidden (e.g. user just removed the PSEUDO+ row while the
+          Pseudo+ tab was active).
+        """
+        if not hasattr(self, "heavy_group"):
+            return
+        has_plus = self._find_special_row(HEAVY_MODE_PLUS) is not None
+        has_inline = self._find_special_row(HEAVY_MODE_INLINE) is not None
+        tab_bar = self.heavy_tabs.tabBar()
+        # tabs: 0 = None (permanently hidden), 1 = C7+, 2 = Pseudo+
+        tab_bar.setTabVisible(1, has_plus)
+        tab_bar.setTabVisible(2, has_inline)
+        section_visible = has_plus or has_inline
+        self.heavy_group.setVisible(section_visible)
+        if not section_visible:
+            return
+        current = self.heavy_tabs.currentIndex()
+        if current == 1 and not has_plus:
+            self.heavy_tabs.setCurrentIndex(2)
+        elif current == 2 and not has_inline:
+            self.heavy_tabs.setCurrentIndex(1)
+        elif current == 0:
+            self.heavy_tabs.setCurrentIndex(1 if has_plus else 2)
 
     def _row_is_special(self, row: int, role: Optional[str] = None) -> bool:
         widget = self.table.cellWidget(row, 0)
@@ -1055,6 +1092,9 @@ class CompositionInputWidget(QWidget):
         self.table.cellChanged.connect(self._on_cell_changed)
         self.heavy_mode.currentIndexChanged.connect(self._on_heavy_mode_changed)
         self.heavy_tabs.currentChanged.connect(self._on_heavy_tab_changed)
+        # Plus Fraction Details visibility follows whichever heavy components
+        # are currently in the composition table.
+        self.composition_edited.connect(self._sync_heavy_section_visibility)
 
         for widget in [
             self.plus_label_edit,
@@ -1099,6 +1139,7 @@ class CompositionInputWidget(QWidget):
 
         self._sync_table_height()
         self._update_sum()
+        self._sync_heavy_section_visibility()
 
     def _add_row(self) -> None:
         """Add a new empty row to the table."""
