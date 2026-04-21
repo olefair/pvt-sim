@@ -264,8 +264,20 @@ class ConditionsInputWidget(QWidget):
         solver_layout.addRow("Tolerance:", self.tolerance_edit)
 
         self.max_iters_spin = NoWheelSpinBox()
-        self.max_iters_spin.setRange(1, 10000)
-        self.max_iters_spin.setValue(100)
+        # 0 is rendered as 'Auto' via setSpecialValueText and translated to
+        # the schema's hard ceiling (10 000) in get_solver_settings; this
+        # lets users skip picking an iteration cap they have no intuition
+        # for. 10 000 is ~100x the typical convergence count for every
+        # supported calc, so 'Auto' effectively means 'never give up'.
+        self.max_iters_spin.setRange(0, 10000)
+        self.max_iters_spin.setSpecialValueText("Auto")
+        self.max_iters_spin.setValue(0)
+        self.max_iters_spin.setToolTip(
+            "Auto = use the solver's hard ceiling (10,000 iterations). "
+            "Most PVT calculations converge in well under 100 iterations. "
+            "Pick a specific cap here if you want the solver to give up "
+            "sooner on non-converging runs."
+        )
         solver_layout.addRow("Max Iterations:", self.max_iters_spin)
 
         layout.addWidget(self.solver_group)
@@ -1472,7 +1484,10 @@ class ConditionsInputWidget(QWidget):
     def set_solver_settings(self, solver_settings: SolverSettings) -> None:
         """Set solver settings controls from a model."""
         self.tolerance_edit.setText(f"{solver_settings.tolerance:.6g}")
-        self.max_iters_spin.setValue(solver_settings.max_iterations)
+        # Values at or above the schema ceiling mean "Auto" in the UI; show
+        # the special text instead of a distracting 10000.
+        max_iters = solver_settings.max_iterations
+        self.max_iters_spin.setValue(0 if max_iters >= 10000 else max_iters)
 
     def set_pt_flash_config(self, config: PTFlashConfig) -> None:
         """Load PT flash config into widget controls."""
@@ -1775,9 +1790,16 @@ class ConditionsInputWidget(QWidget):
         except ValueError:
             tolerance = 1e-10
 
+        # 'Auto' in the spin box is stored as 0 and translated here to the
+        # schema's hard ceiling so the solver effectively runs until it
+        # converges or hits the invariant safety cap.
+        max_iters = self.max_iters_spin.value()
+        if max_iters <= 0:
+            max_iters = 10000
+
         return SolverSettings(
             tolerance=tolerance,
-            max_iterations=self.max_iters_spin.value(),
+            max_iterations=max_iters,
         )
 
     def get_pt_flash_config(self) -> Optional[PTFlashConfig]:
