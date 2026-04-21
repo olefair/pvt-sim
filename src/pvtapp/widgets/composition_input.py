@@ -349,7 +349,10 @@ class CompositionInputWidget(QWidget):
         # fill the sidebar, centering / offsetting the tab widget inside it.
         self.heavy_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         heavy_layout = QVBoxLayout(self.heavy_group)
-        heavy_layout.setContentsMargins(0, 2, 0, 2)
+        # Match the title-to-content breathing room that Qt's default
+        # QVBoxLayout gives the 'Fluid Composition' group above, so the
+        # two section titles have a visually consistent buffer.
+        heavy_layout.setContentsMargins(0, 9, 0, 2)
         heavy_layout.setSpacing(0)
         self.heavy_mode = NoWheelComboBox()
         self.heavy_mode.addItem("None", HEAVY_MODE_NONE)

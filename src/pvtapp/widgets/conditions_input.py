@@ -100,7 +100,18 @@ class ValidatedLineEdit(QLineEdit):
 
 
 class CompactStackedWidget(QStackedWidget):
-    """A stacked widget that sizes itself to the currently visible page."""
+    """A stacked widget that sizes itself to the currently visible page.
+
+    The default QStackedWidget reports ``heightForWidth`` / ``sizeHint`` as
+    the max over *all* children (so the parent layout reserves room for
+    the tallest hidden page). For a sidebar that switches between a short
+    Phase-Envelope panel and a tall Separator panel, that leaves a 120+
+    px band of dead space above the Tolerance/Solver section when a short
+    calc is active. PySide does not honour a Python-side override of
+    ``heightForWidth`` from QWidgetItem's internal path, so we pin the
+    widget's ``maximumHeight`` explicitly from the outside whenever the
+    current page changes (see ``ConditionsInputWidget._shrink_config_stack_to_current``).
+    """
 
     def sizeHint(self) -> QSize:
         base = super().sizeHint()
@@ -1074,9 +1085,31 @@ class ConditionsInputWidget(QWidget):
         self.eos_combo.setToolTip(
             "" if eos_enabled else "EOS selection is not used for standalone TBP assay runs."
         )
+        self._shrink_config_stack_to_current()
         self.config_stack.updateGeometry()
         self.updateGeometry()
         self.conditions_changed.emit()
+
+    def _shrink_config_stack_to_current(self) -> None:
+        """Clamp the config stack's max height to the active page's hint.
+
+        QStackedWidget's default ``heightForWidth`` is the max over every
+        child, which leaves a dead vertical band between this stack and
+        the solver-settings group below whenever the active calc-specific
+        panel is shorter than the tallest one (Separator, Swelling). Pin
+        ``setMaximumHeight`` from the current page's ``sizeHint`` so the
+        layout packs tightly underneath.
+        """
+        current = self.config_stack.currentWidget()
+        if current is None:
+            self.config_stack.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+            return
+        current.adjustSize()
+        hint = current.sizeHint().height()
+        if hint <= 0:
+            hint = current.minimumSizeHint().height()
+        pad = scale_metric(4, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE)
+        self.config_stack.setMaximumHeight(max(hint + pad, 0))
 
     def _validate_pressure(self) -> bool:
         """Validate pressure input."""
