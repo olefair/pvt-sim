@@ -2858,6 +2858,7 @@ class ResultsPlotWidget(QWidget):
                 values=[step.z_factor for step in result.steps],
                 color="#8b5cf6",
                 marker="d",
+                default_selected=True,
             ),
             "liquid_viscosity": PlotSeriesSpec(
                 key="liquid_viscosity",
@@ -3184,10 +3185,21 @@ class ResultsPlotWidget(QWidget):
             return
 
         clusters = self._cluster_selected_series(specs)
+        # Pick a grid that keeps each panel reasonably square: with four or
+        # more clusters we switch to a near-square (rows x cols) grid so
+        # individual plots don't get vertically crushed. Stacked Nx1 is
+        # fine for up to 3 clusters.
+        n_clusters = len(clusters)
+        if n_clusters >= 4:
+            import math
+            cols = math.ceil(math.sqrt(n_clusters))
+            rows = math.ceil(n_clusters / cols)
+        else:
+            rows, cols = n_clusters, 1
         axes: list[object] = []
         for index in range(len(clusters)):
             share_axis = axes[0] if axes else None
-            axis = self.figure.add_subplot(len(clusters), 1, index + 1, sharex=share_axis)
+            axis = self.figure.add_subplot(rows, cols, index + 1, sharex=share_axis)
             axis.set_facecolor(PLOT_CANVAS_COLOR)
             axes.append(axis)
 
@@ -3257,7 +3269,17 @@ class ResultsPlotWidget(QWidget):
             return
 
         if len(axes) > 1:
-            self.figure.subplots_adjust(left=0.12, right=0.97, top=0.93, bottom=0.09, hspace=0.34)
+            if cols > 1:
+                # Grid layout (e.g. 2x2): give extra horizontal breathing room
+                # between columns so y-axis labels don't clash with the
+                # preceding column's tick labels.
+                self.figure.subplots_adjust(
+                    left=0.10, right=0.97, top=0.92, bottom=0.11, hspace=0.42, wspace=0.32
+                )
+            else:
+                self.figure.subplots_adjust(
+                    left=0.12, right=0.97, top=0.93, bottom=0.09, hspace=0.34
+                )
         else:
             self.figure.tight_layout()
 
@@ -3275,10 +3297,21 @@ class ResultsPlotWidget(QWidget):
             return
 
         clusters = self._cluster_selected_series(specs)
+        # Pick a grid that keeps each panel reasonably square: with four or
+        # more clusters we switch to a near-square (rows x cols) grid so
+        # individual plots don't get vertically crushed. Stacked Nx1 is
+        # fine for up to 3 clusters.
+        n_clusters = len(clusters)
+        if n_clusters >= 4:
+            import math
+            cols = math.ceil(math.sqrt(n_clusters))
+            rows = math.ceil(n_clusters / cols)
+        else:
+            rows, cols = n_clusters, 1
         axes: list[object] = []
         for index in range(len(clusters)):
             share_axis = axes[0] if axes else None
-            axis = self.figure.add_subplot(len(clusters), 1, index + 1, sharex=share_axis)
+            axis = self.figure.add_subplot(rows, cols, index + 1, sharex=share_axis)
             axis.set_facecolor(PLOT_CANVAS_COLOR)
             axes.append(axis)
 
