@@ -629,7 +629,7 @@ class PTFlashConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output"
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output"
     )
 
@@ -680,7 +680,7 @@ class StabilityAnalysisConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output",
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output",
     )
 
@@ -772,7 +772,7 @@ class CCEConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output",
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output",
     )
 
@@ -827,7 +827,7 @@ class SaturationPointConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output"
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output"
     )
 
@@ -871,7 +871,7 @@ class DLConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output",
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output",
     )
 
@@ -969,7 +969,7 @@ class SwellingTestConfig(BaseModel):
         description="Preferred pressure unit for GUI input/output",
     )
     temperature_unit: TemperatureUnit = Field(
-        default=TemperatureUnit.C,
+        default=TemperatureUnit.F,
         description="Preferred temperature unit for GUI input/output",
     )
 

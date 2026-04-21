@@ -78,3 +78,26 @@ PVTSIM_DEPENDENCY_MAP.md
 LECTURE_SLIDES_MERGED.md
 *lecture*slides*
 *assignment*prompt*
+
+# macOS metadata
+.DS_Store
+
+# JetBrains IDEs
+.idea/
+
+# Coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+
+# Local-only VS Code overrides (tracked settings.json / tasks.json / extensions.json stay committed)
+.vscode/*.local.*
+
+# Log files (force-included in Debug-mode zips by zip_repo.ps1, excluded from Share-mode zips)
+*.log

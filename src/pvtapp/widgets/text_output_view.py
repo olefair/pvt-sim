@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from datetime import datetime
 from typing import Optional
 
@@ -35,10 +36,112 @@ _COMPONENT_DISPLAY_OVERRIDES = {
     "PSEUDO_PLUS": "PSEUDO+",
 }
 
+# Lines in the `_format` output that start with this sentinel are pre-formatted
+# HTML fragments and are passed through to `setHtml` unescaped; all other lines
+# are HTML-escaped before being wrapped in the outer <pre> block. Using a byte
+# that will never appear in real report text keeps the plumbing trivial.
+_HTML_LINE_MARK = "\x01"
+
+# Colours used for the feed-composition normalization diff (and, going forward,
+# any other inline-colored text in this report). Chosen to match the dark-mode
+# palette used elsewhere in the app (Tailwind 500-series greens/reds).
+_DIFF_GREEN = "#22c55e"
+_DIFF_RED = "#ef4444"
+
 
 def _display_component_id(comp_id: str) -> str:
     """Map a runtime component id to the user-facing token for text reports."""
     return _COMPONENT_DISPLAY_OVERRIDES.get(comp_id.strip(), comp_id.strip())
+
+
+def _render_feed_composition_lines(composition) -> list[str]:
+    """Render the ``Feed composition (z)`` section.
+
+    If the user-entered mole fractions already sum to 1.0 (within a tight
+    tolerance), the classic single-column format is returned unchanged. If
+    they do not, the values are silently normalized for the simulator run —
+    so the echo is rendered with a parenthesised delta column showing how
+    each row was adjusted, plus a trailing "Total: 1.000000 (Normalized
+    from <input-sum>)" line. Negative deltas are coloured red, positive
+    deltas green, and the "(Normalized from …)" footer is green. The
+    per-row delta lines and the footer are emitted as HTML fragments
+    (prefixed with ``_HTML_LINE_MARK``); all other lines are plain text.
+    """
+    lines: list[str] = ["Feed composition (z)", "------------------"]
+
+    entries: list[tuple[str, float]] = [
+        (_display_component_id(entry.component_id), float(entry.mole_fraction))
+        for entry in composition.components
+    ]
+    if composition.plus_fraction is not None:
+        pf = composition.plus_fraction
+        entries.append((_display_component_id(pf.label), float(pf.z_plus)))
+
+    input_sum = sum(v for _, v in entries)
+    needs_norm = abs(input_sum - 1.0) > 1e-9 and input_sum > 0.0
+
+    if not needs_norm:
+        for cid, v in entries:
+            lines.append(f"{cid:<8s} {v:>12.6f}")
+        return lines
+
+    # Column layout:  "<cid:8s> <value:12.6f>   (<signed delta:9>)"
+    # The separator underline and the trailing footer both sit under the
+    # parenthesised delta column, so the "(Normalized from …)" text aligns
+    # naturally with each row's "(+/-X.XXXXXX)".
+    prefix_width = 8 + 1 + 12 + 3  # cid + space + value + 3 spaces
+    sep_width = 11                 # matches "(+X.XXXXXX)" / "(-X.XXXXXX)"
+
+    for cid, v in entries:
+        v_norm = v / input_sum
+        delta = v_norm - v
+        delta_str = f"({delta:+.6f})"
+        color = _DIFF_GREEN if delta > 0 else (_DIFF_RED if delta < 0 else None)
+        escaped_prefix = html.escape(f"{cid:<8s} {v_norm:>12.6f}   ")
+        if color is None:
+            lines.append(_HTML_LINE_MARK + escaped_prefix + html.escape(delta_str))
+        else:
+            lines.append(
+                _HTML_LINE_MARK
+                + escaped_prefix
+                + f'<span style="color:{color};">{html.escape(delta_str)}</span>'
+            )
+
+    lines.append(" " * prefix_width + "─" * sep_width)
+
+    total_prefix = html.escape(f"{'Total:':<8s} {1.0:>12.6f}   ")
+    footer_text = f"(Normalized from {input_sum:.6f})"
+    lines.append(
+        _HTML_LINE_MARK
+        + total_prefix
+        + f'<span style="color:{_DIFF_GREEN};">{html.escape(footer_text)}</span>'
+    )
+
+    return lines
+
+
+def _lines_to_html(lines: list[str]) -> str:
+    """Wrap ``_format`` output for ``QTextEdit.setHtml``.
+
+    Plain-text lines are HTML-escaped so that any stray ``<`` / ``>`` / ``&``
+    (e.g. future formula echoes) render as literal characters. Lines that
+    begin with ``_HTML_LINE_MARK`` are already HTML fragments — we strip the
+    sentinel and pass them through unchanged. The final body is wrapped in
+    a ``<pre>`` block pinned to Consolas so monospace column alignment is
+    preserved across the entire report.
+    """
+    rendered: list[str] = []
+    for line in lines:
+        if line.startswith(_HTML_LINE_MARK):
+            rendered.append(line[len(_HTML_LINE_MARK):])
+        else:
+            rendered.append(html.escape(line))
+    body = "\n".join(rendered)
+    return (
+        "<pre style=\"font-family:Consolas,'Courier New',monospace; margin:0;\">"
+        f"{body}"
+        "</pre>"
+    )
 
 
 def _fmt_dt(dt: Optional[datetime]) -> str:
@@ -75,37 +178,37 @@ def _format_optional_measurement(value: Optional[float], *, precision: int, unit
 
 def _pt_flash_units(config: Optional[PTFlashConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
 def _saturation_units(config: Optional[SaturationPointConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
 def _cce_units(config: Optional[CCEConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
 def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
 def _stability_units(config: Optional[StabilityAnalysisConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
 def _swelling_units(config: Optional[SwellingTestConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
-        return PressureUnit.PSIA, TemperatureUnit.C
+        return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
 
 
@@ -237,7 +340,7 @@ class TextOutputWidget(QWidget):
         self.text.setPlainText("(no results yet)")
 
     def display_result(self, result: RunResult) -> None:
-        self.text.setPlainText(self._format(result))
+        self.text.setHtml(self._format(result))
 
     def _format(self, result: RunResult) -> str:
         cfg = result.config
@@ -256,19 +359,13 @@ class TextOutputWidget(QWidget):
             lines.append(f"Duration: {result.duration_seconds:.3f} s")
         lines.append("")
 
-        # Composition echo
+        # Composition echo. Renders a parenthesised diff column + "(Normalized
+        # from <sum>)" footer when the user-entered mole fractions do not sum
+        # to exactly 1.0 — otherwise falls through to the classic single-column
+        # format. Colouring on the diff/footer is applied via the sentinel-tagged
+        # HTML lines handled by `_lines_to_html` at the end of this function.
         if cfg.composition is not None:
-            lines.append("Feed composition (z)")
-            lines.append("------------------")
-            for entry in cfg.composition.components:
-                lines.append(
-                    f"{_display_component_id(entry.component_id):<8s} {entry.mole_fraction:>12.6f}"
-                )
-            if cfg.composition.plus_fraction is not None:
-                plus_fraction = cfg.composition.plus_fraction
-                lines.append(
-                    f"{_display_component_id(plus_fraction.label):<8s} {plus_fraction.z_plus:>12.6f}"
-                )
+            lines.extend(_render_feed_composition_lines(cfg.composition))
             lines.append("")
             if cfg.composition.plus_fraction is not None:
                 plus_fraction = cfg.composition.plus_fraction
@@ -739,14 +836,30 @@ class TextOutputWidget(QWidget):
             # is exactly one monospace cell so character-count alignment
             # equals visual alignment.
             cce_col = 12
+            # Two-row header: variable name on top, units in square
+            # brackets underneath. The unit row absorbs everything that
+            # used to crowd the variable name (psia, V/Vsat, kg/m³, cP)
+            # which lets the variable names stay short and uniform across
+            # all columns — "Rel. Vol." matches the results-panel
+            # Expansion table, and densities / viscosities now carry
+            # their (previously missing) kg/m³ and cP labels.
             lines.append(
-                f"{f'P ({pressure_unit.value})':>{cce_col}s}"
-                f"{'RelVol':>{cce_col}s}"
+                f"{'P':>{cce_col}s}"
+                f"{'Rel. Vol.':>{cce_col}s}"
                 f"{'\u03c1L':>{cce_col}s}"
                 f"{'\u03c1V':>{cce_col}s}"
                 f"{'\u03bcL':>{cce_col}s}"
                 f"{'\u03bcV':>{cce_col}s}"
                 f"{'Z\u2011factor':>{cce_col}s}"
+            )
+            lines.append(
+                f"{f'[{pressure_unit.value}]':>{cce_col}s}"
+                f"{'[V/Vsat]':>{cce_col}s}"
+                f"{'[kg/m\u00b3]':>{cce_col}s}"
+                f"{'[kg/m\u00b3]':>{cce_col}s}"
+                f"{'[cP]':>{cce_col}s}"
+                f"{'[cP]':>{cce_col}s}"
+                f"{'[\u2013]':>{cce_col}s}"
             )
             for step in r.steps[:80]:
                 z = step.z_factor
@@ -1065,4 +1178,4 @@ class TextOutputWidget(QWidget):
             lines.append("-----")
             lines.append(result.error_message)
 
-        return "\n".join(lines)
+        return _lines_to_html(lines)

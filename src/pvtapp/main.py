@@ -43,7 +43,11 @@ from pvtapp.schemas import (
     ComponentEntry,
     CalculationType,
     EOSType,
+    PressureUnit,
     SaturationPointConfig,
+    TemperatureUnit,
+    pressure_from_pa,
+    temperature_from_k,
 )
 from pvtapp.widgets import (
     CompositionInputWidget,
@@ -984,6 +988,13 @@ class PVTSimulatorWindow(QMainWindow):
             if filename:
                 self._export_json(result, filename)
 
+        elif format == "excel":
+            filename, _ = QFileDialog.getSaveFileName(
+                self, "Export Excel", "", "Excel Workbook (*.xlsx)"
+            )
+            if filename:
+                self._export_excel(result, filename)
+
     def _export_csv(self, result: RunResult, filename: str) -> None:
         """Export result to CSV file."""
         if result.status != RunStatus.COMPLETED:
@@ -1109,15 +1120,23 @@ class PVTSimulatorWindow(QMainWindow):
                             res.vapor_composition.get(comp, 0),
                             res.k_values.get(comp, 0),
                         ])
+                # CSV export uses the repo-wide US-petroleum defaults
+                # (psia, °F) for every pressure/temperature column, so the
+                # file the user gets out of "Export CSV" matches what they
+                # see in the results table and the text-output panel.
                 elif result.phase_envelope_result:
-                    writer.writerow(["Type", "Temperature_C", "Pressure_bar"])
+                    writer.writerow(["Type", "Temperature_F", "Pressure_psia"])
                     for point in result.phase_envelope_result.continuous_curve_points():
-                        writer.writerow([point.point_type, point.temperature_k - 273.15, point.pressure_pa / 1e5])
+                        writer.writerow([
+                            point.point_type,
+                            temperature_from_k(point.temperature_k, TemperatureUnit.F),
+                            pressure_from_pa(point.pressure_pa, PressureUnit.PSIA),
+                        ])
                 elif result.cce_result:
-                    writer.writerow(["Pressure_bar", "RelativeVolume", "LiquidFraction", "VaporFraction", "ZFactor"])
+                    writer.writerow(["Pressure_psia", "RelativeVolume", "LiquidFraction", "VaporFraction", "ZFactor"])
                     for step in result.cce_result.steps:
                         writer.writerow([
-                            step.pressure_pa / 1e5,
+                            pressure_from_pa(step.pressure_pa, PressureUnit.PSIA),
                             step.relative_volume,
                             step.liquid_fraction,
                             step.vapor_fraction,
@@ -1126,7 +1145,7 @@ class PVTSimulatorWindow(QMainWindow):
                 elif result.dl_result:
                     writer.writerow(
                         [
-                            "Pressure_bar",
+                            "Pressure_psia",
                             "RsD",
                             "RsDb",
                             "Bo",
@@ -1138,7 +1157,7 @@ class PVTSimulatorWindow(QMainWindow):
                     )
                     for step in result.dl_result.steps:
                         writer.writerow([
-                            step.pressure_pa / 1e5,
+                            pressure_from_pa(step.pressure_pa, PressureUnit.PSIA),
                             step.rs,
                             result.dl_result.rsi,
                             step.bo,
@@ -1150,7 +1169,7 @@ class PVTSimulatorWindow(QMainWindow):
                 elif result.cvd_result:
                     writer.writerow(
                         [
-                            "Pressure_bar",
+                            "Pressure_psia",
                             "LiquidDropout",
                             "GasProduced",
                             "CumulativeGasProduced",
@@ -1162,7 +1181,7 @@ class PVTSimulatorWindow(QMainWindow):
                     )
                     for step in result.cvd_result.steps:
                         writer.writerow([
-                            step.pressure_pa / 1e5,
+                            pressure_from_pa(step.pressure_pa, PressureUnit.PSIA),
                             step.liquid_dropout,
                             step.gas_produced,
                             step.cumulative_gas_produced,
@@ -1176,7 +1195,7 @@ class PVTSimulatorWindow(QMainWindow):
                         [
                             "AddedGas_mol_per_mol_oil",
                             "TotalMixture_mol_per_mol_oil",
-                            "BubblePressure_bar",
+                            "BubblePressure_psia",
                             "SwellingFactor",
                             "SaturatedLiquidMolarVolume_m3_per_mol",
                             "SaturatedLiquidDensity_kg_m3",
@@ -1189,7 +1208,8 @@ class PVTSimulatorWindow(QMainWindow):
                             [
                                 step.added_gas_moles_per_mole_oil,
                                 step.total_mixture_moles_per_mole_oil,
-                                None if step.bubble_pressure_pa is None else step.bubble_pressure_pa / 1e5,
+                                None if step.bubble_pressure_pa is None
+                                else pressure_from_pa(step.bubble_pressure_pa, PressureUnit.PSIA),
                                 step.swelling_factor,
                                 step.saturated_liquid_molar_volume_m3_per_mol,
                                 step.saturated_liquid_density_kg_per_m3,
@@ -1201,8 +1221,8 @@ class PVTSimulatorWindow(QMainWindow):
                     writer.writerow(
                         [
                             "Stage",
-                            "Pressure_bar",
-                            "Temperature_C",
+                            "Pressure_psia",
+                            "Temperature_F",
                             "VaporFraction",
                             "LiquidMoles",
                             "VaporMoles",
@@ -1216,8 +1236,8 @@ class PVTSimulatorWindow(QMainWindow):
                     for stage in result.separator_result.stages:
                         writer.writerow([
                             stage.stage_name,
-                            stage.pressure_pa / 1e5,
-                            stage.temperature_k - 273.15,
+                            pressure_from_pa(stage.pressure_pa, PressureUnit.PSIA),
+                            temperature_from_k(stage.temperature_k, TemperatureUnit.F),
                             stage.vapor_fraction,
                             stage.liquid_moles,
                             stage.vapor_moles,
@@ -1248,6 +1268,31 @@ class PVTSimulatorWindow(QMainWindow):
 
             self._set_status_message(f"Exported: {Path(filename).name}")
 
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
+
+    def _export_excel(self, result: RunResult, filename: str) -> None:
+        """Export result to a multi-sheet Excel (.xlsx) workbook.
+
+        Delegates to :mod:`pvtapp.excel_export`, which builds a calc-type
+        specific workbook: a "Summary" sheet with run metadata + result
+        highlights, plus per-section data sheets (Expansion / Phase
+        Densities / Phase Viscosities / Per-Step Compositions, etc.).
+        Pressures / temperatures follow the repo-wide US-petroleum
+        display units (psia, °F) so the workbook matches what the user
+        sees in the GUI tables and the text-output panel.
+        """
+        if result.status != RunStatus.COMPLETED:
+            QMessageBox.warning(
+                self,
+                "Export Error",
+                "Excel export is only available for completed calculations",
+            )
+            return
+        try:
+            from pvtapp.excel_export import export_result_to_excel
+            export_result_to_excel(result, filename)
+            self._set_status_message(f"Exported: {Path(filename).name}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
 

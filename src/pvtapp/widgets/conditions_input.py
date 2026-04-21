@@ -175,6 +175,13 @@ class ConditionsInputWidget(QWidget):
             self.dl_pressure_unit.currentData(),
             PressureUnit,
         )
+        # Cache the phase-envelope temperature unit so we can rescale the
+        # min / max spinboxes in place when the unit selector changes —
+        # same pattern the CCE / DL widgets use for their own temp combos.
+        self._env_temperature_unit_value = self._coerce_combo_enum(
+            self.env_temperature_unit.currentData(),
+            TemperatureUnit,
+        )
         self._sync_cce_pressure_affordances()
         self._sync_dl_pressure_affordances()
         self._sync_cce_generated_pressure_points(force=True)
@@ -416,14 +423,23 @@ class ConditionsInputWidget(QWidget):
         layout = QFormLayout(widget)
         self._configure_form_layout(layout)
 
-        # Temperature range (default units: F, US petroleum engineering convention).
+        # Temperature range with proper unit-selector dropdowns matching
+        # every other calc-type input section. Both min and max share a
+        # single unit combo (they must be in the same unit for the range
+        # validator); changing it rescales both spinboxes in place.
+        self.env_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(
+            self.env_temperature_unit, TemperatureUnit.F
+        )
+
         t_min_layout = QHBoxLayout()
         self.env_t_min = NoWheelDoubleSpinBox()
         self.env_t_min.setRange(-400, 1200)
         self.env_t_min.setValue(-190.0)  # ~150 K in F
         self.env_t_min.setDecimals(2)
-        t_min_layout.addWidget(self.env_t_min)
-        t_min_layout.addWidget(QLabel("F"))
+        self._configure_unit_row(
+            t_min_layout, self.env_t_min, self.env_temperature_unit
+        )
         layout.addRow("Min Temperature:", t_min_layout)
 
         t_max_layout = QHBoxLayout()
@@ -431,8 +447,10 @@ class ConditionsInputWidget(QWidget):
         self.env_t_max.setRange(-400, 1200)
         self.env_t_max.setValue(620.0)  # ~600 K in F
         self.env_t_max.setDecimals(2)
+        # The unit combo is shared with min; add the max spinbox alone
+        # (a second unit selector next to max would suggest you can pick
+        # different units for min vs max, which would break the validator).
         t_max_layout.addWidget(self.env_t_max)
-        t_max_layout.addWidget(QLabel("F"))
         layout.addRow("Max Temperature:", t_max_layout)
 
         # Number of points
@@ -490,9 +508,13 @@ class ConditionsInputWidget(QWidget):
         self.stability_feed_phase_combo.addItem("Vapor", StabilityFeedPhase.VAPOR)
         layout.addRow("Feed Phase:", self.stability_feed_phase_combo)
 
-        self.stability_use_gdem = CheckBox("Enable GDEM acceleration")
-        self.stability_use_gdem.setChecked(True)
-        layout.addRow("Acceleration:", self.stability_use_gdem)
+        # Note: GDEM acceleration is no longer exposed in the GUI. The log-space
+        # TPD solver always runs with GDEM enabled (see StabilityAnalysisConfig
+        # default and pvtcore.stability.analysis), and its own backup-and-reject
+        # guard handles the pathological cases (near-critical, non-contractive
+        # SS) automatically — there's no production scenario where the user
+        # should be flipping this off by hand. The scalar kept at the schema
+        # default so behavior is unchanged; we just stopped leaking it.
 
         self.stability_random_trials = NoWheelSpinBox()
         self.stability_random_trials.setRange(0, 12)
@@ -811,7 +833,9 @@ class ConditionsInputWidget(QWidget):
         layout.addWidget(stages_label)
 
         self.separator_stage_table = QTableWidget(0, 3)
-        self.separator_stage_table.setHorizontalHeaderLabels(["Name", "Pressure (bar)", "Temperature (C)"])
+        self.separator_stage_table.setHorizontalHeaderLabels(
+            ["Name", "Pressure (psia)", "Temperature (°F)"]
+        )
         self.separator_stage_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.separator_stage_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.separator_stage_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -827,10 +851,14 @@ class ConditionsInputWidget(QWidget):
         button_row.addStretch()
         layout.addLayout(button_row)
 
+        # Default separator stages in the new US-petroleum defaults
+        # (psia, °F). Values rounded to reasonable industry starting
+        # points for an HP/LP train: an HP separator near 500 psia / 120 °F
+        # and an LP separator near 100 psia / 80 °F.
         self._set_separator_stage_rows(
             [
-                {"name": "HP", "pressure_bar": 30.0, "temperature_c": 46.85},
-                {"name": "LP", "pressure_bar": 5.0, "temperature_c": 26.85},
+                {"name": "HP", "pressure_psia": 500.0, "temperature_f": 120.0},
+                {"name": "LP", "pressure_psia": 100.0, "temperature_f": 80.0},
             ]
         )
         return widget
@@ -908,15 +936,22 @@ class ConditionsInputWidget(QWidget):
         self,
         *,
         name: str = "",
-        pressure_bar: float = 10.0,
-        temperature_c: float = 25.0,
+        pressure_psia: float = 150.0,
+        temperature_f: float = 80.0,
     ) -> None:
-        """Append a separator-stage row."""
+        """Append a separator-stage row (values in psia / °F).
+
+        The widget columns are labelled "Pressure (psia)" and
+        "Temperature (°F)", so the in-memory parameter names mirror
+        those units. Callers that construct rows from a loaded
+        ``SeparatorConfig`` must convert Pa→psia and K→°F before
+        forwarding the values here.
+        """
         row = self.separator_stage_table.rowCount()
         self.separator_stage_table.insertRow(row)
         self.separator_stage_table.setItem(row, 0, QTableWidgetItem(name))
-        self.separator_stage_table.setItem(row, 1, QTableWidgetItem(f"{pressure_bar:.2f}"))
-        self.separator_stage_table.setItem(row, 2, QTableWidgetItem(f"{temperature_c:.2f}"))
+        self.separator_stage_table.setItem(row, 1, QTableWidgetItem(f"{pressure_psia:.2f}"))
+        self.separator_stage_table.setItem(row, 2, QTableWidgetItem(f"{temperature_f:.2f}"))
 
     def _remove_selected_separator_stage_rows(self) -> None:
         """Remove selected separator-stage rows."""
@@ -925,13 +960,35 @@ class ConditionsInputWidget(QWidget):
             self.separator_stage_table.removeRow(row)
 
     def _set_separator_stage_rows(self, stages: list[dict[str, float | str]]) -> None:
-        """Replace the separator-stage table contents."""
+        """Replace the separator-stage table contents.
+
+        Each row dict must carry ``pressure_psia`` and ``temperature_f``
+        (matching the widget's display units). Legacy ``pressure_bar`` /
+        ``temperature_c`` keys are accepted and auto-converted so stale
+        serialized widget state doesn't silently mis-populate the table.
+        """
         self.separator_stage_table.setRowCount(0)
         for stage in stages:
+            if "pressure_psia" in stage:
+                pressure_psia = float(stage["pressure_psia"])
+            elif "pressure_bar" in stage:
+                pressure_psia = pressure_from_pa(
+                    float(stage["pressure_bar"]) * 1e5, PressureUnit.PSIA
+                )
+            else:
+                pressure_psia = 150.0
+            if "temperature_f" in stage:
+                temperature_f = float(stage["temperature_f"])
+            elif "temperature_c" in stage:
+                temperature_f = temperature_from_k(
+                    float(stage["temperature_c"]) + 273.15, TemperatureUnit.F
+                )
+            else:
+                temperature_f = 80.0
             self._add_separator_stage_row(
                 name=str(stage.get("name", "")),
-                pressure_bar=float(stage.get("pressure_bar", 10.0)),
-                temperature_c=float(stage.get("temperature_c", 25.0)),
+                pressure_psia=pressure_psia,
+                temperature_f=temperature_f,
             )
 
     def _add_swelling_gas_row(
@@ -1061,6 +1118,7 @@ class ConditionsInputWidget(QWidget):
         )
         self.cce_temperature_unit.currentIndexChanged.connect(self._on_cce_temperature_unit_changed)
         self.cce_pressure_unit.currentIndexChanged.connect(self._on_cce_pressure_unit_changed)
+        self.env_temperature_unit.currentIndexChanged.connect(self._on_env_temperature_unit_changed)
         self.dl_temperature_unit.currentIndexChanged.connect(self._on_dl_temperature_unit_changed)
         self.dl_pressure_unit.currentIndexChanged.connect(self._on_dl_pressure_unit_changed)
         self.swelling_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
@@ -1070,7 +1128,6 @@ class ConditionsInputWidget(QWidget):
         self.stability_pressure_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.stability_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.stability_feed_phase_combo.currentIndexChanged.connect(self._emit_conditions_changed)
-        self.stability_use_gdem.toggled.connect(self._emit_conditions_changed)
         self.stability_random_trials.valueChanged.connect(self._emit_conditions_changed)
         self.stability_random_seed.valueChanged.connect(self._emit_conditions_changed)
         self.stability_max_eos_failures.valueChanged.connect(self._emit_conditions_changed)
@@ -1501,6 +1558,23 @@ class ConditionsInputWidget(QWidget):
             self._cce_temperature_unit_value = new_unit
         self.conditions_changed.emit()
 
+    def _on_env_temperature_unit_changed(self, *_args) -> None:
+        """Rescale the min / max temperature spinboxes when the unit changes.
+
+        The phase-envelope widget uses a single unit selector shared between
+        the min and max inputs (they must be in the same unit for the
+        range validator). On change, convert both spinboxes in place.
+        """
+        new_unit = self._coerce_combo_enum(
+            self.env_temperature_unit.currentData(), TemperatureUnit
+        )
+        old_unit = self._env_temperature_unit_value
+        if new_unit != old_unit:
+            self._convert_temperature_spinbox_unit(self.env_t_min, old_unit, new_unit)
+            self._convert_temperature_spinbox_unit(self.env_t_max, old_unit, new_unit)
+            self._env_temperature_unit_value = new_unit
+        self.conditions_changed.emit()
+
     def _on_cce_pressure_unit_changed(self, *_args) -> None:
         """Convert visible CCE pressures when the unit selector changes."""
         new_unit = self._coerce_combo_enum(self.cce_pressure_unit.currentData(), PressureUnit)
@@ -1688,15 +1762,30 @@ class ConditionsInputWidget(QWidget):
         self.stability_temperature_edit.setText(
             f"{temperature_from_k(config.temperature_k, temperature_unit):.6g}"
         )
-        self.stability_use_gdem.setChecked(config.use_gdem)
+        # GDEM acceleration is no longer exposed as a GUI toggle — the
+        # stability solver always runs with its schema default. A loaded
+        # config that happens to set ``use_gdem=False`` is still honored
+        # when the engine runs (the value is preserved on the config),
+        # but there's nowhere to flip it from the widget.
         self.stability_random_trials.setValue(config.n_random_trials)
         self.stability_random_seed.setValue(0 if config.random_seed is None else int(config.random_seed))
         self.stability_max_eos_failures.setValue(config.max_eos_failures_per_trial)
 
     def set_phase_envelope_config(self, config: PhaseEnvelopeConfig) -> None:
-        """Load phase-envelope config into widget controls."""
-        self.env_t_min.setValue(config.temperature_min_k - 273.15)
-        self.env_t_max.setValue(config.temperature_max_k - 273.15)
+        """Load phase-envelope config into widget controls.
+
+        Uses the config's current temperature-unit dropdown selection so
+        the spinbox values stay consistent with the visible unit label.
+        PhaseEnvelopeConfig itself still stores only K on the schema;
+        the GUI-side unit is a UI preference — we read it from the combo
+        and rescale the incoming Kelvin values accordingly.
+        """
+        unit = self._coerce_combo_enum(
+            self.env_temperature_unit.currentData(), TemperatureUnit
+        )
+        self.env_t_min.setValue(temperature_from_k(config.temperature_min_k, unit))
+        self.env_t_max.setValue(temperature_from_k(config.temperature_max_k, unit))
+        self._env_temperature_unit_value = unit
         self.env_n_points.setValue(config.n_points)
         method_index = self.env_tracing_method.findData(config.tracing_method)
         if method_index >= 0:
@@ -1839,10 +1928,18 @@ class ConditionsInputWidget(QWidget):
         return t_k, pressure_unit, temperature_unit, None, p_end_pa, self.dl_n_steps.value()
 
     def set_cvd_config(self, config: CVDConfig) -> None:
-        """Load CVD config into widget controls."""
-        self.cvd_temperature.setValue(config.temperature_k - 273.15)
-        self.cvd_p_dew.setValue(config.dew_pressure_pa / 1e5)
-        self.cvd_p_end.setValue(config.pressure_end_pa / 1e5)
+        """Load CVD config into widget controls.
+
+        The CVD widget displays temperature in °F and pressures in psia;
+        ``K - 273.15`` (°C) and ``Pa / 1e5`` (bar) are the wrong scales
+        and produce a silent roundtrip corruption (e.g. 380 K → displayed
+        as "106.85" in a °F-labelled field → read back as 106.85 °F →
+        314.73 K, off by 65 K). Use the schema conversion helpers with
+        the widget's actual display units instead.
+        """
+        self.cvd_temperature.setValue(temperature_from_k(config.temperature_k, TemperatureUnit.F))
+        self.cvd_p_dew.setValue(pressure_from_pa(config.dew_pressure_pa, PressureUnit.PSIA))
+        self.cvd_p_end.setValue(pressure_from_pa(config.pressure_end_pa, PressureUnit.PSIA))
         self.cvd_n_steps.setValue(config.n_steps)
 
     def set_swelling_test_config(self, config: SwellingTestConfig) -> None:
@@ -1874,16 +1971,27 @@ class ConditionsInputWidget(QWidget):
         )
 
     def set_separator_config(self, config: SeparatorConfig) -> None:
-        """Load separator config into widget controls."""
-        self.separator_reservoir_pressure.setValue(config.reservoir_pressure_pa / 1e5)
-        self.separator_reservoir_temperature.setValue(config.reservoir_temperature_k - 273.15)
+        """Load separator config into widget controls.
+
+        The separator widget displays reservoir pressure in psia,
+        temperature in °F, and the stage table uses the same (psia, °F)
+        convention after the repo-wide default switch. Previously this
+        loader hardcoded ``Pa / 1e5`` (bar) and ``K - 273.15`` (°C) which
+        mismatched the widget labels and corrupted every roundtrip.
+        """
+        self.separator_reservoir_pressure.setValue(
+            pressure_from_pa(config.reservoir_pressure_pa, PressureUnit.PSIA)
+        )
+        self.separator_reservoir_temperature.setValue(
+            temperature_from_k(config.reservoir_temperature_k, TemperatureUnit.F)
+        )
         self.separator_include_stock_tank.setChecked(config.include_stock_tank)
         self._set_separator_stage_rows(
             [
                 {
                     "name": stage.name,
-                    "pressure_bar": stage.pressure_pa / 1e5,
-                    "temperature_c": stage.temperature_k - 273.15,
+                    "pressure_psia": pressure_from_pa(stage.pressure_pa, PressureUnit.PSIA),
+                    "temperature_f": temperature_from_k(stage.temperature_k, TemperatureUnit.F),
                 }
                 for stage in config.separator_stages
             ]
@@ -1991,8 +2099,14 @@ class ConditionsInputWidget(QWidget):
     def get_phase_envelope_config(self) -> Optional[PhaseEnvelopeConfig]:
         """Get phase envelope configuration if valid."""
         try:
-            t_min_k = temperature_to_k(self.env_t_min.value(), TemperatureUnit.F)
-            t_max_k = temperature_to_k(self.env_t_max.value(), TemperatureUnit.F)
+            # Read the current unit-selector value rather than hardcoding
+            # °F so the config built from the widget respects whatever the
+            # user picked in the dropdown.
+            env_temperature_unit = self._coerce_combo_enum(
+                self.env_temperature_unit.currentData(), TemperatureUnit
+            )
+            t_min_k = temperature_to_k(self.env_t_min.value(), env_temperature_unit)
+            t_max_k = temperature_to_k(self.env_t_max.value(), env_temperature_unit)
 
             if t_min_k >= t_max_k:
                 self.validation_error.emit("Min temperature must be less than max")
@@ -2034,7 +2148,9 @@ class ConditionsInputWidget(QWidget):
                     self.stability_feed_phase_combo.currentData(),
                     StabilityFeedPhase,
                 ),
-                use_gdem=self.stability_use_gdem.isChecked(),
+                # use_gdem omitted so the schema's ``default=True`` applies —
+                # no GUI toggle, always-on GDEM is the right answer for every
+                # non-debug run.
                 n_random_trials=self.stability_random_trials.value(),
                 random_seed=self.stability_random_seed.value(),
                 max_eos_failures_per_trial=self.stability_max_eos_failures.value(),
@@ -2377,8 +2493,14 @@ class ConditionsInputWidget(QWidget):
                 if pressure_item is None or temperature_item is None:
                     raise ValueError(f"Separator stage row {row + 1} is incomplete")
                 stage_name = "" if name_item is None else name_item.text().strip()
-                pressure_pa = float(pressure_item.text()) * 1e5
-                temperature_k = float(temperature_item.text()) + 273.15
+                # Stage columns are labelled "Pressure (psia)" and
+                # "Temperature (°F)"; read them in those units to match.
+                pressure_pa = pressure_to_pa(
+                    float(pressure_item.text()), PressureUnit.PSIA
+                )
+                temperature_k = temperature_to_k(
+                    float(temperature_item.text()), TemperatureUnit.F
+                )
                 stages.append(
                     {
                         "name": stage_name,

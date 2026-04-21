@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QToolButton,
+    QToolTip,
 )
 
 from pvtapp.plus_fraction_policy import describe_plus_fraction_policy
@@ -75,6 +76,14 @@ PLOT_SURFACE_COLOR = "#0f1a2b"
 PLOT_CANVAS_COLOR = PLOT_SURFACE_COLOR
 PLOT_TEXT_COLOR = "#e5e7eb"
 PLOT_GRID_COLOR = "#223044"
+
+# Multi-step plot functions (CCE / DL / CVD / swelling) lock their x-axis
+# ticks to the calculation's exact step values when there are few enough
+# steps to read comfortably. Above this threshold matplotlib's auto-locator
+# picks the tick density instead — explicitly pinning 20+ ticks across a
+# 2x2 subplot grid produces an unreadable jumble. Tune if you want denser
+# or sparser default tick behavior.
+_EXPLICIT_XTICKS_MAX = 8
 PLOT_LEGEND_FACE_COLOR = "#121f34"
 INLINE_PSEUDO_TOKEN = "PSEUDO_PLUS"
 INLINE_PSEUDO_FALLBACK_LABEL = "PSEUDO+"
@@ -108,6 +117,51 @@ class _TableWheelForwarder(QObject):
                     return True
                 parent = parent.parent()
             return True
+        return False
+
+
+class _ImmediateHeaderTooltipFilter(QObject):
+    """Show header-cell tooltips with **zero delay** on hover.
+
+    Qt's default tooltip has a ~700 ms wake-up delay, which makes
+    header-cell tooltips effectively invisible — nobody discovers them
+    by random hovering. This filter watches mouse-move events on a
+    ``QHeaderView`` and calls ``QToolTip.showText()`` immediately when
+    the cursor enters a column whose ``horizontalHeaderItem`` has a
+    non-empty ``toolTip``. The tooltip then stays visible per Qt's
+    default auto-hide timer (~10 s on most platforms) and follows the
+    standard "replace on new selection, hide on Leave" behaviour.
+    """
+
+    def __init__(self, table: QTableWidget, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._table = table
+        self._last_col: Optional[int] = None
+        header = table.horizontalHeader()
+        header.setMouseTracking(True)
+        header.installEventFilter(self)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        header = self._table.horizontalHeader()
+        if obj is header:
+            etype = event.type()
+            if etype == QEvent.Type.MouseMove:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                col = header.logicalIndexAt(pos)
+                item = self._table.horizontalHeaderItem(col) if col >= 0 else None
+                tip = item.toolTip() if item is not None else ""
+                if tip:
+                    if col != self._last_col:
+                        QToolTip.showText(header.mapToGlobal(pos), tip, header)
+                        self._last_col = col
+                else:
+                    if self._last_col is not None:
+                        QToolTip.hideText()
+                        self._last_col = None
+            elif etype in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+                if self._last_col is not None:
+                    QToolTip.hideText()
+                    self._last_col = None
         return False
 
 
@@ -243,13 +297,18 @@ class ResultsTableWidget(QWidget):
         self._header_actions_row.addWidget(self.status_label)
         self._header_actions_row.addStretch()
 
-        # Export buttons
+        # Export buttons. Excel is the richest deliverable (multi-sheet
+        # workbook with unit-labelled headers, numeric types, formatting)
+        # and lives next to the more primitive CSV / JSON exports.
         self.export_csv_btn = QPushButton("Export CSV")
         self.export_csv_btn.clicked.connect(lambda: self.export_requested.emit("csv"))
         self.export_json_btn = QPushButton("Export JSON")
         self.export_json_btn.clicked.connect(lambda: self.export_requested.emit("json"))
+        self.export_excel_btn = QPushButton("Export Excel")
+        self.export_excel_btn.clicked.connect(lambda: self.export_requested.emit("excel"))
         self._header_actions_row.addWidget(self.export_csv_btn)
         self._header_actions_row.addWidget(self.export_json_btn)
+        self._header_actions_row.addWidget(self.export_excel_btn)
         self._header_layout.addLayout(self._header_actions_row)
 
         self._layout.addLayout(self._header_layout)
@@ -270,6 +329,18 @@ class ResultsTableWidget(QWidget):
         # separate, un-cramped section beneath phase densities.
         self.viscosity_table = self._create_section_table()
         self.viscosity_section = self._build_table_section("Phase Viscosities", self.viscosity_table)
+
+        # Zero-delay header tooltips on every result table. Any column
+        # whose ``horizontalHeaderItem`` carries a non-empty tooltip
+        # (e.g. the Rel. Vol. column on CCE) pops immediately on hover
+        # instead of Qt's ~700 ms wake-up. Stored on self to prevent
+        # garbage-collection of the installed event filters.
+        self._composition_header_tooltip = _ImmediateHeaderTooltipFilter(
+            self.composition_table, self
+        )
+        self._details_header_tooltip = _ImmediateHeaderTooltipFilter(
+            self.details_table, self
+        )
 
         # Saturation-point display unit is driven by the bubble/dew pressure
         # unit combo in the left inputs panel. The active result re-renders
@@ -933,7 +1004,7 @@ class ResultsTableWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.pt_flash_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def apply_saturation_display_unit(self, unit: PressureUnit) -> None:
@@ -986,7 +1057,7 @@ class ResultsTableWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.stability_analysis_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _cce_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -995,7 +1066,7 @@ class ResultsTableWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.cce_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _dl_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -1004,7 +1075,7 @@ class ResultsTableWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.dl_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _swelling_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -1013,7 +1084,7 @@ class ResultsTableWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.swelling_test_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _plus_fraction_summary_rows(self) -> list[tuple[str, str]]:
@@ -1309,22 +1380,35 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        # Envelope points in composition table
+        # Envelope points in composition table. Header + values use the
+        # repo-wide default US-petroleum units (psia, °F) to match every
+        # other calc-type display. PhaseEnvelopeConfig does not yet carry
+        # its own unit-preference fields; if a follow-up adds them, wire
+        # ``pressure_unit`` / ``temperature_unit`` through the same way
+        # ``_cce_display_units`` does.
+        envelope_pressure_unit = PressureUnit.PSIA
+        envelope_temperature_unit = TemperatureUnit.F
         all_points = result.continuous_curve_points()
 
         self.composition_table.setColumnCount(3)
         self.composition_table.setHorizontalHeaderLabels([
-            "Type", "Temperature (C)", "Pressure (bar)"
+            "Type",
+            f"Temperature (\u00b0{envelope_temperature_unit.value})",
+            f"Pressure ({envelope_pressure_unit.value})",
         ])
         self.composition_table.setRowCount(len(all_points))
 
         for row, point in enumerate(all_points):
             self.composition_table.setItem(row, 0, QTableWidgetItem(str(point.point_type).title()))
             self.composition_table.setItem(
-                row, 1, QTableWidgetItem(f"{point.temperature_k - 273.15:.2f}")
+                row, 1, QTableWidgetItem(
+                    f"{temperature_from_k(point.temperature_k, envelope_temperature_unit):.2f}"
+                )
             )
             self.composition_table.setItem(
-                row, 2, QTableWidgetItem(f"{point.pressure_pa / 1e5:.2f}")
+                row, 2, QTableWidgetItem(
+                    f"{pressure_from_pa(point.pressure_pa, envelope_pressure_unit):.2f}"
+                )
             )
 
         self.composition_table.horizontalHeader().setSectionResizeMode(
@@ -1640,6 +1724,9 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
         # Expansion table (kept compact so all 5 columns fit the right rail).
+        # The "Rel. Vol." header stays short to avoid squeezing the other
+        # four columns; the full "Relative Volume (V/Vsat)" name is exposed
+        # on header hover instead.
         self.composition_table.setColumnCount(5)
         self.composition_table.setHorizontalHeaderLabels([
             f"P ({pressure_unit.value})",
@@ -1648,6 +1735,15 @@ class ResultsTableWidget(QWidget):
             "Vapor Frac.",
             "Z-factor",
         ])
+        rel_vol_header = self.composition_table.horizontalHeaderItem(1)
+        if rel_vol_header is not None:
+            # Tooltip shown with **zero delay** via
+            # _ImmediateHeaderTooltipFilter installed on composition_table
+            # in __init__. Text is deliberately tight (symbolic, no prose):
+            # petroleum readers recognize V(P)/V(Psat) instantly, and if
+            # the user catches only the first second of hover they still
+            # get the definition.
+            rel_vol_header.setToolTip("V(P) / V(Psat)")
         self.composition_table.setRowCount(len(result.steps))
 
         for row, step in enumerate(result.steps):
@@ -1763,23 +1859,37 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
+        # DL Compositions header compacted to match CCE's "P ({unit})"
+        # short-form — "Pressure" was getting truncated to "ressure" in
+        # the right-rail width, losing the leading P.
         self.composition_table.setColumnCount(7)
         self.composition_table.setHorizontalHeaderLabels(
-            [f"Pressure ({pressure_unit.value})", "RsD", "RsDb", "Bo", "Bg", "BtD", "Cum. Gas"]
+            [f"P ({pressure_unit.value})", "RsD", "RsDb", "Bo", "Bg", "BtD", "Cum. Gas"]
         )
         self.composition_table.setRowCount(len(result.steps))
 
+        # DL Details header uses standard petroleum-engineering symbols
+        # (Greek letter + single-capital phase suffix, same plain-letter
+        # style the CCE text output adopted for ρL / ρV / μL / μV). That
+        # gives every column a 2–4 character header so all eight columns
+        # fit the rail without truncation. Mapping:
+        #   Oil Density       →  ρO   (rho  + O)
+        #   Oil Viscosity     →  μO   (mu   + O)
+        #   Gas Gravity       →  γg   (gamma + g)   — specific gravity
+        #   Gas Z-factor      →  Zg
+        #   Gas Viscosity     →  μG   (mu   + G)
+        #   Liquid Moles Rem. →  n_L  — keep explicit; no standard symbol
         self.details_table.setColumnCount(8)
         self.details_table.setHorizontalHeaderLabels(
             [
                 "Step",
-                "Vapor Frac.",
-                "Oil Density",
-                "Oil Viscosity",
-                "Gas Gravity",
-                "Gas Z",
-                "Gas Viscosity",
-                "Liquid Moles Remaining",
+                "\u03b2",                # β (vapor fraction)
+                "\u03c1O",               # ρO
+                "\u03bcO",               # μO
+                "\u03b3g",               # γg
+                "Zg",
+                "\u03bcG",               # μG
+                "n_L",
             ]
         )
         self.details_table.setRowCount(len(result.steps))
@@ -1860,15 +1970,29 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
+        # Header + values use the repo-wide default US-petroleum units
+        # (psia). CVDConfig does not carry its own unit-preference field;
+        # if a follow-up adds one, wire ``cvd_pressure_unit`` through the
+        # same way ``_cce_display_units`` does.
+        cvd_pressure_unit = PressureUnit.PSIA
         self.composition_table.setColumnCount(6)
+        # Compact "P ({unit})" form to match CCE / DL — "Pressure (psia)"
+        # gets truncated in the right-rail width.
         self.composition_table.setHorizontalHeaderLabels([
-            "Pressure (bar)", "Liquid Dropout", "Gas Produced", "Cum. Gas", "Moles Remaining", "Z (2-phase)"
+            f"P ({cvd_pressure_unit.value})",
+            "Liquid Dropout",
+            "Gas Produced",
+            "Cum. Gas",
+            "Moles Remaining",
+            "Z (2-phase)",
         ])
         self.composition_table.setRowCount(len(result.steps))
 
         for row, step in enumerate(result.steps):
             self.composition_table.setItem(
-                row, 0, QTableWidgetItem(f"{step.pressure_pa / 1e5:.2f}")
+                row, 0, QTableWidgetItem(
+                    f"{pressure_from_pa(step.pressure_pa, cvd_pressure_unit):.2f}"
+                )
             )
             self.composition_table.setItem(
                 row, 1, QTableWidgetItem(f"{step.liquid_dropout:.4f}")
@@ -2068,10 +2192,21 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
+        # Header + values use the repo-wide default US-petroleum units
+        # (psia, °F). SeparatorConfig does not yet carry its own
+        # unit-preference fields; a follow-up can thread them through
+        # identically to ``_cce_display_units``.
+        sep_pressure_unit = PressureUnit.PSIA
+        sep_temperature_unit = TemperatureUnit.F
         self.composition_table.setColumnCount(6)
-        self.composition_table.setHorizontalHeaderLabels(
-            ["Stage", "Pressure (bar)", "Temperature (C)", "Vapor Frac.", "Liquid Moles", "Vapor Moles"]
-        )
+        self.composition_table.setHorizontalHeaderLabels([
+            "Stage",
+            f"Pressure ({sep_pressure_unit.value})",
+            f"Temperature (\u00b0{sep_temperature_unit.value})",
+            "Vapor Frac.",
+            "Liquid Moles",
+            "Vapor Moles",
+        ])
         self.composition_table.setRowCount(len(result.stages))
 
         self.details_table.setColumnCount(6)
@@ -2091,10 +2226,14 @@ class ResultsTableWidget(QWidget):
             stage_label = stage.stage_name or f"Stage {stage.stage_number}"
             self.composition_table.setItem(row, 0, QTableWidgetItem(stage_label))
             self.composition_table.setItem(
-                row, 1, QTableWidgetItem(f"{stage.pressure_pa / 1e5:.2f}")
+                row, 1, QTableWidgetItem(
+                    f"{pressure_from_pa(stage.pressure_pa, sep_pressure_unit):.2f}"
+                )
             )
             self.composition_table.setItem(
-                row, 2, QTableWidgetItem(f"{stage.temperature_k - 273.15:.2f}")
+                row, 2, QTableWidgetItem(
+                    f"{temperature_from_k(stage.temperature_k, sep_temperature_unit):.2f}"
+                )
             )
             vapor_fraction = "-" if stage.vapor_fraction is None else f"{stage.vapor_fraction:.4f}"
             self.composition_table.setItem(row, 3, QTableWidgetItem(vapor_fraction))
@@ -2280,7 +2419,8 @@ class UnitConverterWidget(QWidget):
                 self._populate_units(self.from_unit_combo, units)
                 self._populate_units(self.to_unit_combo, units)
                 self.from_unit_combo.setCurrentIndex(self.from_unit_combo.findData(PressureUnit.PSIA))
-                self.to_unit_combo.setCurrentIndex(self.to_unit_combo.findData(PressureUnit.BAR))
+                # Default target = atm (more common in coursework than bar).
+                self.to_unit_combo.setCurrentIndex(self.to_unit_combo.findData(PressureUnit.ATM))
                 self.value_spin.setRange(0.0, 1000000000.0)
                 self.value_spin.setValue(1.0)
                 self.value_spin.setDecimals(6)
@@ -2334,6 +2474,11 @@ class ResultsPlotWidget(QWidget):
         self._plot_series_specs: dict[str, PlotSeriesSpec] = {}
         self._selected_plot_series: dict[str, list[str]] = {}
         self._view_mode = view_mode
+        # Holds the most recent mplcursors Cursor object so we can .remove()
+        # it before attaching a new one on the next plot. Leaving a stale
+        # cursor attached would leak hover callbacks onto axes that no
+        # longer exist after a figure.clear().
+        self._hover_cursor = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -2443,6 +2588,99 @@ class ResultsPlotWidget(QWidget):
                 text.set_color(PLOT_TEXT_COLOR)
             if legend.get_title() is not None:
                 legend.get_title().set_color(PLOT_TEXT_COLOR)
+
+    def _attach_hover_tooltips(
+        self,
+        data_lines: list,
+        *,
+        x_label: str,
+        x_unit: str = "",
+        x_precision: int = 2,
+        y_precision: int = 4,
+    ) -> None:
+        """Attach mplcursors hover tooltips to the given data line artists.
+
+        Shows ``{x_label} = {x_value} {x_unit}`` on one line and
+        ``{series_label} = {y_value}`` on the next, styled to match the
+        dark palette used by the rest of the plot. Any artist whose label
+        starts with ``_`` (matplotlib's hide-from-legend convention) is
+        silently skipped so reference-only axvline underscore labels don't
+        produce bogus tooltips. The previously-attached cursor, if any, is
+        removed first so hover callbacks do not accumulate across replots.
+        """
+        # Tear down the prior cursor so we don't leak handlers onto an
+        # axes object that will be discarded on the next figure.clear().
+        if self._hover_cursor is not None:
+            try:
+                self._hover_cursor.remove()
+            except Exception:
+                pass
+            self._hover_cursor = None
+
+        if not data_lines:
+            return
+        try:
+            import mplcursors
+        except ImportError:
+            # mplcursors is an optional runtime dep; fall back to no
+            # tooltips rather than breaking the plot altogether.
+            return
+
+        cursor = mplcursors.cursor(data_lines, hover=True)
+        x_unit_suffix = f" {x_unit}" if x_unit else ""
+
+        @cursor.connect("add")
+        def _on_hover(sel):
+            label = sel.artist.get_label() or "Value"
+            if label.startswith("_"):
+                sel.annotation.set_visible(False)
+                return
+            x_val, y_val = sel.target
+            sel.annotation.set_text(
+                f"{x_label} = {x_val:.{x_precision}f}{x_unit_suffix}\n"
+                f"{label} = {y_val:.{y_precision}g}"
+            )
+            bbox = sel.annotation.get_bbox_patch()
+            if bbox is not None:
+                bbox.set_facecolor(PLOT_LEGEND_FACE_COLOR)
+                bbox.set_edgecolor(PLOT_GRID_COLOR)
+                bbox.set_alpha(0.95)
+            sel.annotation.set_color(PLOT_TEXT_COLOR)
+
+        self._hover_cursor = cursor
+
+    @staticmethod
+    def _cluster_title(cluster: list["PlotSeriesSpec"]) -> str:
+        """Pick a short, descriptive title for a subplot.
+
+        - Single-spec cluster → use the spec label verbatim (e.g. "Z-factor",
+          "Relative Volume").
+        - Multi-spec cluster with a common trailing word → use that word
+          (e.g. "Liquid Density" + "Vapor Density" → "Density";
+          "Liquid Viscosity" + "Vapor Viscosity" → "Viscosity").
+        - Otherwise fall back to a joined label.
+        """
+        if not cluster:
+            return ""
+        if len(cluster) == 1:
+            return cluster[0].label
+        label_parts = [spec.label.split() for spec in cluster]
+        common = set(label_parts[0])
+        for parts in label_parts[1:]:
+            common &= set(parts)
+        if common:
+            return " ".join(w for w in label_parts[0] if w in common)
+        return " / ".join(spec.label for spec in cluster)
+
+    def _apply_figure_suptitle(self, title: str) -> None:
+        """Set a figure-level super-title styled for the dark theme.
+
+        Used in place of per-axis titles on the first subplot so the main
+        title sits cleanly above the whole grid rather than crowding the
+        top-left panel.
+        """
+        if title:
+            self.figure.suptitle(title, color=PLOT_TEXT_COLOR, fontsize=12)
 
     def _component_display_label(self, component_id: str) -> str:
         """Use the same compact component labels in plots as in the results tables."""
@@ -2662,7 +2900,7 @@ class ResultsPlotWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.stability_analysis_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _cce_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -2671,7 +2909,7 @@ class ResultsPlotWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.cce_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _dl_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -2680,7 +2918,7 @@ class ResultsPlotWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.dl_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _swelling_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
@@ -2689,7 +2927,7 @@ class ResultsPlotWidget(QWidget):
         if self._current_result is not None:
             config = self._current_result.config.swelling_test_config
         if config is None:
-            return PressureUnit.PSIA, TemperatureUnit.C
+            return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
 
     def _plot_placeholder(self, message: str, *, title: str = "Plot") -> None:
@@ -2870,8 +3108,12 @@ class ResultsPlotWidget(QWidget):
             "relative_volume": PlotSeriesSpec(
                 key="relative_volume",
                 label="Relative Volume",
-                axis_group="dimensionless",
-                axis_label="Dimensionless",
+                # Dedicated axis group (not the generic "dimensionless" bucket)
+                # so the y-axis label can carry the V/Vsat qualifier without
+                # overriding sibling axes like liquid/vapor fraction. Mathtext
+                # gives a real subscript on the "sat" qualifier.
+                axis_group="relative_volume",
+                axis_label=r"$V/V_{sat}$",
                 overlay_group="relative_volume",
                 values=[step.relative_volume for step in result.steps],
                 color="#f59e0b",
@@ -3255,13 +3497,14 @@ class ResultsPlotWidget(QWidget):
             axes.append(axis)
 
         plotted_any = False
+        data_lines: list = []
         for index, (axis, cluster) in enumerate(zip(axes, clusters, strict=True)):
             cluster_plotted = False
             for spec in cluster:
                 xs, ys = self._finite_pressure_series(pressures, spec.values)
                 if not xs:
                     continue
-                axis.plot(
+                line, = axis.plot(
                     xs,
                     ys,
                     color=spec.color,
@@ -3271,6 +3514,7 @@ class ResultsPlotWidget(QWidget):
                     markersize=spec.markersize,
                     label=spec.label,
                 )
+                data_lines.append(line)
                 cluster_plotted = True
                 plotted_any = True
 
@@ -3303,6 +3547,12 @@ class ResultsPlotWidget(QWidget):
                 axis.set_ylim(*preferred_ylim)
             axis.set_ylabel(self._cluster_axis_label(cluster))
             axis.set_xlabel(f"Pressure ({pressure_unit.value})")
+            # Per-subplot title derived from the cluster's series so every
+            # panel is self-labelled rather than relying on the top-left
+            # one to double as the figure heading.
+            subplot_title = self._cluster_title(cluster)
+            if subplot_title:
+                axis.set_title(subplot_title, color=PLOT_TEXT_COLOR, fontsize=10)
             # invert_xaxis() TOGGLES the axis direction, and with sharex all
             # subplots share the same underlying x-axis state. Calling it on
             # every axis flipped the direction even-vs-odd across the plot
@@ -3310,7 +3560,6 @@ class ResultsPlotWidget(QWidget):
             # Apply once on the first axis; sharex propagates to the rest.
             if index == 0:
                 axis.invert_xaxis()
-                axis.set_title(title)
             self._apply_axes_theme(axis)
 
             handles, labels = axis.get_legend_handles_labels()
@@ -3324,20 +3573,39 @@ class ResultsPlotWidget(QWidget):
             self._plot_placeholder("No finite data is available for the selected series.", title=title)
             return
 
+        # Figure-level main title above the whole grid (replaces the old
+        # axis.set_title on axes[0] which crowded the first panel).
+        self._apply_figure_suptitle(title)
+
+        # Pin ticks to the calculation's actual pressure steps when there
+        # are few enough to read. sharex propagates ticks from axes[0] to
+        # every subplot in the grid, so setting them once is sufficient.
+        if axes and 0 < len(pressures) <= _EXPLICIT_XTICKS_MAX:
+            axes[0].set_xticks(list(pressures))
+
+        # Hover tooltips: "P = <value> <unit>\n<series-label> = <value>"
+        # on every data marker across every subplot.
+        self._attach_hover_tooltips(
+            data_lines,
+            x_label="P",
+            x_unit=pressure_unit.value,
+        )
+
         if len(axes) > 1:
             if cols > 1:
                 # Grid layout (e.g. 2x2): give extra horizontal breathing room
                 # between columns so y-axis labels don't clash with the
-                # preceding column's tick labels.
+                # preceding column's tick labels. Extra top margin for the
+                # figure-level suptitle + per-axis titles.
                 self.figure.subplots_adjust(
-                    left=0.10, right=0.97, top=0.92, bottom=0.11, hspace=0.42, wspace=0.32
+                    left=0.10, right=0.97, top=0.88, bottom=0.11, hspace=0.55, wspace=0.32
                 )
             else:
                 self.figure.subplots_adjust(
-                    left=0.12, right=0.97, top=0.93, bottom=0.09, hspace=0.34
+                    left=0.12, right=0.97, top=0.88, bottom=0.09, hspace=0.50
                 )
         else:
-            self.figure.tight_layout()
+            self.figure.tight_layout(rect=(0, 0, 1, 0.94))
 
     def _plot_selected_enrichment_series(
         self,
@@ -3372,13 +3640,14 @@ class ResultsPlotWidget(QWidget):
             axes.append(axis)
 
         plotted_any = False
+        data_lines: list = []
         for index, (axis, cluster) in enumerate(zip(axes, clusters, strict=True)):
             cluster_plotted = False
             for spec in cluster:
                 xs, ys = self._finite_xy_series(enrichment_steps, spec.values)
                 if not xs:
                     continue
-                axis.plot(
+                line, = axis.plot(
                     xs,
                     ys,
                     color=spec.color,
@@ -3388,6 +3657,7 @@ class ResultsPlotWidget(QWidget):
                     markersize=spec.markersize,
                     label=spec.label,
                 )
+                data_lines.append(line)
                 cluster_plotted = True
                 plotted_any = True
 
@@ -3411,8 +3681,9 @@ class ResultsPlotWidget(QWidget):
                 axis.set_ylim(*preferred_ylim)
             axis.set_ylabel(self._cluster_axis_label(cluster))
             axis.set_xlabel(x_label)
-            if index == 0:
-                axis.set_title(title)
+            subplot_title = self._cluster_title(cluster)
+            if subplot_title:
+                axis.set_title(subplot_title, color=PLOT_TEXT_COLOR, fontsize=10)
             self._apply_axes_theme(axis)
 
             handles, labels = axis.get_legend_handles_labels()
@@ -3426,10 +3697,29 @@ class ResultsPlotWidget(QWidget):
             self._plot_placeholder("No finite data is available for the selected series.", title=title)
             return
 
+        # Figure-level main title above the grid (same pattern as the
+        # pressure-series plot).
+        self._apply_figure_suptitle(title)
+
+        # Same tick-threshold policy as the pressure-series plot: lock
+        # ticks to the enrichment steps the user actually specified when
+        # there are few of them; otherwise let matplotlib auto-locate.
+        if axes and 0 < len(enrichment_steps) <= _EXPLICIT_XTICKS_MAX:
+            axes[0].set_xticks(list(enrichment_steps))
+
+        # Hover tooltips. The enrichment axis is dimensionless
+        # (mol-added / mol-initial-oil), so no x_unit suffix.
+        self._attach_hover_tooltips(
+            data_lines,
+            x_label="Added Gas",
+            x_unit="",
+            x_precision=3,
+        )
+
         if len(axes) > 1:
-            self.figure.subplots_adjust(left=0.12, right=0.97, top=0.93, bottom=0.10, hspace=0.34)
+            self.figure.subplots_adjust(left=0.12, right=0.97, top=0.88, bottom=0.10, hspace=0.50)
         else:
-            self.figure.tight_layout()
+            self.figure.tight_layout(rect=(0, 0, 1, 0.94))
 
     def _plot_pt_flash(self, result: PTFlashResult) -> None:
         """Plot PT flash results (composition bar chart)."""
@@ -3530,29 +3820,44 @@ class ResultsPlotWidget(QWidget):
             pressures = [p for _, p in xy]
             return temps, pressures
 
+        # Bubble / dew / critical-point artists are captured so we can
+        # attach hover tooltips at the end of the function.
+        data_lines: list = []
+
         # Bubble curve
         if result.bubble_curve:
             temps, pressures = _curve_xy(result.bubble_curve)
-            ax.plot(temps, pressures, 'b-', linewidth=2, label='Bubble Point')
+            line, = ax.plot(temps, pressures, 'b-', linewidth=2, label='Bubble Point')
+            data_lines.append(line)
 
         # Dew curve
         if result.dew_curve:
             temps, pressures = _curve_xy(result.dew_curve)
-            ax.plot(temps, pressures, 'r-', linewidth=2, label='Dew Point')
+            line, = ax.plot(temps, pressures, 'r-', linewidth=2, label='Dew Point')
+            data_lines.append(line)
 
         # Critical point
         if critical_xy is not None:
-            ax.plot(
+            line, = ax.plot(
                 critical_xy[0],
                 critical_xy[1],
                 'ko', markersize=10, label='Critical Point'
             )
+            data_lines.append(line)
 
         ax.set_xlabel('Temperature (C)')
         ax.set_ylabel('Pressure (bar)')
         ax.set_title('Phase Envelope')
         ax.legend()
         self._apply_axes_theme(ax)
+
+        # Hover tooltips on bubble, dew, and critical-point artists.
+        self._attach_hover_tooltips(
+            data_lines,
+            x_label="T",
+            x_unit="\u00b0C",
+            x_precision=2,
+        )
 
         self.figure.tight_layout()
 
