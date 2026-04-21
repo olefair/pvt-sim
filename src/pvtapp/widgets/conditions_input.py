@@ -1091,9 +1091,130 @@ class ConditionsInputWidget(QWidget):
         if isinstance(unit, PressureUnit):
             self.saturation_display_unit_changed.emit(unit)
 
+    # Per-calc-type temperature widget specs used by the cross-calc
+    # temperature-persistence helpers below.
+    # Tuple order: (value_widget_attr, unit_widget_attr_or_None, kind)
+    # kind is 'line_edit' for ValidatedLineEdit-backed fields and
+    # 'spinbox' for NoWheelDoubleSpinBox-backed fields.
+    _TEMPERATURE_WIDGET_SPECS = {
+        CalculationType.PT_FLASH: ("temperature_edit", "temperature_unit", "line_edit"),
+        CalculationType.STABILITY_ANALYSIS: (
+            "stability_temperature_edit",
+            "stability_temperature_unit",
+            "line_edit",
+        ),
+        CalculationType.BUBBLE_POINT: (
+            "bubble_temperature",
+            "bubble_temperature_unit",
+            "line_edit",
+        ),
+        CalculationType.DEW_POINT: (
+            "dew_temperature",
+            "dew_temperature_unit",
+            "line_edit",
+        ),
+        CalculationType.CCE: ("cce_temperature", "cce_temperature_unit", "spinbox"),
+        CalculationType.DL: ("dl_temperature", "dl_temperature_unit", "spinbox"),
+        CalculationType.CVD: ("cvd_temperature", None, "spinbox"),  # hard-coded F
+        CalculationType.SWELLING_TEST: (
+            "swelling_temperature",
+            "swelling_temperature_unit",
+            "spinbox",
+        ),
+        CalculationType.SEPARATOR: (
+            "separator_reservoir_temperature",
+            None,
+            "spinbox",
+        ),  # hard-coded F
+    }
+
+    def _get_calc_temperature_k(self, calc_type: CalculationType) -> Optional[float]:
+        """Read the current temperature for ``calc_type`` and return it in K.
+
+        Returns ``None`` if the calc type has no temperature input, the
+        widget isn't populated, or the value is unparseable.
+        """
+        spec = self._TEMPERATURE_WIDGET_SPECS.get(calc_type)
+        if spec is None:
+            return None
+        value_attr, unit_attr, kind = spec
+        value_widget = getattr(self, value_attr, None)
+        if value_widget is None:
+            return None
+        try:
+            if kind == "line_edit":
+                raw = value_widget.text().strip()
+                if not raw:
+                    return None
+                value = float(raw)
+            else:
+                value = float(value_widget.value())
+        except (ValueError, TypeError):
+            return None
+        if unit_attr is None:
+            unit = TemperatureUnit.F
+        else:
+            unit_widget = getattr(self, unit_attr, None)
+            if unit_widget is None:
+                unit = TemperatureUnit.F
+            else:
+                unit = self._coerce_combo_enum(unit_widget.currentData(), TemperatureUnit)
+        try:
+            return temperature_to_k(value, unit)
+        except Exception:
+            return None
+
+    def _set_calc_temperature_k(
+        self, calc_type: CalculationType, temperature_k: float
+    ) -> None:
+        """Write ``temperature_k`` into the temperature widget of ``calc_type``.
+
+        Converts to the widget's current display unit. No-op for calc
+        types without a temperature input (e.g. TBP, phase envelope).
+        """
+        spec = self._TEMPERATURE_WIDGET_SPECS.get(calc_type)
+        if spec is None:
+            return
+        value_attr, unit_attr, kind = spec
+        value_widget = getattr(self, value_attr, None)
+        if value_widget is None:
+            return
+        if unit_attr is None:
+            unit = TemperatureUnit.F
+        else:
+            unit_widget = getattr(self, unit_attr, None)
+            if unit_widget is None:
+                unit = TemperatureUnit.F
+            else:
+                unit = self._coerce_combo_enum(unit_widget.currentData(), TemperatureUnit)
+        try:
+            display_value = temperature_from_k(temperature_k, unit)
+        except Exception:
+            return
+        value_widget.blockSignals(True)
+        try:
+            if kind == "line_edit":
+                value_widget.setText(f"{display_value:g}")
+            else:
+                value_widget.setValue(display_value)
+        finally:
+            value_widget.blockSignals(False)
+
     def _on_calc_type_changed(self) -> None:
         """Update visible configuration based on calculation type."""
-        calc_type = self.calc_type_combo.currentData()
+        new_calc_type = self.calc_type_combo.currentData()
+
+        # Carry forward the previously-entered temperature so users working
+        # on one fluid at a fixed T_res don't have to retype it every time
+        # they switch between PT flash / bubble / dew / CCE / DL / CVD /
+        # swelling / separator. Previous calc is captured before the
+        # widget swap so the read lines up with what the user just saw.
+        previous_calc_type = getattr(self, "_last_calc_type_for_temperature", None)
+        previous_temperature_k: Optional[float] = None
+        if previous_calc_type is not None and previous_calc_type != new_calc_type:
+            previous_temperature_k = self._get_calc_temperature_k(previous_calc_type)
+
+        calc_type = new_calc_type
 
         if calc_type == CalculationType.PT_FLASH:
             self.config_stack.setCurrentWidget(self.pt_flash_widget)
@@ -1125,6 +1246,18 @@ class ConditionsInputWidget(QWidget):
         self.eos_combo.setToolTip(
             "" if eos_enabled else "EOS selection is not used for standalone TBP assay runs."
         )
+        # Carry forward the temperature we captured from the previous calc
+        # type (in K, so unit selection on the new calc's widget is
+        # respected). Only overwrite when the new calc exposes a
+        # temperature input and we have a valid prior reading.
+        if (
+            previous_temperature_k is not None
+            and previous_temperature_k > 0
+            and calc_type in self._TEMPERATURE_WIDGET_SPECS
+        ):
+            self._set_calc_temperature_k(calc_type, previous_temperature_k)
+        if calc_type in self._TEMPERATURE_WIDGET_SPECS:
+            self._last_calc_type_for_temperature = calc_type
         self._shrink_config_stack_to_current()
         self.config_stack.updateGeometry()
         self.updateGeometry()
