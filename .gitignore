@@ -53,6 +53,7 @@ ehthumbs.db
 
 # Generated validation / assignment outputs
 assignment_run_*.json
+outputs/
 
 # Cursor — local MCP paths (see .cursor/mcp.json.example)
 .cursor/mcp.json
