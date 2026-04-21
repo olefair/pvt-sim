@@ -64,6 +64,14 @@ _diag_*.py
 # Loose dev / test output captures kept on disk, never committed
 full_pytest*.txt
 full_after_install.txt
+pvtsim_pypackages_permissive.md
+
+# Editor / IDE workspace settings (solo repo — no shared VSCode config)
+.vscode/
+
+# GitHub Actions workflows (moved to local Claude Code routines post-demo;
+# CI on origin/main pauses until those routines are wired up)
+.github/workflows/
 
 # AI-assistance tooling (kept on disk for local dev, never committed)
 .agents/
