@@ -417,7 +417,7 @@ class PlusFractionEntry(BaseModel):
         description="Target number of pseudo groups if lumping is enabled",
     )
     lumping_method: Literal["whitson", "contiguous"] = Field(
-        default="whitson",
+        default="contiguous",
         description="Heavy-end lumping method used when lumping is enabled",
     )
     tbp_cuts: Optional[List[PlusFractionTBPCutEntry]] = Field(

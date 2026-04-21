@@ -55,7 +55,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=11,
         lumping_enabled=True,
         lumping_n_groups=4,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
     PlusFractionCharacterizationPreset.CO2_RICH_GAS: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -63,7 +63,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=11,
         lumping_enabled=True,
         lumping_n_groups=4,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
     PlusFractionCharacterizationPreset.GAS_CONDENSATE: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -71,7 +71,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=18,
         lumping_enabled=True,
         lumping_n_groups=2,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
     PlusFractionCharacterizationPreset.VOLATILE_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -79,7 +79,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
     PlusFractionCharacterizationPreset.BLACK_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -87,7 +87,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
     PlusFractionCharacterizationPreset.SOUR_OIL: PlusFractionPresetSettings(
         split_method="pedersen",
@@ -95,7 +95,7 @@ PLUS_FRACTION_PRESET_SETTINGS: Mapping[
         max_carbon_number=20,
         lumping_enabled=True,
         lumping_n_groups=6,
-        lumping_method="whitson",
+        lumping_method="contiguous",
     ),
 }
 

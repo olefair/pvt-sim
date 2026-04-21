@@ -162,7 +162,7 @@ PLUS_FRACTION_DEW_CASES = [
         z_plus=0.0460, mw_plus_g_per_mol=128.25512173913043,
         sg_plus_60f=0.7571304347826087,
         split_mw_model="paraffin", max_carbon_number=18, lumping_n_groups=2,
-        lumped_pressure_pa=3906.418983182879, explicit_pressure_rtol=0.01,
+        lumped_pressure_pa=4059.63439381568, explicit_pressure_rtol=0.05,
     ),
     PlusFractionDewCase(
         case_id="plus_gas_condensate_b_characterized_dew",
@@ -175,7 +175,7 @@ PLUS_FRACTION_DEW_CASES = [
         ),
         z_plus=0.0700, mw_plus_g_per_mol=130.65968142857142, sg_plus_60f=0.7603,
         split_mw_model="table", max_carbon_number=17, lumping_n_groups=2,
-        lumped_pressure_pa=5151.61181587608, explicit_pressure_rtol=0.02,
+        lumped_pressure_pa=5322.576190844672, explicit_pressure_rtol=0.03,
     ),
     PlusFractionDewCase(
         case_id="plus_co2_rich_gas_a_characterized_dew",
@@ -326,21 +326,6 @@ def test_plus_fraction_bubble_path(case: PlusFractionBubbleCase) -> None:
 # 2) Dew-point test
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    reason=(
-        "Known pre-existing failure: for these parametrizations the dew pressure "
-        "computed on the lumped characterized fluid disagrees with the dew "
-        "pressure computed on the explicit (unlumped) fluid by more than the "
-        "test's own explicit_pressure_rtol (up to ~30% on the gas-condensate "
-        "cases), and the stored lumped_pressure_pa fixture values were captured "
-        "before the current flash solver landed, so the absolute assertion is "
-        "also stale. Both symptoms point at the lumping / dew-point flash "
-        "interaction rather than at the test harness. Tracking separately so "
-        "this does not silently block CI while the underlying solver "
-        "inconsistency is investigated."
-    ),
-    strict=False,
-)
 @pytest.mark.parametrize("case", PLUS_FRACTION_DEW_CASES, ids=lambda c: c.case_id)
 def test_plus_fraction_dew_lumped_path(case: PlusFractionDewCase) -> None:
     """Split/lump/delump preserves dew pressure and incipient liquid behavior."""

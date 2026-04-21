@@ -349,6 +349,11 @@ def calculate_dew_point(
         )
 
     # --- Newton fast path ---------------------------------------------------
+    # Seed Newton from the Wilson estimate rather than from a user-supplied
+    # pressure_initial. Wilson lies close to the lower dew branch, so this
+    # gives a guess-invariant canonical dew pressure and avoids converging
+    # onto an upper retrograde root when pressure_initial overshoots the
+    # true dew by orders of magnitude.
     try:
         from ..envelope.fast_envelope import (
             _newton_dew_point, _wilson_k, _wilson_bubble_or_dew_pressure,
@@ -356,8 +361,6 @@ def calculate_dew_point(
 
         P_w = _wilson_bubble_or_dew_pressure(components, temperature, z, "dew")
         P_w = float(np.clip(P_w, PRESSURE_MIN, PRESSURE_MAX))
-        if pressure_initial is not None:
-            P_w = float(pressure_initial)
         K_w = _wilson_k(components, temperature, P_w)
 
         P_n, x_n, K_n = _newton_dew_point(

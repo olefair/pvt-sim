@@ -71,7 +71,7 @@ class CharacterizationConfig:
     kij_default: float = 0.0
     lumping_enabled: bool = False
     lumping_n_groups: int = 8
-    lumping_method: str = "whitson"
+    lumping_method: str = "contiguous"
     pedersen_solve_ab_from: str = "balances"
     pedersen_tbp_cuts: Sequence[PedersenTBPCutConstraint] | None = None
 

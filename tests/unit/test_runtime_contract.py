@@ -319,7 +319,7 @@ def _assert_resolved_plus_fraction(
     split_mw_model: str,
     max_carbon_number: int,
     lumping_n_groups: int,
-    lumping_method: str = "whitson",
+    lumping_method: str = "contiguous",
 ) -> None:
     plus_fraction = config.composition.plus_fraction
     assert plus_fraction is not None
@@ -850,7 +850,7 @@ def test_plus_fraction_auto_characterization() -> None:
     runtime = result.runtime_characterization
     assert runtime is not None
     assert runtime.runtime_component_basis == "lumped"
-    assert runtime.lumping_method == "whitson"
+    assert runtime.lumping_method == "contiguous"
     assert runtime.lump_distribution
     assert runtime.delumping_basis == "feed_scn_distribution"
     first_lump_id = runtime.lump_distribution[0].component_id
