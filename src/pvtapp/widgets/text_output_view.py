@@ -714,10 +714,10 @@ class TextOutputWidget(QWidget):
             lines.append(
                 f"{f'P ({pressure_unit.value})':>10s} "
                 f"{'RelVol':>10s} "
-                f"{'\u03c1L':>9s} "
-                f"{'\u03c1V':>9s} "
-                f"{'\u03bcL':>8s} "
-                f"{'\u03bcV':>8s} "
+                f"{'\u03c1\u2097':>9s} "
+                f"{'\u03c1\u1d65':>9s} "
+                f"{'\u03bc\u2097':>8s} "
+                f"{'\u03bc\u1d65':>8s} "
                 f"{'Z-factor':>10s}"
             )
             for step in r.steps[:80]:

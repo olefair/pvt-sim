@@ -295,7 +295,7 @@ class ConditionsInputWidget(QWidget):
     @staticmethod
     def _populate_temperature_units(
         combo: NoWheelComboBox,
-        default_unit: TemperatureUnit = TemperatureUnit.C,
+        default_unit: TemperatureUnit = TemperatureUnit.F,
     ) -> None:
         """Populate a temperature-unit combo with the shared enum order."""
         for unit in TemperatureUnit:
@@ -375,7 +375,7 @@ class ConditionsInputWidget(QWidget):
         self.temperature_unit = NoWheelComboBox()
         for unit in TemperatureUnit:
             self.temperature_unit.addItem(unit.value, unit)
-        self.temperature_unit.setCurrentIndex(1)  # C
+        self.temperature_unit.setCurrentIndex(2)  # F (US petroleum engineering default)
         self._configure_unit_row(t_layout, self.temperature_edit, self.temperature_unit)
 
         layout.addRow("Temperature:", t_layout)
@@ -388,23 +388,23 @@ class ConditionsInputWidget(QWidget):
         layout = QFormLayout(widget)
         self._configure_form_layout(layout)
 
-        # Temperature range
+        # Temperature range (default units: F, US petroleum engineering convention).
         t_min_layout = QHBoxLayout()
         self.env_t_min = NoWheelDoubleSpinBox()
-        self.env_t_min.setRange(-200, 500)
-        self.env_t_min.setValue(-123.15)  # 150 K in C
+        self.env_t_min.setRange(-400, 1200)
+        self.env_t_min.setValue(-190.0)  # ~150 K in F
         self.env_t_min.setDecimals(2)
         t_min_layout.addWidget(self.env_t_min)
-        t_min_layout.addWidget(QLabel("C"))
+        t_min_layout.addWidget(QLabel("F"))
         layout.addRow("Min Temperature:", t_min_layout)
 
         t_max_layout = QHBoxLayout()
         self.env_t_max = NoWheelDoubleSpinBox()
-        self.env_t_max.setRange(-200, 600)
-        self.env_t_max.setValue(326.85)  # 600 K in C
+        self.env_t_max.setRange(-400, 1200)
+        self.env_t_max.setValue(620.0)  # ~600 K in F
         self.env_t_max.setDecimals(2)
         t_max_layout.addWidget(self.env_t_max)
-        t_max_layout.addWidget(QLabel("C"))
+        t_max_layout.addWidget(QLabel("F"))
         layout.addRow("Max Temperature:", t_max_layout)
 
         # Number of points
@@ -448,7 +448,7 @@ class ConditionsInputWidget(QWidget):
         self.stability_temperature_edit = ValidatedLineEdit()
         self.stability_temperature_edit.setPlaceholderText("Enter temperature")
         self.stability_temperature_unit = NoWheelComboBox()
-        self._populate_temperature_units(self.stability_temperature_unit, TemperatureUnit.C)
+        self._populate_temperature_units(self.stability_temperature_unit, TemperatureUnit.F)
         self._configure_unit_row(
             temperature_layout,
             self.stability_temperature_edit,
@@ -550,7 +550,7 @@ class ConditionsInputWidget(QWidget):
         temperature_unit = NoWheelComboBox()
         for unit in TemperatureUnit:
             temperature_unit.addItem(unit.value, unit)
-        temperature_unit.setCurrentIndex(1)  # C
+        temperature_unit.setCurrentIndex(2)  # F (US petroleum engineering default)
         setattr(self, f"{temperature_attr}_unit", temperature_unit)
         self._configure_unit_row(t_layout, temperature, temperature_unit)
         layout.addRow("Temperature:", t_layout)
@@ -608,10 +608,10 @@ class ConditionsInputWidget(QWidget):
         t_layout = QHBoxLayout()
         self.cce_temperature = NoWheelDoubleSpinBox()
         self.cce_temperature.setRange(-200, 500)
-        self.cce_temperature.setValue(100)
+        self.cce_temperature.setValue(200)  # F default (previously 100 C)
         self.cce_temperature.setDecimals(2)
         self.cce_temperature_unit = NoWheelComboBox()
-        self._populate_temperature_units(self.cce_temperature_unit, TemperatureUnit.C)
+        self._populate_temperature_units(self.cce_temperature_unit, TemperatureUnit.F)
         self._configure_unit_row(t_layout, self.cce_temperature, self.cce_temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
@@ -657,10 +657,10 @@ class ConditionsInputWidget(QWidget):
         t_layout = QHBoxLayout()
         self.dl_temperature = NoWheelDoubleSpinBox()
         self.dl_temperature.setRange(-200, 500)
-        self.dl_temperature.setValue(100)
+        self.dl_temperature.setValue(200)  # F default (previously 100 C)
         self.dl_temperature.setDecimals(2)
         self.dl_temperature_unit = NoWheelComboBox()
-        self._populate_temperature_units(self.dl_temperature_unit, TemperatureUnit.C)
+        self._populate_temperature_units(self.dl_temperature_unit, TemperatureUnit.F)
         self._configure_unit_row(t_layout, self.dl_temperature, self.dl_temperature_unit)
         layout.addRow("Temperature:", t_layout)
 
@@ -711,7 +711,7 @@ class ConditionsInputWidget(QWidget):
         t_layout = QHBoxLayout()
         self.cvd_temperature = NoWheelDoubleSpinBox()
         self.cvd_temperature.setRange(-200, 500)
-        self.cvd_temperature.setValue(100)
+        self.cvd_temperature.setValue(200)  # F default (previously 100 C)
         self.cvd_temperature.setDecimals(2)
         t_layout.addWidget(self.cvd_temperature)
         t_layout.addWidget(QLabel("C"))
@@ -765,7 +765,7 @@ class ConditionsInputWidget(QWidget):
         reservoir_temperature_layout = QHBoxLayout()
         self.separator_reservoir_temperature = NoWheelDoubleSpinBox()
         self.separator_reservoir_temperature.setRange(-200, 500)
-        self.separator_reservoir_temperature.setValue(100)
+        self.separator_reservoir_temperature.setValue(200)  # F default (previously 100 C)
         self.separator_reservoir_temperature.setDecimals(2)
         reservoir_temperature_layout.addWidget(self.separator_reservoir_temperature)
         reservoir_temperature_layout.addWidget(QLabel("C"))
@@ -830,7 +830,7 @@ class ConditionsInputWidget(QWidget):
         self.swelling_temperature.setValue(76.85)
         self.swelling_temperature.setDecimals(2)
         self.swelling_temperature_unit = NoWheelComboBox()
-        self._populate_temperature_units(self.swelling_temperature_unit, TemperatureUnit.C)
+        self._populate_temperature_units(self.swelling_temperature_unit, TemperatureUnit.F)
         self._configure_unit_row(t_layout, self.swelling_temperature, self.swelling_temperature_unit)
         form_layout.addRow("Temperature:", t_layout)
 

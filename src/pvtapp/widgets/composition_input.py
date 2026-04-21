@@ -59,7 +59,7 @@ from pvtapp.style import DEFAULT_UI_SCALE, scale_metric
 from pvtapp.widgets.combo_box import NoWheelComboBox, NoWheelSpinBox, NoWheelTabWidget
 from pvtcore.models import resolve_component_id
 
-COMPONENT_DROPDOWN_BUTTON_WIDTH = 34
+COMPONENT_DROPDOWN_BUTTON_WIDTH = 22
 COMPONENT_COLUMN_SIDE_MARGIN = 6
 COMPONENT_COLUMN_MIN_WIDTH = 96
 COMPONENT_COLUMN_MAX_WIDTH = 140
@@ -344,7 +344,13 @@ class CompositionInputWidget(QWidget):
         layout.addWidget(group)
 
         self.heavy_group = QGroupBox("Plus Fraction Details")
+        # Keep the group tight so the tabs widget sits flush under the group
+        # title. Without a Maximum vertical size policy the group expands to
+        # fill the sidebar, centering / offsetting the tab widget inside it.
+        self.heavy_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         heavy_layout = QVBoxLayout(self.heavy_group)
+        heavy_layout.setContentsMargins(0, 2, 0, 2)
+        heavy_layout.setSpacing(0)
         self.heavy_mode = NoWheelComboBox()
         self.heavy_mode.addItem("None", HEAVY_MODE_NONE)
         self.heavy_mode.addItem("Plus Fraction", HEAVY_MODE_PLUS)
@@ -672,16 +678,20 @@ class CompositionInputWidget(QWidget):
         return super().eventFilter(watched, event)
 
     def _shrink_heavy_tabs_to_current(self) -> None:
-        """Make the heavy-fraction tab widget sizeHint follow the active tab.
+        """Clamp the heavy-fraction tab widget's height to the active page.
 
-        QTabWidget's internal QStackedWidget normally takes the max size of
-        every page, so selecting the (small) Pseudo+ tab while the (tall)
-        C7+ page is hidden leaves a large dead zone above the tab bar. Mark
-        inactive pages as Ignored so the stack shrinks to the active one.
+        QTabWidget's internal QStackedWidget reports the max sizeHint of all
+        children regardless of SizePolicy, so selecting the short Pseudo+
+        tab while the tall C7+ page exists leaves empty space centred around
+        the tab widget. Force ``setMaximumHeight`` from the active page's
+        hint so Qt's parent layout sizes around the visible content only.
         """
         if not hasattr(self, "heavy_tabs"):
             return
         current_widget = self.heavy_tabs.currentWidget()
+        if current_widget is None:
+            self.heavy_tabs.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+            return
         for i in range(self.heavy_tabs.count()):
             page = self.heavy_tabs.widget(i)
             if page is None:
@@ -690,8 +700,11 @@ class CompositionInputWidget(QWidget):
                 page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             else:
                 page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        if current_widget is not None:
-            current_widget.adjustSize()
+        current_widget.adjustSize()
+        tab_bar_h = self.heavy_tabs.tabBar().sizeHint().height()
+        page_h = current_widget.sizeHint().height()
+        pad = scale_metric(12, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
+        self.heavy_tabs.setMaximumHeight(tab_bar_h + page_h + pad)
         self.heavy_tabs.updateGeometry()
 
     def _sync_heavy_section_visibility(self) -> None:
@@ -799,6 +812,14 @@ class CompositionInputWidget(QWidget):
                     combo.setCurrentText(display_text)
                 else:
                     combo.setEditText(display_text)
+            # QLineEdit defaults to scrolling so the caret at end-of-text is
+            # visible, which clips the leading character of longer labels like
+            # "PSEUDO+" on narrow columns. Scroll to position 0 so the start
+            # of the label is always visible.
+            line_edit = combo.lineEdit()
+            if line_edit is not None:
+                line_edit.setCursorPosition(0)
+                line_edit.home(False)
         finally:
             combo.blockSignals(False)
 

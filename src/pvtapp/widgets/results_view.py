@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -78,6 +78,37 @@ PLOT_GRID_COLOR = "#223044"
 PLOT_LEGEND_FACE_COLOR = "#121f34"
 INLINE_PSEUDO_TOKEN = "PSEUDO_PLUS"
 INLINE_PSEUDO_FALLBACK_LABEL = "PSEUDO+"
+
+
+class _TableWheelForwarder(QObject):
+    """Pass wheel events from a result table to its enclosing scroll area.
+
+    Without this, a ``QTableWidget`` in the right-rail results panel
+    consumes wheel events internally and the user can end up nudging rows
+    out of view within an individual section — losing sight of e.g. the
+    last DL step. Forwarding the event to the parent lets the outer
+    ``sections_scroll`` handle it instead, which is what the user expects.
+    """
+
+    _instance: Optional["_TableWheelForwarder"] = None
+
+    @classmethod
+    def instance(cls) -> "_TableWheelForwarder":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if event is not None and event.type() == QEvent.Type.Wheel:
+            parent = watched.parent() if isinstance(watched, QWidget) else None
+            # Walk up until we find a scrollable ancestor (QScrollArea).
+            while parent is not None:
+                if isinstance(parent, QScrollArea):
+                    parent.verticalScrollBar().event(event)
+                    return True
+                parent = parent.parent()
+            return True
+        return False
 
 
 def _display_component_label(
@@ -367,7 +398,14 @@ class ResultsTableWidget(QWidget):
 
     @staticmethod
     def _create_section_table() -> QTableWidget:
-        """Create a compact read-only table for the fixed right rail."""
+        """Create a compact read-only table for the fixed right rail.
+
+        Each results section is sized in ``_sync_table_height`` to show every
+        row without the table itself scrolling. The outer ``sections_scroll``
+        area owns all scrolling, so we disable the table's own scroll bars
+        completely (including wheel-driven scrolling) — nested scroll
+        surfaces make it easy to miss data in the last row.
+        """
         table = QTableWidget()
         table.setObjectName("ResultsSectionTable")
         table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -377,6 +415,11 @@ class ResultsTableWidget(QWidget):
         table.setWordWrap(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        table.verticalScrollBar().setEnabled(False)
+        table.horizontalScrollBar().setEnabled(False)
+        # Forward wheel events to the surrounding scroll area instead of
+        # consuming them inside the table.
+        table.viewport().installEventFilter(_TableWheelForwarder.instance())
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(False)
         return table
@@ -555,19 +598,31 @@ class ResultsTableWidget(QWidget):
             table.setColumnWidth(column, width)
 
     def _sync_table_height(self, table: QTableWidget) -> None:
-        """Let the outer scroll area own scrolling instead of nested table scrollbars."""
+        """Lock the table height to exactly fit its rows plus header.
+
+        Because all results scrolling happens at the outer ``sections_scroll``
+        layer, we want each table to be tall enough that none of its rows
+        get clipped or forced into a nested scroll. ``resizeRowsToContents``
+        + ``horizontalHeader().sizeHint()`` gives us stable dimensions
+        even before the widget has been painted, and we then call
+        ``setFixedHeight`` so the QVBoxLayout won't squeeze the table.
+        """
+        if table.columnCount() == 0:
+            table.setMinimumHeight(0)
+            table.setMaximumHeight(0)
+            return
         table.resizeRowsToContents()
-        header_height = table.horizontalHeader().height() if table.horizontalHeader().isVisible() else 0
+        header = table.horizontalHeader()
+        header_height = header.sizeHint().height() if header.isVisible() else 0
         body_height = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        # Safety pad so a one-pixel rounding never forces the last row into
+        # a nested scroll region.
+        pad = scale_metric(6, self._ui_scale, reference_scale=DEFAULT_UI_SCALE)
         height = max(
-            scale_metric(68, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
-            header_height
-            + body_height
-            + (2 * table.frameWidth())
-            + scale_metric(2, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            scale_metric(60, self._ui_scale, reference_scale=DEFAULT_UI_SCALE),
+            header_height + body_height + (2 * table.frameWidth()) + pad,
         )
-        table.setMinimumHeight(height)
-        table.setMaximumHeight(height)
+        table.setFixedHeight(height)
 
     @staticmethod
     def _section_has_content(table: QTableWidget) -> bool:
@@ -1566,7 +1621,11 @@ class ResultsTableWidget(QWidget):
         # Expansion table (kept compact so all 5 columns fit the right rail).
         self.composition_table.setColumnCount(5)
         self.composition_table.setHorizontalHeaderLabels([
-            f"P ({pressure_unit.value})", "Rel. Vol.", "Liquid", "Vapor", "Z-factor"
+            f"P ({pressure_unit.value})",
+            "Rel. Vol.",
+            "Liquid Frac.",
+            "Vapor Frac.",
+            "Z-factor",
         ])
         self.composition_table.setRowCount(len(result.steps))
 
