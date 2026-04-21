@@ -142,6 +142,10 @@ class ConditionsInputWidget(QWidget):
     validation_error = Signal(str)
     status_hint = Signal(str)
     status_warning = Signal(str)
+    # Emitted when the saturation-point display unit changes in the inputs
+    # panel so the right-rail results view can re-render its current
+    # bubble/dew result in the new unit without re-running the solver.
+    saturation_display_unit_changed = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -594,13 +598,15 @@ class ConditionsInputWidget(QWidget):
         for unit in PressureUnit:
             guess_unit.addItem(unit.value, unit)
         guess_unit.setCurrentIndex(5)  # psia (US petroleum engineering default)
-        guess_unit.setEnabled(False)
+        # Intentionally left enabled at all times: this combo also controls
+        # the pressure-unit the bubble/dew result is displayed in, so the
+        # user still needs to be able to flip it even when the initial
+        # pressure-guess checkbox is off.
         setattr(self, f"{guess_spin_attr}_unit", guess_unit)
         self._configure_unit_row(guess_spin_layout, guess_spin, guess_unit)
         layout.addRow("", guess_spin_layout)
 
         guess_enabled.toggled.connect(guess_spin.setEnabled)
-        guess_enabled.toggled.connect(guess_unit.setEnabled)
         return widget
 
     def _create_bubble_point_widget(self) -> QWidget:
@@ -1043,6 +1049,15 @@ class ConditionsInputWidget(QWidget):
         self.dew_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.dew_pressure_guess_unit.currentIndexChanged.connect(self._emit_conditions_changed)
+        # Also emit a saturation-specific signal so the results panel can
+        # re-render an existing bubble/dew point display in the new unit
+        # without waiting for a re-run of the solver.
+        self.bubble_pressure_guess_unit.currentIndexChanged.connect(
+            self._emit_saturation_display_unit_changed
+        )
+        self.dew_pressure_guess_unit.currentIndexChanged.connect(
+            self._emit_saturation_display_unit_changed
+        )
         self.cce_temperature_unit.currentIndexChanged.connect(self._on_cce_temperature_unit_changed)
         self.cce_pressure_unit.currentIndexChanged.connect(self._on_cce_pressure_unit_changed)
         self.dl_temperature_unit.currentIndexChanged.connect(self._on_dl_temperature_unit_changed)
@@ -1062,6 +1077,18 @@ class ConditionsInputWidget(QWidget):
     def _emit_conditions_changed(self, *_args) -> None:
         """Re-emit input changes from Qt signals that may carry extra arguments."""
         self.conditions_changed.emit()
+
+    def _emit_saturation_display_unit_changed(self, *_args) -> None:
+        """Emit the current saturation pressure-unit selection.
+
+        Fires whenever the bubble/dew pressure-unit combo changes so the
+        results view can re-render an existing saturation point result in
+        the new unit without re-running the solver.
+        """
+        sender = self.sender()
+        unit = sender.currentData() if sender is not None else None
+        if isinstance(unit, PressureUnit):
+            self.saturation_display_unit_changed.emit(unit)
 
     def _on_calc_type_changed(self) -> None:
         """Update visible configuration based on calculation type."""

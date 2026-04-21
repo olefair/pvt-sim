@@ -364,6 +364,13 @@ class PVTSimulatorWindow(QMainWindow):
         self.conditions_widget.conditions_changed.connect(self._sync_characterization_context)
         self._sync_characterization_context()
 
+        # Flipping the bubble/dew pressure-unit combo in the inputs panel
+        # re-renders any active saturation result in the newly selected
+        # unit without requiring a re-run of the solver.
+        self.conditions_widget.saturation_display_unit_changed.connect(
+            self.results_table.apply_saturation_display_unit
+        )
+
         # Export requests
         self.results_table.export_requested.connect(self._export_results)
         self.workspace.theme_mode_changed.connect(self._set_theme_mode)

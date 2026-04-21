@@ -311,7 +311,23 @@ class CompositionInputWidget(QWidget):
         group_layout.addWidget(self.table)
         self._sync_column_widths()
 
-        # Button grid
+        # Sum display — sits directly below the composition table so the
+        # running total and validity indicator are always visible next to
+        # the data the user is editing.
+        sum_layout = QHBoxLayout()
+        sum_layout.addWidget(QLabel("Total:"))
+        self.sum_label = QLabel("0.000000")
+        self.sum_label.setStyleSheet("font-weight: bold;")
+        sum_layout.addWidget(self.sum_label)
+        self.sum_status = QLabel("")
+        sum_layout.addWidget(self.sum_status)
+        sum_layout.addStretch()
+
+        group_layout.addLayout(sum_layout)
+
+        # Edit button grid, placed below the sum so the total sits flush
+        # under the table and the actions sit together as a group of their
+        # own.
         self.add_btn = QPushButton("Add Component")
         self.remove_btn = QPushButton("Remove Selected")
         self.normalize_btn = QPushButton("Normalize Feed")
@@ -328,18 +344,6 @@ class CompositionInputWidget(QWidget):
         button_layout.setColumnStretch(0, 1)
         button_layout.setColumnStretch(1, 1)
         group_layout.addLayout(button_layout)
-
-        # Sum display
-        sum_layout = QHBoxLayout()
-        sum_layout.addWidget(QLabel("Total:"))
-        self.sum_label = QLabel("0.000000")
-        self.sum_label.setStyleSheet("font-weight: bold;")
-        sum_layout.addWidget(self.sum_label)
-        self.sum_status = QLabel("")
-        sum_layout.addWidget(self.sum_status)
-        sum_layout.addStretch()
-
-        group_layout.addLayout(sum_layout)
 
         layout.addWidget(group)
 

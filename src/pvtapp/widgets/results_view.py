@@ -271,36 +271,10 @@ class ResultsTableWidget(QWidget):
         self.viscosity_table = self._create_section_table()
         self.viscosity_section = self._build_table_section("Phase Viscosities", self.viscosity_table)
 
-        # Display-unit selector for saturation-point results. Hidden by default;
-        # shown from _display_saturation_result so the user can flip between
-        # e.g. bar and psia without re-running the calculation.
-        self._saturation_unit_row = QWidget()
-        saturation_unit_layout = QHBoxLayout(self._saturation_unit_row)
-        saturation_unit_layout.setContentsMargins(
-            0, 0, 0, scale_metric(4, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE)
-        )
-        saturation_unit_layout.setSpacing(scale_metric(6, DEFAULT_UI_SCALE, reference_scale=DEFAULT_UI_SCALE))
-        self._saturation_unit_label = QLabel("Display Unit:")
-        self._saturation_unit_label.setStyleSheet("color: #9ca3af;")
-        saturation_unit_layout.addWidget(self._saturation_unit_label)
-        self._saturation_unit_combo = NoWheelComboBox()
-        for unit in (
-            PressureUnit.PSIA,
-            PressureUnit.BAR,
-            PressureUnit.ATM,
-            PressureUnit.KPA,
-            PressureUnit.MPA,
-            PressureUnit.PSI,
-            PressureUnit.PA,
-        ):
-            self._saturation_unit_combo.addItem(unit.value, unit)
-        self._saturation_unit_combo.currentIndexChanged.connect(self._on_saturation_unit_changed)
-        saturation_unit_layout.addWidget(self._saturation_unit_combo)
-        saturation_unit_layout.addStretch(1)
-        self._saturation_unit_row.setVisible(False)
-        summary_layout = self.summary_section.layout()
-        if summary_layout is not None:
-            summary_layout.insertWidget(0, self._saturation_unit_row)
+        # Saturation-point display unit is driven by the bubble/dew pressure
+        # unit combo in the left inputs panel. The active result re-renders
+        # in the new unit via apply_saturation_display_unit() when that
+        # combo changes; no widget lives in the results pane itself.
         self.captured_section = QGroupBox("Captured")
         self.captured_section.setObjectName("ResultsSection")
         captured_layout = QVBoxLayout(self.captured_section)
@@ -728,7 +702,6 @@ class ResultsTableWidget(QWidget):
 
         # Reset per-result view state (e.g. saturation display-unit override).
         self._saturation_unit_override = None
-        self._saturation_unit_row.setVisible(False)
 
         # Display appropriate result type
         if result.pt_flash_result:
@@ -912,27 +885,26 @@ class ResultsTableWidget(QWidget):
             return PressureUnit.PSIA, TemperatureUnit.C
         return config.pressure_unit, config.temperature_unit
 
-    def _sync_saturation_unit_combo(self, pressure_unit: PressureUnit) -> None:
-        """Align the display-unit combo with the pressure unit currently in use."""
-        self._saturation_unit_combo.blockSignals(True)
-        try:
-            index = self._saturation_unit_combo.findData(pressure_unit)
-            if index >= 0:
-                self._saturation_unit_combo.setCurrentIndex(index)
-        finally:
-            self._saturation_unit_combo.blockSignals(False)
+    def apply_saturation_display_unit(self, unit: PressureUnit) -> None:
+        """Re-render the current bubble/dew point result in the given unit.
 
-    def _on_saturation_unit_changed(self, *_args) -> None:
-        """Re-render the active saturation result in the newly picked display unit."""
+        Called from the main window when the bubble/dew pressure-unit combo
+        in the left inputs panel changes, so the user can flip the display
+        unit (bar / psia / atm / ...) without re-running the solver.
+        """
         if self._current_result is None:
             return
-        new_unit = self._saturation_unit_combo.currentData()
-        if not isinstance(new_unit, PressureUnit):
+        if not isinstance(unit, PressureUnit):
             return
-        if self._saturation_unit_override == new_unit:
+        if self._saturation_unit_override == unit:
             return
-        self._saturation_unit_override = new_unit
         result = self._current_result
+        if (
+            result.bubble_point_result is None
+            and result.dew_point_result is None
+        ):
+            return
+        self._saturation_unit_override = unit
         if result.bubble_point_result is not None:
             self._display_bubble_point(result.bubble_point_result)
         elif result.dew_point_result is not None:
@@ -1379,8 +1351,6 @@ class ResultsTableWidget(QWidget):
     ) -> None:
         """Display bubble-point or dew-point results."""
         pressure_unit, temperature_unit = self._saturation_display_units()
-        self._sync_saturation_unit_combo(pressure_unit)
-        self._saturation_unit_row.setVisible(True)
         summary_data = [
             (pressure_label, _format_pressure(result.pressure_pa, pressure_unit)),
             ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
