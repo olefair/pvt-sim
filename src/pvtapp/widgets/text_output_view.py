@@ -719,14 +719,19 @@ class TextOutputWidget(QWidget):
             if r.saturation_pressure_pa is not None:
                 lines.append(f"Psat = {_format_pressure(r.saturation_pressure_pa, pressure_unit)}")
             lines.append("")
+            # Uniform 12-char columns (matches the per-step composition
+            # table style) so every header is right-edge-aligned with its
+            # values, even when Unicode subscript glyphs (ρₗ, ρᵥ, μₗ, μᵥ)
+            # render at reduced visual width in the monospace font.
+            cce_col = 12
             lines.append(
-                f"{f'P ({pressure_unit.value})':>10s} "
-                f"{'RelVol':>10s} "
-                f"{'\u03c1\u2097':>9s} "
-                f"{'\u03c1\u1d65':>9s} "
-                f"{'\u03bc\u2097':>8s} "
-                f"{'\u03bc\u1d65':>8s} "
-                f"{'Z\u2011factor':>10s}"
+                f"{f'P ({pressure_unit.value})':>{cce_col}s}"
+                f"{'RelVol':>{cce_col}s}"
+                f"{'\u03c1\u2097':>{cce_col}s}"
+                f"{'\u03c1\u1d65':>{cce_col}s}"
+                f"{'\u03bc\u2097':>{cce_col}s}"
+                f"{'\u03bc\u1d65':>{cce_col}s}"
+                f"{'Z\u2011factor':>{cce_col}s}"
             )
             for step in r.steps[:80]:
                 z = step.z_factor
@@ -756,13 +761,13 @@ class TextOutputWidget(QWidget):
                     else "-"
                 )
                 lines.append(
-                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
-                    f"{step.relative_volume:>10.5f} "
-                    f"{liquid_txt:>9s} "
-                    f"{vapor_txt:>9s} "
-                    f"{liquid_viscosity_txt:>8s} "
-                    f"{vapor_viscosity_txt:>8s} "
-                    f"{z_txt:>10s}"
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{cce_col}.5f}"
+                    f"{step.relative_volume:>{cce_col}.5f}"
+                    f"{liquid_txt:>{cce_col}s}"
+                    f"{vapor_txt:>{cce_col}s}"
+                    f"{liquid_viscosity_txt:>{cce_col}s}"
+                    f"{vapor_viscosity_txt:>{cce_col}s}"
+                    f"{z_txt:>{cce_col}s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
