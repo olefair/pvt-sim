@@ -3887,52 +3887,51 @@ class ResultsPlotWidget(QWidget):
         ax = self.figure.add_subplot(111)
         ax.set_facecolor(PLOT_CANVAS_COLOR)
 
+        t_unit = TemperatureUnit.F
+        p_unit = PressureUnit.PSIA
+
         critical_xy: tuple[float, float] | None = None
         if result.critical_point:
             critical_xy = (
-                result.critical_point.temperature_k - 273.15,
-                result.critical_point.pressure_pa / 1e5,
+                temperature_from_k(result.critical_point.temperature_k, t_unit),
+                pressure_from_pa(result.critical_point.pressure_pa, p_unit),
             )
 
         def _curve_xy(points) -> tuple[list[float], list[float]]:
-            # Plot only traced saturation points. Do not inject the detected critical
-            # point into these polylines: it generally does not lie on the discrete
-            # bubble or dew locus, and sorting by T creates fake segments (spikes).
+            # Plot only traced saturation points; critical point is not injected
+            # because it doesn't lie on the discrete locus (sorting by T creates spikes).
             xy = [
-                (p.temperature_k - 273.15, p.pressure_pa / 1e5)
+                (
+                    temperature_from_k(p.temperature_k, t_unit),
+                    pressure_from_pa(p.pressure_pa, p_unit),
+                )
                 for p in points
             ]
             temps = [t for t, _ in xy]
             pressures = [p for _, p in xy]
             return temps, pressures
 
-        # Bubble / dew / critical-point artists are captured so we can
-        # attach hover tooltips at the end of the function.
         data_lines: list = []
 
-        # Bubble curve
         if result.bubble_curve:
             temps, pressures = _curve_xy(result.bubble_curve)
             line, = ax.plot(temps, pressures, 'b-', linewidth=2, label='Bubble Point')
             data_lines.append(line)
 
-        # Dew curve
         if result.dew_curve:
             temps, pressures = _curve_xy(result.dew_curve)
             line, = ax.plot(temps, pressures, 'r-', linewidth=2, label='Dew Point')
             data_lines.append(line)
 
-        # Critical point
         if critical_xy is not None:
             line, = ax.plot(
-                critical_xy[0],
-                critical_xy[1],
-                'ko', markersize=10, label='Critical Point'
+                critical_xy[0], critical_xy[1],
+                'ko', markersize=10, label='Critical Point',
             )
             data_lines.append(line)
 
-        ax.set_xlabel('Temperature (C)')
-        ax.set_ylabel('Pressure (bar)')
+        ax.set_xlabel(f"Temperature ({_format_temperature_unit(t_unit)})")
+        ax.set_ylabel(f"Pressure ({p_unit.value})")
         ax.set_title('Phase Envelope')
         ax.legend()
         self._apply_axes_theme(ax)
@@ -3941,7 +3940,7 @@ class ResultsPlotWidget(QWidget):
         self._attach_hover_tooltips(
             data_lines,
             x_label="T",
-            x_unit="\u00b0C",
+            x_unit=_format_temperature_unit(t_unit),
             x_precision=2,
         )
 
