@@ -1,6 +1,6 @@
 # PVT-SIM Architecture
 
-Simulator architecture belongs in this docs set, not in repo-root agent
+Simulator architecture belongs in this docs set, not in repo-root
 orientation files.
 
 ## Canonical Companion Docs

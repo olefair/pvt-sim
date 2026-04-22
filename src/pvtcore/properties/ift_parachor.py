@@ -360,12 +360,12 @@ def _validate_ift_inputs(
         )
 
 # ==============================================================================
-# Compatibility wrappers (codex API)
+# Compatibility wrappers (compat API)
 # ==============================================================================
 
 @dataclass
 class ParachorIFT:
-    """IFT result (codex API)."""
+    """IFT result (compat API)."""
     sigma_N_per_m: float
     sigma_dyn_per_cm: float
 
@@ -379,7 +379,7 @@ def interfacial_tension_parachor(
     mw_components_g_per_mol: NDArray[np.float64],
     parachor: NDArray[np.float64],
 ) -> ParachorIFT:
-    """Compute IFT using the Weinaug–Katz parachor method (codex API).
+    """Compute IFT using the Weinaug–Katz parachor method (compat API).
 
     Returns both:
       - sigma_N_per_m (SI)
@@ -435,7 +435,7 @@ def interfacial_tension_parachor_after_flash(
     parachor: Optional[NDArray[np.float64]] = None,
     binary_interaction: Optional[NDArray[np.float64]] = None,
 ) -> ParachorIFT:
-    """Compute IFT end-to-end from a `pt_flash` result (codex API)."""
+    """Compute IFT end-to-end from a `pt_flash` result (compat API)."""
     phase = str(getattr(flash, "phase"))
     if phase != "two-phase":
         raise ValidationError("IFT requires a two-phase flash result.", parameter="flash.phase", value=phase)

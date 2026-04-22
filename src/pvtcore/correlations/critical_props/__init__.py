@@ -64,7 +64,7 @@ riazi_daubert_Pc_array = getattr(_legacy, "riazi_daubert_Pc_array", None)
 riazi_daubert_Vc_array = getattr(_legacy, "riazi_daubert_Vc_array", None)
 
 # ---------------------------------------------------------------------------
-# Newer, vectorized Riazi-Daubert helpers (codex additions)
+# Newer, vectorized Riazi-Daubert helpers
 # ---------------------------------------------------------------------------
 
 from .riazi_daubert import (  # noqa: E402
@@ -93,7 +93,7 @@ __all__ = [
     "riazi_daubert_Tc_array",
     "riazi_daubert_Pc_array",
     "riazi_daubert_Vc_array",
-    # Codex additions
+    # Additional vectorized helpers
     "RiaziDaubertCoefficients",
     "estimate_from_mw_sg",
     "estimate_from_tb_sg",

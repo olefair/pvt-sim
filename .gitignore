@@ -69,11 +69,11 @@ pvtsim_pypackages_permissive.md
 # Editor / IDE workspace settings (solo repo — no shared VSCode config)
 .vscode/
 
-# GitHub Actions workflows (moved to local Claude Code routines post-demo;
+# GitHub Actions workflows (moved to local automation post-demo;
 # CI on origin/main pauses until those routines are wired up)
 .github/workflows/
 
-# AI-assistance tooling (kept on disk for local dev, never committed)
+# Editor / local-tooling artifacts (kept on disk for local dev, never committed)
 .agents/
 .claude/
 .cursor/

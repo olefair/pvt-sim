@@ -354,12 +354,12 @@ def _validate_inputs(
         )
 
 # ==============================================================================
-# Compatibility wrappers (codex API)
+# Compatibility wrappers (compat API)
 # ==============================================================================
 
 @dataclass
 class PhaseDensity:
-    """Per-phase density convenience view (codex API)."""
+    """Per-phase density convenience view (compat API)."""
     molar_density_mol_per_m3: float
     mass_density_kg_per_m3: float
     molecular_weight_g_per_mol: float
@@ -367,7 +367,7 @@ class PhaseDensity:
 
 @dataclass
 class FlashDensities:
-    """Densities after a flash calculation (codex API)."""
+    """Densities after a flash calculation (compat API)."""
     liquid: Optional[PhaseDensity]
     vapor: Optional[PhaseDensity]
 
@@ -425,7 +425,7 @@ def densities_after_flash(
     binary_interaction: Optional[NDArray[np.float64]] = None,
     volume_shift: Optional[NDArray[np.float64]] = None,
 ) -> FlashDensities:
-    """Compute per-phase densities from a `pt_flash` result (codex API)."""
+    """Compute per-phase densities from a `pt_flash` result (compat API)."""
     # Delay import typing to avoid hard coupling to flash module types.
     pressure = float(getattr(flash, "pressure"))
     temperature = float(getattr(flash, "temperature"))

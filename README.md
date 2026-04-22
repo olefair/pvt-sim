@@ -193,9 +193,9 @@ For additional packaging details and non-Windows launch routes, see `docs/packag
   `test_phase_envelope_plot_connects_curves_through_critical_point` is kept
   `xfail` until the envelope-accuracy/continuity redesign lands.
 - **Pre-existing headless test failures.** 9 tests are known-failing on
-  `main` as of 2026-04-15 — see `CLAUDE.md` and `docs/development.md` for the
-  enumerated list. These do not block new work; do not silently reframe a new
-  failure as pre-existing without checking the baseline.
+  `main` as of 2026-04-15 — see `docs/development.md` for the enumerated
+  list. These do not block new work; do not silently reframe a new failure
+  as pre-existing without checking the baseline.
 - **CVD schedule.** `CVDConfig.n_steps` currently requires `>= 5`; explicit
   pressure lists are not yet supported at that surface (CCE and DL now do
   support explicit descending `pressure_points_pa` lists).

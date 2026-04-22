@@ -1,7 +1,7 @@
 # Runtime Surface Standard
 
 This document defines the minimum acceptable runtime-surface standard for
-PVT-SIM. It is intended to be durable across chats, agents, and platforms.
+PVT-SIM. It is intended to be durable across sessions and platforms.
 
 This is a repo contract, not a suggestion.
 

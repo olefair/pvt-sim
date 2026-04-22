@@ -5,7 +5,6 @@ This is the target file structure for the complete PVT-SIM project. Files and fo
 ```
 pvt-sim/
 ├── README.md                          # Project overview, quick start
-├── AGENTS.md                          # Repo-local execution notes for coding agents
 ├── LICENSE                            # MIT or similar
 ├── pyproject.toml                     # Project config, dependencies
 ├── .gitignore                         # Python, IDE, OS ignores

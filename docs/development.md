@@ -5,7 +5,7 @@ context: stack, package surface, coding conventions, error-handling
 expectations, and verification habits.
 
 Durable simulator information belongs here and in the rest of `docs/`, not in
-repo-root agent orientation files.
+repo-root orientation files.
 
 ---
 
@@ -149,11 +149,10 @@ Environment rules:
   document it here. Do not rely on `.env` as canonical repo state.
 - Keep the editor/interpreter pointed at `.venv\Scripts\python.exe` and
   `python.envFile=${workspaceFolder}/.env.defaults`.
-- Cursor and VS Code should inherit the repo default from
+- Editors should inherit the repo default from
   `.vscode/settings.json`; do not switch the shared setting back to `.env`.
-- Cursor MCP servers are machine-local. Copy `.cursor/mcp.json.example` to
-  `.cursor/mcp.json`, edit the local Python/server paths, and keep
-  `.cursor/mcp.json` uncommitted.
+- Editor-local MCP config is machine-local. Copy the `.example` template,
+  edit local Python/server paths, and keep the real file uncommitted.
 
 ---
 
@@ -271,8 +270,8 @@ gate below.
 ### Planned work (blueprints)
 
 The repo carries proposal-status design blueprints for two near-term
-numerical upgrades. They are not yet implemented; CLAUDE.md and the
-roadmap in `README.md` reference them as scheduled rather than shipped.
+numerical upgrades. They are not yet implemented; the roadmap in
+`README.md` references them as scheduled rather than shipped.
 
 - `docs/blueprints/fast_phase_envelope.md` — direct Michelsen-style Newton
   replacement for the TPD-plus-Brent envelope inner loop.

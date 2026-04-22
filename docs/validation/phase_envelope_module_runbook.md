@@ -25,14 +25,14 @@ signoff authorities.
 
 See also:
 
-- [phase_envelope_validation_matrix.md](/Users/olefa/.codex/worktrees/606a/pvt-sim_canon/docs/validation/phase_envelope_validation_matrix.md)
-- [external_validation_engine.md](/Users/olefa/.codex/worktrees/606a/pvt-sim_canon/docs/validation/external_validation_engine.md)
+- [phase_envelope_validation_matrix.md](docs/validation/phase_envelope_validation_matrix.md)
+- [external_validation_engine.md](docs/validation/external_validation_engine.md)
 
 ## Canonical Breadth Roster
 
 The explicit-component breadth roster now lives in:
 
-- [phase_envelope_breadth_roster.json](/Users/olefa/.codex/worktrees/606a/pvt-sim_canon/scripts/data/phase_envelope_breadth_roster.json)
+- [phase_envelope_breadth_roster.json](scripts/data/phase_envelope_breadth_roster.json)
 
 It contains the canonical 17-case family / topology surface:
 
@@ -88,7 +88,7 @@ python scripts/run_phase_envelope_validation.py --only release-gates --with-slow
 
 The local DWSIM DLL helper lives at:
 
-- [dwsim_batch_phase_envelopes.py](/Users/olefa/.codex/worktrees/606a/pvt-sim_canon/scripts/dwsim_batch_phase_envelopes.py)
+- [dwsim_batch_phase_envelopes.py](scripts/dwsim_batch_phase_envelopes.py)
 
 This helper can:
 
