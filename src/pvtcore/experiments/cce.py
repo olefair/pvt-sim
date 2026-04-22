@@ -1,64 +1,28 @@
-"""Constant Composition Expansion (CCE) simulation.
-
-CCE is a standard PVT laboratory test where a reservoir fluid sample
-is expanded at constant temperature by reducing pressure in steps.
-The composition remains constant throughout the test.
-
-Key measurements:
-- Relative volume (V/Vsat)
-- Compressibility factor (Z)
-- Liquid dropout (below bubble point)
-- Y-function for gas condensates
-
-Units Convention:
-- Pressure: Pa
-- Temperature: K
-- Volume: m³/mol (molar) or relative (dimensionless)
-
-References
-----------
-[1] McCain, W.D. (1990). The Properties of Petroleum Fluids.
-    2nd Edition, PennWell Books.
-[2] Pedersen, K.S., Christensen, P.L., and Shaikh, J.A. (2015).
-    Phase Behavior of Petroleum Reservoir Fluids. 2nd Edition, CRC Press.
-"""
+"""CCE."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 from numpy.typing import NDArray
 
-from ..core.constants import R
 from ..core.errors import ConvergenceError, PhaseError, ValidationError
 from ..eos.base import CubicEOS
-from ..models.component import Component
 from ..flash.pt_flash import pt_flash
+from ..helper_functions import _V, _Z, _v, _z_root
+from ..models.component import Component
 from ..properties.density import calculate_density
 
 
+####################
+# CCE
+####################
 @dataclass
 class CCEStepResult:
-    """Results from a single CCE pressure step.
+    """One CCE step."""
 
-    Attributes:
-        pressure: Pressure at this step (Pa)
-        temperature: Temperature (K)
-        relative_volume: V/Vsat (dimensionless)
-        compressibility_Z: Compressibility factor
-        liquid_volume_fraction: Liquid volume / total volume
-        vapor_fraction: Vapor mole fraction (0 to 1)
-        liquid_density: Liquid mass density (kg/m³)
-        vapor_density: Vapor mass density (kg/m³)
-        liquid_compressibility: Liquid phase Z factor
-        vapor_compressibility: Vapor phase Z factor
-        phase: Phase state ('liquid', 'vapor', 'two-phase')
-        liquid_composition: Liquid-phase mole fractions when present
-        vapor_composition: Vapor-phase mole fractions when present
-        Y_function: Y-function for gas condensates (optional)
-    """
     pressure: float
     temperature: float
     relative_volume: float
@@ -70,35 +34,19 @@ class CCEStepResult:
     liquid_compressibility: float
     vapor_compressibility: float
     phase: str
-    liquid_composition: NDArray[np.float64] = field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
-    vapor_composition: NDArray[np.float64] = field(
-        default_factory=lambda: np.array([], dtype=np.float64)
-    )
+    liquid_composition: NDArray[np.float64] = field(default_factory=lambda: np.array([], dtype=np.float64))
+    vapor_composition: NDArray[np.float64] = field(default_factory=lambda: np.array([], dtype=np.float64))
     Y_function: Optional[float] = None
 
 
 @dataclass
 class CCEResult:
-    """Complete results from CCE simulation.
+    """Full CCE result."""
 
-    Attributes:
-        temperature: Test temperature (K)
-        saturation_pressure: Bubble/dew point pressure (Pa)
-        saturation_type: 'bubble' or 'dew'
-        steps: List of results for each pressure step
-        pressures: Array of pressures (Pa)
-        relative_volumes: Array of V/Vsat
-        liquid_dropouts: Array of liquid volume fractions below Psat
-        compressibility_above_sat: Z factor above saturation
-        feed_composition: Original feed composition
-        converged: True if all steps converged
-    """
     temperature: float
     saturation_pressure: float
     saturation_type: str
-    steps: List[CCEStepResult]
+    steps: list[CCEStepResult]
     pressures: NDArray[np.float64]
     relative_volumes: NDArray[np.float64]
     liquid_dropouts: NDArray[np.float64]
@@ -107,450 +55,25 @@ class CCEResult:
     converged: bool
 
 
-def simulate_cce(
-    composition: NDArray[np.float64],
-    temperature: float,
-    components: List[Component],
-    eos: CubicEOS,
-    pressure_start: float,
-    pressure_end: float,
-    n_steps: int = 20,
-    pressure_steps: Optional[NDArray[np.float64]] = None,
-    binary_interaction: Optional[NDArray[np.float64]] = None,
-    saturation_pressure: Optional[float] = None,
-) -> CCEResult:
-    """Simulate Constant Composition Expansion test.
-
-    The CCE test expands a fluid sample at constant temperature
-    by reducing pressure in steps. At each step:
-    1. Perform flash calculation (or single-phase if above Psat)
-    2. Calculate volumes and properties
-    3. Record relative volume V/Vsat
-
-    Parameters
-    ----------
-    composition : ndarray
-        Feed mole fractions (constant throughout test).
-    temperature : float
-        Test temperature in K.
-    components : list of Component
-        Component objects.
-    eos : CubicEOS
-        Equation of state instance.
-    pressure_start : float
-        Starting pressure in Pa (typically above saturation).
-    pressure_end : float
-        Ending pressure in Pa (typically well below saturation).
-    n_steps : int
-        Number of pressure steps.
-    pressure_steps : ndarray, optional
-        Explicit descending pressure schedule in Pa. When provided, it
-        overrides the linear pressure_start/pressure_end/n_steps grid.
-    binary_interaction : ndarray, optional
-        Binary interaction parameters.
-    saturation_pressure : float, optional
-        Known saturation pressure. If not provided, will be estimated.
-
-    Returns
-    -------
-    CCEResult
-        Complete CCE test results.
-
-    Raises
-    ------
-    ValidationError
-        If inputs are invalid.
-    ConvergenceError
-        If flash calculations fail.
-
-    Notes
-    -----
-    The CCE test is used to determine:
-    - Saturation pressure (bubble or dew point)
-    - Oil/gas compressibility above saturation
-    - Liquid dropout curve for gas condensates
-    - Two-phase compressibility below saturation
-
-    For oils (bubble point system):
-        - Above Psat: single-phase liquid
-        - Below Psat: two-phase with gas liberation
-
-    For gas condensates (dew point system):
-        - Above Psat: single-phase vapor
-        - Below Psat: two-phase with liquid dropout
-
-    Examples
-    --------
-    >>> from pvtcore.models.component import load_components
-    >>> from pvtcore.eos.peng_robinson import PengRobinsonEOS
-    >>> components = load_components()
-    >>> oil = [components['C1'], components['C3'], components['C10']]
-    >>> eos = PengRobinsonEOS(oil)
-    >>> z = np.array([0.5, 0.3, 0.2])
-    >>> result = simulate_cce(z, 350.0, oil, eos, 30e6, 5e6, n_steps=25)
-    >>> print(f"Saturation P: {result.saturation_pressure/1e6:.2f} MPa")
-    """
-    # Validate inputs
-    z = np.asarray(composition, dtype=np.float64)
-    z = z / z.sum()
-    T = float(temperature)
-
-    pressures = _build_cce_pressure_schedule(
-        pressure_start=pressure_start,
-        pressure_end=pressure_end,
-        n_steps=n_steps,
-        pressure_steps=pressure_steps,
-    )
-    _validate_cce_inputs(z, T, pressures, components)
-    pressure_start = float(pressures[0])
-    pressure_end = float(pressures[-1])
-
-    # Determine saturation pressure if not provided
-    if saturation_pressure is None:
-        P_sat, sat_type = _find_saturation_pressure(
-            z, T, components, eos, binary_interaction,
-            pressure_start, pressure_end
-        )
-    else:
-        P_sat = saturation_pressure
-        sat_type = _determine_saturation_type(z, T, P_sat, components, eos, binary_interaction)
-
-    # Calculate volume at saturation (reference)
-    V_sat = _calculate_molar_volume(
-        P_sat, T, z, components, eos, binary_interaction,
-        phase='liquid' if sat_type == 'bubble' else 'vapor'
-    )
-
-    # Run CCE at each pressure step
-    steps = []
-    all_converged = True
-
-    for P in pressures:
-        try:
-            step_result = _cce_step(
-                P, T, z, components, eos, binary_interaction,
-                P_sat, V_sat, sat_type
-            )
-            steps.append(step_result)
-        except (ConvergenceError, PhaseError) as e:
-            # Create placeholder for failed step
-            steps.append(CCEStepResult(
-                pressure=P,
-                temperature=T,
-                relative_volume=np.nan,
-                compressibility_Z=np.nan,
-                liquid_volume_fraction=np.nan,
-                vapor_fraction=np.nan,
-                liquid_density=np.nan,
-                vapor_density=np.nan,
-                liquid_compressibility=np.nan,
-                vapor_compressibility=np.nan,
-                phase='unknown',
-                liquid_composition=np.zeros_like(z),
-                vapor_composition=np.zeros_like(z),
-            ))
-            all_converged = False
-
-    # Extract arrays
-    relative_volumes = np.array([s.relative_volume for s in steps])
-    liquid_dropouts = np.array([s.liquid_volume_fraction for s in steps])
-
-    # Compressibility above saturation
-    above_sat_steps = [s for s in steps if s.pressure > P_sat and s.phase != 'unknown']
-    if above_sat_steps:
-        Z_above = np.mean([s.compressibility_Z for s in above_sat_steps])
-    else:
-        Z_above = np.nan
-
-    return CCEResult(
-        temperature=T,
-        saturation_pressure=P_sat,
-        saturation_type=sat_type,
-        steps=steps,
-        pressures=pressures,
-        relative_volumes=relative_volumes,
-        liquid_dropouts=liquid_dropouts,
-        compressibility_above_sat=Z_above,
-        feed_composition=z,
-        converged=all_converged,
-    )
-
-
-def _cce_step(
-    pressure: float,
-    temperature: float,
-    composition: NDArray[np.float64],
-    components: List[Component],
-    eos: CubicEOS,
-    binary_interaction: Optional[NDArray[np.float64]],
-    P_sat: float,
-    V_sat: float,
-    sat_type: str,
-) -> CCEStepResult:
-    """Execute single CCE pressure step."""
-    P = float(pressure)
-    T = float(temperature)
-    z = composition
-
-    if P > P_sat:
-        # Above saturation: single phase
-        phase = 'liquid' if sat_type == 'bubble' else 'vapor'
-
-        # Get compressibility
-        Z = eos.compressibility(P, T, z, phase=phase, binary_interaction=binary_interaction)
-        if isinstance(Z, list):
-            Z = Z[0] if phase == 'liquid' else Z[-1]
-
-        # Molar volume
-        V = Z * R.Pa_m3_per_mol_K * T / P
-
-        # Density
-        rho_result = calculate_density(P, T, z, components, eos, phase, binary_interaction)
-
-        return CCEStepResult(
-            pressure=P,
-            temperature=T,
-            relative_volume=V / V_sat,
-            compressibility_Z=Z,
-            liquid_volume_fraction=1.0 if phase == 'liquid' else 0.0,
-            vapor_fraction=0.0 if phase == 'liquid' else 1.0,
-            liquid_density=rho_result.mass_density if phase == 'liquid' else 0.0,
-            vapor_density=rho_result.mass_density if phase == 'vapor' else 0.0,
-            liquid_compressibility=Z if phase == 'liquid' else 0.0,
-            vapor_compressibility=Z if phase == 'vapor' else 0.0,
-            phase=phase,
-            liquid_composition=z.copy() if phase == 'liquid' else np.zeros_like(z),
-            vapor_composition=z.copy() if phase == 'vapor' else np.zeros_like(z),
-        )
-    else:
-        # Below saturation: two-phase flash
-        flash_result = pt_flash(P, T, z, components, eos,
-                               binary_interaction=binary_interaction)
-
-        if flash_result.phase in ['liquid', 'vapor']:
-            # Single phase result (edge case)
-            phase = flash_result.phase
-            Z = eos.compressibility(P, T, z, phase=phase, binary_interaction=binary_interaction)
-            if isinstance(Z, list):
-                Z = Z[0] if phase == 'liquid' else Z[-1]
-
-            V = Z * R.Pa_m3_per_mol_K * T / P
-            rho_result = calculate_density(P, T, z, components, eos, phase, binary_interaction)
-
-            return CCEStepResult(
-                pressure=P,
-                temperature=T,
-                relative_volume=V / V_sat,
-                compressibility_Z=Z,
-                liquid_volume_fraction=1.0 if phase == 'liquid' else 0.0,
-                vapor_fraction=flash_result.vapor_fraction,
-                liquid_density=rho_result.mass_density if phase == 'liquid' else 0.0,
-                vapor_density=rho_result.mass_density if phase == 'vapor' else 0.0,
-                liquid_compressibility=Z if phase == 'liquid' else 0.0,
-                vapor_compressibility=Z if phase == 'vapor' else 0.0,
-                phase=phase,
-                liquid_composition=z.copy() if phase == 'liquid' else np.zeros_like(z),
-                vapor_composition=z.copy() if phase == 'vapor' else np.zeros_like(z),
-            )
-
-        # Two-phase
-        nv = flash_result.vapor_fraction
-        x = flash_result.liquid_composition
-        y = flash_result.vapor_composition
-
-        # Get phase compressibilities
-        Z_L = eos.compressibility(P, T, x, phase='liquid', binary_interaction=binary_interaction)
-        Z_V = eos.compressibility(P, T, y, phase='vapor', binary_interaction=binary_interaction)
-        if isinstance(Z_L, list):
-            Z_L = Z_L[0]
-        if isinstance(Z_V, list):
-            Z_V = Z_V[-1]
-
-        # Phase volumes (per mole of feed)
-        V_L = (1 - nv) * Z_L * R.Pa_m3_per_mol_K * T / P
-        V_V = nv * Z_V * R.Pa_m3_per_mol_K * T / P
-        V_total = V_L + V_V
-
-        # Overall Z
-        Z_overall = P * V_total / (R.Pa_m3_per_mol_K * T)
-
-        # Volume fractions
-        liquid_vol_frac = V_L / V_total if V_total > 0 else 0.0
-
-        # Densities
-        rho_L = calculate_density(P, T, x, components, eos, 'liquid', binary_interaction)
-        rho_V = calculate_density(P, T, y, components, eos, 'vapor', binary_interaction)
-
-        # Y-function for gas condensates
-        Y_func = None
-        if sat_type == 'dew' and liquid_vol_frac > 0:
-            # Y = (P_sat - P) / (P * (V/V_sat - 1))
-            V_rel = V_total / V_sat
-            if V_rel > 1.001:
-                Y_func = (P_sat - P) / (P * (V_rel - 1))
-
-        return CCEStepResult(
-            pressure=P,
-            temperature=T,
-            relative_volume=V_total / V_sat,
-            compressibility_Z=Z_overall,
-            liquid_volume_fraction=liquid_vol_frac,
-            vapor_fraction=nv,
-            liquid_density=rho_L.mass_density,
-            vapor_density=rho_V.mass_density,
-            liquid_compressibility=Z_L,
-            vapor_compressibility=Z_V,
-            phase='two-phase',
-            liquid_composition=x.copy(),
-            vapor_composition=y.copy(),
-            Y_function=Y_func,
-        )
-
-
-def _find_saturation_pressure(
-    composition: NDArray[np.float64],
-    temperature: float,
-    components: List[Component],
-    eos: CubicEOS,
-    binary_interaction: Optional[NDArray[np.float64]],
-    P_high: float,
-    P_low: float,
-) -> tuple[float, str]:
-    """Find saturation pressure by bisection."""
-    from ..flash.bubble_point import calculate_bubble_point
-    from ..flash.dew_point import calculate_dew_point
-
-    candidates: list[tuple[float, str]] = []
-
-    try:
-        result = calculate_bubble_point(
-            temperature, composition, components, eos,
-            binary_interaction=binary_interaction,
-        )
-        candidates.append((float(result.pressure), 'bubble'))
-    except (ConvergenceError, PhaseError):
-        pass
-
-    try:
-        result = calculate_dew_point(
-            temperature, composition, components, eos,
-            binary_interaction=binary_interaction,
-        )
-        candidates.append((float(result.pressure), 'dew'))
-    except (ConvergenceError, PhaseError):
-        pass
-
-    if candidates:
-        in_schedule = [
-            (pressure, sat_type)
-            for pressure, sat_type in candidates
-            if P_low < pressure < P_high
-        ]
-        if in_schedule:
-            candidates = in_schedule
-
-        if len(candidates) == 1:
-            return candidates[0]
-
-        avg_MW = sum(composition[i] * comp.MW for i, comp in enumerate(components))
-        preferred_type = 'bubble' if avg_MW > 50 else 'dew'
-        for pressure, sat_type in candidates:
-            if sat_type == preferred_type:
-                return pressure, sat_type
-        return candidates[0]
-
-    # Fallback: estimate from flash behavior
-    P_mid = (P_high + P_low) / 2
-    for _ in range(20):
-        flash = pt_flash(P_mid, temperature, composition, components, eos,
-                        binary_interaction=binary_interaction)
-        if flash.phase == 'liquid':
-            # Need to go lower
-            P_high = P_mid
-        elif flash.phase == 'vapor':
-            # Need to go higher
-            P_low = P_mid
-        else:
-            # Two-phase - getting close
-            break
-        P_mid = (P_high + P_low) / 2
-
-    avg_MW = sum(composition[i] * comp.MW for i, comp in enumerate(components))
-    sat_type = 'bubble' if avg_MW > 50 else 'dew'
-
-    return P_mid, sat_type
-
-
-def _determine_saturation_type(
-    composition: NDArray[np.float64],
-    temperature: float,
-    P_sat: float,
-    components: List[Component],
-    eos: CubicEOS,
-    binary_interaction: Optional[NDArray[np.float64]],
-) -> str:
-    """Determine if saturation is bubble or dew point."""
-    # Flash slightly below Psat
-    P_test = P_sat * 0.95
-    flash = pt_flash(P_test, temperature, composition, components, eos,
-                    binary_interaction=binary_interaction)
-
-    if flash.phase == 'two-phase':
-        # If mostly liquid, it's bubble point
-        if flash.vapor_fraction < 0.5:
-            return 'bubble'
-        else:
-            return 'dew'
-    elif flash.phase == 'liquid':
-        return 'bubble'
-    else:
-        return 'dew'
-
-
-def _calculate_molar_volume(
-    pressure: float,
-    temperature: float,
-    composition: NDArray[np.float64],
-    components: List[Component],
-    eos: CubicEOS,
-    binary_interaction: Optional[NDArray[np.float64]],
-    phase: str,
-) -> float:
-    """Calculate molar volume for given conditions."""
-    Z = eos.compressibility(pressure, temperature, composition,
-                           phase=phase, binary_interaction=binary_interaction)
-    if isinstance(Z, list):
-        Z = Z[0] if phase == 'liquid' else Z[-1]
-
-    return Z * R.Pa_m3_per_mol_K * temperature / pressure
-
-
+####################
+# HELPER FUNCTIONS
+####################
 def _validate_cce_inputs(
-    composition: NDArray[np.float64],
-    temperature: float,
-    pressure_steps: NDArray[np.float64],
-    components: List[Component],
+    z: NDArray[np.float64],
+    T: float,
+    Ps: NDArray[np.float64],
+    cs: list[Component],
 ) -> None:
-    """Validate CCE inputs."""
-    if temperature <= 0:
+    if T <= 0.0:
         raise ValidationError("Temperature must be positive", parameter="temperature")
-    if len(pressure_steps) < 2:
-        raise ValidationError(
-            "CCE requires at least two pressure points",
-            parameter="pressure_steps",
-        )
-    if np.any(pressure_steps <= 0):
+    if len(Ps) < 2:
+        raise ValidationError("CCE requires at least two pressure points", parameter="pressure_steps")
+    if np.any(Ps <= 0.0):
         raise ValidationError("Pressures must be positive", parameter="pressure")
-    if np.any(pressure_steps[:-1] <= pressure_steps[1:]):
-        raise ValidationError(
-            "CCE pressure schedule must be strictly descending",
-            parameter="pressure"
-        )
-    if len(composition) != len(components):
-        raise ValidationError(
-            "Composition length must match number of components",
-            parameter="composition"
-        )
+    if np.any(Ps[:-1] <= Ps[1:]):
+        raise ValidationError("CCE pressure schedule must be strictly descending", parameter="pressure")
+    if len(z) != len(cs):
+        raise ValidationError("Composition length must match number of components", parameter="composition")
 
 
 def _build_cce_pressure_schedule(
@@ -560,13 +83,264 @@ def _build_cce_pressure_schedule(
     n_steps: int,
     pressure_steps: Optional[NDArray[np.float64]],
 ) -> NDArray[np.float64]:
-    """Build the CCE pressure schedule from either an explicit list or a linear grid."""
     if pressure_steps is not None:
-        pressures = np.asarray(pressure_steps, dtype=np.float64)
-        if pressures.ndim != 1:
-            raise ValidationError(
-                "pressure_steps must be a one-dimensional array",
-                parameter="pressure_steps",
-            )
-        return pressures
+        Ps = np.asarray(pressure_steps, dtype=np.float64)
+        if Ps.ndim != 1:
+            raise ValidationError("pressure_steps must be a one-dimensional array", parameter="pressure_steps")
+        return Ps
     return np.linspace(pressure_start, pressure_end, n_steps, dtype=np.float64)
+
+
+def _sat_kind(
+    z: NDArray[np.float64],
+    T: float,
+    Psat: float,
+    cs: list[Component],
+    eos: CubicEOS,
+    kij: Optional[NDArray[np.float64]],
+) -> str:
+    fl = pt_flash(Psat * 0.95, T, z, cs, eos, binary_interaction=kij)
+    if fl.phase == "two-phase":
+        return "bubble" if float(fl.vapor_fraction) < 0.5 else "dew"
+    return "bubble" if fl.phase == "liquid" else "dew"
+
+
+def _find_sat(
+    z: NDArray[np.float64],
+    T: float,
+    cs: list[Component],
+    eos: CubicEOS,
+    kij: Optional[NDArray[np.float64]],
+    Ph: float,
+    Pl: float,
+) -> tuple[float, str]:
+    from ..flash.bubble_point import calculate_bubble_point
+    from ..flash.dew_point import calculate_dew_point
+
+    cand: list[tuple[float, str]] = []
+    try:
+        r = calculate_bubble_point(T, z, cs, eos, binary_interaction=kij)
+        cand.append((float(r.pressure), "bubble"))
+    except (ConvergenceError, PhaseError):
+        pass
+    try:
+        r = calculate_dew_point(T, z, cs, eos, binary_interaction=kij)
+        cand.append((float(r.pressure), "dew"))
+    except (ConvergenceError, PhaseError):
+        pass
+
+    if cand:
+        in_grid = [(P, kind) for P, kind in cand if Pl < P < Ph]
+        if in_grid:
+            cand = in_grid
+        if len(cand) == 1:
+            return cand[0]
+        MWm = sum(float(z[i]) * comp.MW for i, comp in enumerate(cs))
+        pref = "bubble" if MWm > 50.0 else "dew"
+        for P, kind in cand:
+            if kind == pref:
+                return P, kind
+        return cand[0]
+
+    P = 0.5 * (Ph + Pl)
+    for _ in range(20):
+        fl = pt_flash(P, T, z, cs, eos, binary_interaction=kij)
+        if fl.phase == "liquid":
+            Ph = P
+        elif fl.phase == "vapor":
+            Pl = P
+        else:
+            break
+        P = 0.5 * (Ph + Pl)
+
+    MWm = sum(float(z[i]) * comp.MW for i, comp in enumerate(cs))
+    return P, ("bubble" if MWm > 50.0 else "dew")
+
+
+def _state_v(
+    P: float,
+    T: float,
+    z: NDArray[np.float64],
+    cs: list[Component],
+    eos: CubicEOS,
+    kij: Optional[NDArray[np.float64]],
+    ph: str,
+) -> float:
+    Z = _z_root(eos.compressibility(P, T, z, phase=ph, binary_interaction=kij), "liquid" if ph == "liquid" else "vapor")
+    return _v(Z, T, P)
+
+
+def _cce_step(
+    P: float,
+    T: float,
+    z: NDArray[np.float64],
+    cs: list[Component],
+    eos: CubicEOS,
+    kij: Optional[NDArray[np.float64]],
+    Psat: float,
+    Vsat: float,
+    sat_type: str,
+) -> CCEStepResult:
+    if P > Psat:
+        ph = "liquid" if sat_type == "bubble" else "vapor"
+        Z = _z_root(eos.compressibility(P, T, z, phase=ph, binary_interaction=kij), ph)
+        v = _v(Z, T, P)
+        rho = calculate_density(P, T, z, cs, eos, ph, kij)
+        return CCEStepResult(
+            pressure=P,
+            temperature=T,
+            relative_volume=v / Vsat,
+            compressibility_Z=Z,
+            liquid_volume_fraction=1.0 if ph == "liquid" else 0.0,
+            vapor_fraction=0.0 if ph == "liquid" else 1.0,
+            liquid_density=rho.mass_density if ph == "liquid" else 0.0,
+            vapor_density=rho.mass_density if ph == "vapor" else 0.0,
+            liquid_compressibility=Z if ph == "liquid" else 0.0,
+            vapor_compressibility=Z if ph == "vapor" else 0.0,
+            phase=ph,
+            liquid_composition=z.copy() if ph == "liquid" else np.zeros_like(z),
+            vapor_composition=z.copy() if ph == "vapor" else np.zeros_like(z),
+        )
+
+    fl = pt_flash(P, T, z, cs, eos, binary_interaction=kij)
+    if fl.phase in {"liquid", "vapor"}:
+        ph = fl.phase
+        Z = _z_root(eos.compressibility(P, T, z, phase=ph, binary_interaction=kij), ph)
+        v = _v(Z, T, P)
+        rho = calculate_density(P, T, z, cs, eos, ph, kij)
+        return CCEStepResult(
+            pressure=P,
+            temperature=T,
+            relative_volume=v / Vsat,
+            compressibility_Z=Z,
+            liquid_volume_fraction=1.0 if ph == "liquid" else 0.0,
+            vapor_fraction=float(fl.vapor_fraction),
+            liquid_density=rho.mass_density if ph == "liquid" else 0.0,
+            vapor_density=rho.mass_density if ph == "vapor" else 0.0,
+            liquid_compressibility=Z if ph == "liquid" else 0.0,
+            vapor_compressibility=Z if ph == "vapor" else 0.0,
+            phase=ph,
+            liquid_composition=z.copy() if ph == "liquid" else np.zeros_like(z),
+            vapor_composition=z.copy() if ph == "vapor" else np.zeros_like(z),
+        )
+
+    nV = float(fl.vapor_fraction)
+    nL = 1.0 - nV
+    x = fl.liquid_composition
+    y = fl.vapor_composition
+    ZL = _z_root(eos.compressibility(P, T, x, phase="liquid", binary_interaction=kij), "liquid")
+    ZV = _z_root(eos.compressibility(P, T, y, phase="vapor", binary_interaction=kij), "vapor")
+    VL = _V(nL, ZL, T, P)
+    VV = _V(nV, ZV, T, P)
+    Vt = VL + VV
+    VLf = VL / Vt if Vt > 0.0 else 0.0
+    rhoL = calculate_density(P, T, x, cs, eos, "liquid", kij)
+    rhoV = calculate_density(P, T, y, cs, eos, "vapor", kij)
+    Yf = None
+    if sat_type == "dew" and VLf > 0.0:
+        Vr = Vt / Vsat
+        if Vr > 1.001:
+            Yf = (Psat - P) / (P * (Vr - 1.0))
+    return CCEStepResult(
+        pressure=P,
+        temperature=T,
+        relative_volume=Vt / Vsat,
+        compressibility_Z=_Z(Vt, 1.0, T, P),
+        liquid_volume_fraction=VLf,
+        vapor_fraction=nV,
+        liquid_density=rhoL.mass_density,
+        vapor_density=rhoV.mass_density,
+        liquid_compressibility=ZL,
+        vapor_compressibility=ZV,
+        phase="two-phase",
+        liquid_composition=x.copy(),
+        vapor_composition=y.copy(),
+        Y_function=Yf,
+    )
+
+
+def simulate_cce(
+    composition: NDArray[np.float64],
+    temperature: float,
+    components: list[Component],
+    eos: CubicEOS,
+    pressure_start: float,
+    pressure_end: float,
+    n_steps: int = 20,
+    pressure_steps: Optional[NDArray[np.float64]] = None,
+    binary_interaction: Optional[NDArray[np.float64]] = None,
+    saturation_pressure: Optional[float] = None,
+) -> CCEResult:
+    """Run CCE."""
+
+    z = np.asarray(composition, dtype=np.float64)
+    z = z / z.sum()
+    T = float(temperature)
+    Ps = _build_cce_pressure_schedule(
+        pressure_start=pressure_start,
+        pressure_end=pressure_end,
+        n_steps=n_steps,
+        pressure_steps=pressure_steps,
+    )
+    _validate_cce_inputs(z, T, Ps, components)
+
+    Ph = float(Ps[0])
+    Pl = float(Ps[-1])
+    if saturation_pressure is None:
+        Psat, sat_type = _find_sat(z, T, components, eos, binary_interaction, Ph, Pl)
+    else:
+        Psat = float(saturation_pressure)
+        sat_type = _sat_kind(z, T, Psat, components, eos, binary_interaction)
+
+    Vsat = _state_v(
+        Psat,
+        T,
+        z,
+        components,
+        eos,
+        binary_interaction,
+        "liquid" if sat_type == "bubble" else "vapor",
+    )
+
+    steps: list[CCEStepResult] = []
+    ok = True
+    for P in Ps:
+        try:
+            steps.append(_cce_step(float(P), T, z, components, eos, binary_interaction, Psat, Vsat, sat_type))
+        except (ConvergenceError, PhaseError):
+            ok = False
+            steps.append(
+                CCEStepResult(
+                    pressure=float(P),
+                    temperature=T,
+                    relative_volume=np.nan,
+                    compressibility_Z=np.nan,
+                    liquid_volume_fraction=np.nan,
+                    vapor_fraction=np.nan,
+                    liquid_density=np.nan,
+                    vapor_density=np.nan,
+                    liquid_compressibility=np.nan,
+                    vapor_compressibility=np.nan,
+                    phase="unknown",
+                    liquid_composition=np.zeros_like(z),
+                    vapor_composition=np.zeros_like(z),
+                )
+            )
+
+    Vr = np.array([s.relative_volume for s in steps])
+    VLf = np.array([s.liquid_volume_fraction for s in steps])
+    Z_above = np.mean([s.compressibility_Z for s in steps if s.pressure > Psat and s.phase != "unknown"]) if any(
+        s.pressure > Psat and s.phase != "unknown" for s in steps
+    ) else np.nan
+    return CCEResult(
+        temperature=T,
+        saturation_pressure=Psat,
+        saturation_type=sat_type,
+        steps=steps,
+        pressures=Ps,
+        relative_volumes=Vr,
+        liquid_dropouts=VLf,
+        compressibility_above_sat=Z_above,
+        feed_composition=z,
+        converged=ok,
+    )

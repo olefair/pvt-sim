@@ -324,13 +324,13 @@ def _map_pedersen_solve_ab_from(mode: str) -> str:
 
 def _map_lumping_method(method: str) -> str:
     method_l = method.strip().lower()
-    if method_l in {"whitson", "contiguous"}:
+    if method_l == "whitson":
         return method_l
     raise ConfigurationError(
         "Unsupported lumping method.",
         config_key="fluid.plus_fraction.lumping.method",
         value=method,
-        supported=["whitson", "contiguous"],
+        supported=["whitson"],
     )
 
 

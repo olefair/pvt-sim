@@ -995,6 +995,8 @@ def _assert_configs_equivalent(actual: RunConfig, expected: RunConfig) -> None:
 def test_main_window_opens(window: PVTSimulatorWindow) -> None:
     assert window.composition_widget is not None
     assert window.conditions_widget is not None
+    assert window.conditions_widget.get_calculation_type() is CalculationType.BUBBLE_POINT
+    assert window.conditions_widget.get_eos_type() is EOSType.PR78
     assert window.results_table is not None
     assert window.results_plot is not None
     assert window.workspace is not None

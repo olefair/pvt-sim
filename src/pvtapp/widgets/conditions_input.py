@@ -202,11 +202,19 @@ class ConditionsInputWidget(QWidget):
         self.calc_type_combo = NoWheelComboBox()
         for calc_type in GUI_SUPPORTED_CALCULATION_TYPES:
             self.calc_type_combo.addItem(GUI_CALCULATION_TYPE_LABELS[calc_type], calc_type)
+        calc_index = self.calc_type_combo.findData(CalculationType.BUBBLE_POINT)
+        if calc_index >= 0:
+            # Start the desktop app on the assignment's first required workflow.
+            self.calc_type_combo.setCurrentIndex(calc_index)
         calc_layout.addRow("Type:", self.calc_type_combo)
 
         self.eos_combo = NoWheelComboBox()
         for eos in GUI_SUPPORTED_EOS_TYPES:
             self.eos_combo.addItem(GUI_EOS_TYPE_LABELS[eos], eos)
+        eos_index = self.eos_combo.findData(EOSType.PR78)
+        if eos_index >= 0:
+            # PETE 665 submission work is PR78-based, so make that the visible default.
+            self.eos_combo.setCurrentIndex(eos_index)
         calc_layout.addRow("EOS:", self.eos_combo)
 
         layout.addWidget(calc_group)

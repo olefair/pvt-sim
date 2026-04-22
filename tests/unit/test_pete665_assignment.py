@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from pvtcore.eos import PengRobinsonEOS
+from pvtcore.eos import PR78EOS
 from pvtcore.flash import calculate_bubble_point, calculate_dew_point
 from pvtcore.validation.pete665_assignment import (
     build_assignment_fluid,
@@ -72,7 +72,7 @@ def test_assignment_runner_smoke() -> None:
 def test_assignment_bubble_point_is_robust_to_bad_initial_guesses() -> None:
     case = load_assignment_case()
     _component_ids, components, composition = build_assignment_fluid(case)
-    eos = PengRobinsonEOS(components)
+    eos = PR78EOS(components)
     temperature_k = fahrenheit_to_kelvin(125.0)
 
     reference = calculate_bubble_point(
@@ -97,7 +97,7 @@ def test_assignment_bubble_point_is_robust_to_bad_initial_guesses() -> None:
 def test_assignment_dew_point_is_robust_to_bad_initial_guesses() -> None:
     case = load_assignment_case()
     _component_ids, components, composition = build_assignment_fluid(case)
-    eos = PengRobinsonEOS(components)
+    eos = PR78EOS(components)
     temperature_k = fahrenheit_to_kelvin(125.0)
 
     reference = calculate_dew_point(

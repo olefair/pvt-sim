@@ -7,8 +7,7 @@ This document defines the canonical **fluid input contract** for PVT-SIM.
 > This is a *schema spec* (data contract), not an implementation spec. Mathematical details live in:
 > - `docs/technical_notes.md` (equations / model definitions)
 > - `docs/numerical_methods.md` (solvers / convergence / damping / bracketing)
-> - `docs/references.md` (primary sources)
-> - `docs/known_failure_modes.md` (symptoms + mitigations)
+> - the course lecture material and assignment handouts (primary scope reference)
 
 ---
 
@@ -107,7 +106,7 @@ fluid:
     lumping:
       enabled: false
       n_groups: 8
-      method: "whitson"              # legacy "contiguous" still accepted explicitly
+      method: "whitson"
       mixing: "lee"                   # how Tc/Pc/omega mix for lumps
 
   eos:

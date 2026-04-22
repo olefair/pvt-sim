@@ -1,36 +1,10 @@
-"""
-Fluid characterization utilities for petroleum reservoir fluids.
-
-This module converts lab-style inputs (resolved components + plus fractions)
-into a fully characterized component list ready for EOS calculations.
-
-Main Components:
-- CharacterizedFluid: Unified class for characterized fluids
-- Plus-fraction splitting: Pedersen, Katz, Lohrenz methods
-- SCN properties: Katz-Firoozabadi table + extrapolation
-- Lumping/Delumping: Whitson method, K-value interpolation
-- BIP correlations: Generalized kij estimation
-
-Usage
------
->>> from pvtcore.characterization import CharacterizedFluid
->>> fluid = CharacterizedFluid.from_composition(
-...     pure_components={"N2": 0.005, "CO2": 0.01, "C1": 0.45, "C2": 0.08},
-...     plus_fraction_z=0.25,
-...     plus_fraction_MW=215.0,
-...     plus_fraction_SG=0.85,
-... )
->>> print(fluid)
-
-Or use individual components:
->>> from pvtcore.characterization import split_plus_fraction_pedersen
->>> result = split_plus_fraction_pedersen(z_plus=0.25, MW_plus=215.0)
-"""
+"""Fluid characterization."""
 
 # Plus-fraction splitting
 from .plus_splitting import (
     PedersenTBPCutConstraint,
     PedersenSplitResult,
+    plus_frac_split_pedersen,
     split_plus_fraction_pedersen,
     KatzSplitResult,
     split_plus_fraction_katz,
@@ -100,6 +74,7 @@ __all__ = [
     # Plus-fraction splitting
     "PedersenTBPCutConstraint",
     "PedersenSplitResult",
+    "plus_frac_split_pedersen",
     "split_plus_fraction_pedersen",
     "KatzSplitResult",
     "split_plus_fraction_katz",

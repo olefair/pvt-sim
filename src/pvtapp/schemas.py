@@ -416,7 +416,7 @@ class PlusFractionEntry(BaseModel):
         le=200,
         description="Target number of pseudo groups if lumping is enabled",
     )
-    lumping_method: Literal["whitson", "contiguous"] = Field(
+    lumping_method: Literal["whitson"] = Field(
         default="whitson",
         description="Heavy-end lumping method used when lumping is enabled",
     )
@@ -2177,7 +2177,7 @@ class RuntimeCharacterizationResult(BaseModel):
     )
     split_mw_model: Optional[Literal["paraffin", "table"]] = Field(default=None)
     pseudo_property_correlation: Optional[str] = Field(default=None)
-    lumping_method: Optional[Literal["whitson", "contiguous"]] = Field(
+    lumping_method: Optional[Literal["whitson"]] = Field(
         default=None,
         description="Lumping method actually used when the runtime solved on lumped heavy-end groups",
     )

@@ -5,14 +5,11 @@ orientation files.
 
 ## Canonical Companion Docs
 
-- `docs/development.md` for stack, coding conventions, and error-handling
-  expectations
 - `docs/runtime_surface_standard.md` for the canonical app/runtime parity rule
 - `docs/technical_notes.md` for equations and thermo dependency ordering
 - `docs/numerical_methods.md` for solver policy and convergence rules
 - `docs/input_schema.md` for fluid/config contracts
 - `docs/units.md` for canonical internal units
-- `docs/validation_plan.md` for validation targets and strategy
 
 ## System Overview
 
@@ -425,8 +422,7 @@ is rendered in US-petroleum display units to match the GUI and text output.
 ## Known Architectural Limitations
 
 These are architectural, not numerical, and the ones that affect runtime
-shape. Numerical / validation gaps are tracked in
-`docs/validation_plan.md` and per-module validation matrices.
+shape.
 
 - **Phase envelope plotter does not inject the critical point.** Per the
   comment in `src/pvtapp/widgets/results_view.py._plot_phase_envelope._curve_xy`,
@@ -434,9 +430,7 @@ shape. Numerical / validation gaps are tracked in
   and dew polylines because the CP generally does not lie on the discrete
   traced locus and sorting by T would fabricate spikes. The test
   `test_phase_envelope_plot_connects_curves_through_critical_point` is kept
-  `xfail` (strict=False) as the reminder. Resolution requires the
-  phase-envelope accuracy/continuity redesign (see
-  `docs/blueprints/fast_phase_envelope.md`).
+  `xfail` (strict=False) as the reminder.
 - **BIP panel is diagnostic, not runtime.** `src/pvtapp/main.py` does not
   feed the GUI BIP selection into `RunConfig`. Runtime default is zero-BIP
   unless supplied through config data. This violates the runtime-surface
@@ -452,5 +446,4 @@ shape. Numerical / validation gaps are tracked in
 - **Flash SS fallback is unaccelerated.** When Michelsen-Newton fails,
   `_ss_flash_loop` runs pure successive substitution. On non-pathological
   failures (contractive SS operator), GDEM acceleration would reduce the
-  iteration count 3–5×. See
-  `docs/blueprints/selective_gdem_flash_ss_fallback.md`.
+  iteration count 3–5×.

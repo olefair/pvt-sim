@@ -5,7 +5,7 @@ This document is the **equation-level “source of truth”** for the simulator�
 **Read alongside:**
 - `docs/architecture.md` (module ownership + file locations)
 - `docs/numerical_methods.md` (solver rules, tolerances, damping, failure modes)
-- `docs/references.md` (primary sources)
+- the course lecture material and assignment handouts (primary sources)
 
 If code and this document disagree, **update one or both** so they match. Do not “fix” behavior by silently swapping equations/correlations.
 
@@ -347,7 +347,7 @@ LBC is density-based and depends on:
 
 **Key interdependency:** viscosity requires **density**, which requires **EOS Z**, which requires a converged **phase equilibrium** state.
 
-Implement LBC strictly from the chosen reference (see `docs/references.md`) with all coefficients and mixture rules documented there.
+Implement LBC strictly from the chosen course reference set, with all coefficients and mixture rules documented in code or local notes.
 
 ### 8.4 Interfacial tension (parachor / Weinaug–Katz)
 Common parachor mixing form:
@@ -473,7 +473,7 @@ If you want newcomers to onboard fast and avoid “tribal knowledge,” add:
 
 4) `docs/literature/` (folder)
    - store the primary PDFs with stable filenames
-   - link them from `docs/references.md` for offline, reproducible sourcing
+   - keep filenames stable for offline, reproducible sourcing
 
 5) `docs/known_failure_modes.md`
    - critical region behavior, near-spinodal failures, “Z-root flips,” convergence traps

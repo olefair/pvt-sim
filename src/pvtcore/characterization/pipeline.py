@@ -274,107 +274,6 @@ def _build_kij_matrix(
     return kij
 
 
-def _lump_scns_contiguous(
-    *,
-    scn_props: SCNProperties,
-    scn_components: Sequence[Component],
-    scn_component_ids: Sequence[str],
-    scn_z: np.ndarray,
-    n_groups: int,
-    correlation: PseudoComponentCorrelation,
-) -> SCNLumpingResult:
-    scn_z = np.asarray(scn_z, dtype=float)
-    if scn_z.ndim != 1:
-        raise CharacterizationError("scn_z must be 1D for lumping.")
-
-    n_scn = int(scn_props.n.size)
-    if len(scn_components) != n_scn or len(scn_component_ids) != n_scn or scn_z.size != n_scn:
-        raise CharacterizationError(
-            "SCN arrays length mismatch for lumping.",
-            n_scn=n_scn,
-            n_components=len(scn_components),
-            n_ids=len(scn_component_ids),
-            n_z=int(scn_z.size),
-        )
-
-    if not (1 <= n_groups <= n_scn):
-        raise CharacterizationError(
-            "n_groups must be between 1 and number of SCNs.",
-            n_groups=n_groups,
-            n_scn=n_scn,
-        )
-
-    partitions = np.array_split(np.arange(n_scn, dtype=int), n_groups)
-    lump_members: list[np.ndarray] = [p.astype(int) for p in partitions]
-
-    scn_to_lump = np.empty(n_scn, dtype=int)
-    for g, members in enumerate(lump_members):
-        scn_to_lump[members] = g
-
-    lump_z = np.array([float(scn_z[m].sum()) for m in lump_members], dtype=float)
-
-    lump_weights: list[np.ndarray] = []
-    for m in lump_members:
-        z_g = scn_z[m]
-        s = float(z_g.sum())
-        if s <= 0.0:
-            lump_weights.append(np.full_like(z_g, 1.0 / float(z_g.size), dtype=float))
-        else:
-            lump_weights.append(z_g / s)
-
-    mw_lump = np.array(
-        [float(np.dot(lump_weights[g], scn_props.mw[m])) for g, m in enumerate(lump_members)],
-        dtype=float,
-    )
-    sg_lump = np.array(
-        [float(np.dot(lump_weights[g], scn_props.sg_6060[m])) for g, m in enumerate(lump_members)],
-        dtype=float,
-    )
-    tb_lump = np.array(
-        [float(np.dot(lump_weights[g], scn_props.tb_k[m])) for g, m in enumerate(lump_members)],
-        dtype=float,
-    )
-
-    n_lo = np.array([int(scn_props.n[m][0]) for m in lump_members], dtype=int)
-    n_hi = np.array([int(scn_props.n[m][-1]) for m in lump_members], dtype=int)
-    n_rep = n_hi.copy()
-
-    lump_props = SCNProperties(n=n_rep, mw=mw_lump, sg_6060=sg_lump, tb_k=tb_lump)
-    pseudo = correlation.estimate(lump_props)
-
-    lump_component_ids: list[str] = []
-    lump_components: list[Component] = []
-    for g in range(n_groups):
-        cid = f"LUMP{g+1}_C{int(n_lo[g])}_C{int(n_hi[g])}"
-        lump_component_ids.append(cid)
-        lump_components.append(
-            Component(
-                name=cid,
-                formula=cid,
-                Tc=float(pseudo.Tc[g]),
-                Pc=float(pseudo.Pc[g]),
-                Vc=float(pseudo.Vc[g]),
-                omega=float(pseudo.omega[g]),
-                MW=float(mw_lump[g]),
-                Tb=float(tb_lump[g]),
-                note=f"SCN lump: C{int(n_lo[g])}-C{int(n_hi[g])}",
-            )
-        )
-
-    return SCNLumpingResult(
-        scn_component_ids=list(scn_component_ids),
-        scn_components=list(scn_components),
-        scn_z=scn_z.copy(),
-        scn_props=scn_props,
-        lump_component_ids=lump_component_ids,
-        lump_components=lump_components,
-        lump_z=lump_z,
-        scn_to_lump=scn_to_lump,
-        lump_members=lump_members,
-        lump_weights=lump_weights,
-    )
-
-
 def _lump_scns_whitson(
     *,
     scn_props: SCNProperties,
@@ -623,29 +522,19 @@ def characterize_fluid(
 
     if cfg.lumping_enabled:
         lumping_method = cfg.lumping_method.strip().lower()
-        if lumping_method == "whitson":
-            lumping_result = _lump_scns_whitson(
-                scn_props=scn_props,
-                scn_components=pseudo_components,
-                scn_component_ids=pseudo_ids,
-                scn_z=split.z,
-                n_groups=cfg.lumping_n_groups,
-            )
-        elif lumping_method == "contiguous":
-            lumping_result = _lump_scns_contiguous(
-                scn_props=scn_props,
-                scn_components=pseudo_components,
-                scn_component_ids=pseudo_ids,
-                scn_z=split.z,
-                n_groups=cfg.lumping_n_groups,
-                correlation=corr,
-            )
-        else:
+        if lumping_method != "whitson":
             raise CharacterizationError(
                 f"Unsupported lumping_method '{cfg.lumping_method}'.",
                 method=cfg.lumping_method,
-                supported=["whitson", "contiguous"],
+                supported=["whitson"],
             )
+        lumping_result = _lump_scns_whitson(
+            scn_props=scn_props,
+            scn_components=pseudo_components,
+            scn_component_ids=pseudo_ids,
+            scn_z=split.z,
+            n_groups=cfg.lumping_n_groups,
+        )
         z_pseudo = lumping_result.lump_z
         pseudo_ids_final = lumping_result.lump_component_ids
         pseudo_components_final = lumping_result.lump_components

@@ -1,28 +1,15 @@
-"""
-Pedersen-style exponential plus-fraction splitting.
-
-Contract (docs/technical_notes.md §2.2):
-  ln(z_n) = A + B * MW_n
-with constraints:
-  Σ z_n         = z_plus
-  Σ z_n * MW_n  = z_plus * MW_plus
-
-Default SCN molecular weight model:
-  MW_n = 14*n - 4
-"""
+"""Pedersen plus-fraction split."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence, Tuple
+from typing import Callable, Sequence
 
 import numpy as np
 
 
 @dataclass(frozen=True)
 class PedersenTBPCutConstraint:
-    """Observed TBP cut used to constrain a Pedersen split fit."""
-
     name: str
     carbon_number: int
     carbon_number_end: int
@@ -33,18 +20,276 @@ class PedersenTBPCutConstraint:
 
 @dataclass(frozen=True)
 class PedersenSplitResult:
-    n: np.ndarray          # SCN indices, shape (Ns,)
-    MW: np.ndarray         # MW_n, shape (Ns,)
-    z: np.ndarray          # z_n, shape (Ns,)
+    n: np.ndarray
+    MW: np.ndarray
+    z: np.ndarray
     A: float
     B: float
     solve_ab_from: str = "balances"
     tbp_cut_rms_relative_error: float | None = None
 
 
-def _default_scn_mw(n: np.ndarray) -> np.ndarray:
-    # MW_n = 14 n - 4 (paraffin baseline)
-    return 14.0 * n.astype(float) - 4.0
+####################
+# HELPER FUNCTIONS
+####################
+def _mw(Cn: np.ndarray) -> np.ndarray:
+    return 14.0 * Cn.astype(float) - 4.0
+
+
+def _Zn(A: float, B: float, MW: np.ndarray) -> np.ndarray:
+    return np.exp(np.clip(A + B * MW, -700.0, 700.0))
+
+
+def _norm(z: np.ndarray, zP: float) -> tuple[np.ndarray, float]:
+    s = float(z.sum())
+    if not np.isfinite(s) or s <= 0.0:
+        raise RuntimeError("Pedersen split produced a non-positive total mole fraction")
+    f = float(zP) / s
+    return z * f, float(np.log(f))
+
+
+def _bal(
+    *,
+    zP: float,
+    MWP: float,
+    MW: np.ndarray,
+    tol: float,
+    itmax: int,
+) -> tuple[float, float, np.ndarray]:
+    A = float(np.log(float(zP) / float(MW.size)))
+    B = 0.0
+    t1 = float(zP)
+    t2 = float(zP) * float(MWP)
+
+    def F(a: float, b: float) -> tuple[np.ndarray, float, float]:
+        z = _Zn(a, b, MW)
+        s1 = float(z.sum())
+        s2 = float((z * MW).sum())
+        return z, s1 - t1, s2 - t2
+
+    for _ in range(itmax):
+        z, f1, f2 = F(A, B)
+        if abs(f1) < tol and abs(f2) < tol:
+            break
+
+        s1 = float(z.sum())
+        sMW = float((z * MW).sum())
+        sMW2 = float((z * MW * MW).sum())
+        J = np.array([[s1, sMW], [sMW, sMW2]], dtype=float)
+        rhs = np.array([f1, f2], dtype=float)
+        try:
+            dA, dB = np.linalg.solve(J, -rhs)
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError("Pedersen split Newton step failed (singular Jacobian)") from exc
+
+        step = 1.0
+        err = float(np.hypot(f1, f2))
+        ok = False
+        for _ in range(25):
+            A1 = A + step * float(dA)
+            B1 = B + step * float(dB)
+            _, g1, g2 = F(A1, B1)
+            err1 = float(np.hypot(g1, g2))
+            if np.isfinite(err1) and err1 <= err:
+                A, B = A1, B1
+                ok = True
+                break
+            step *= 0.5
+        if not ok:
+            raise RuntimeError(
+                "Pedersen split failed to reduce residual "
+                f"(residual={err:.3e})"
+            )
+
+    z, _, _ = F(A, B)
+    z, dA = _norm(z, zP)
+    A += dA
+    if not np.isfinite(z).all() or np.any(z <= 0.0):
+        raise RuntimeError("Pedersen split produced non-finite or non-positive z_n")
+    return float(A), float(B), z
+
+
+def _cuts(
+    rows: Sequence[PedersenTBPCutConstraint] | None,
+    *,
+    Cn0: int,
+    CnN: int,
+) -> tuple[PedersenTBPCutConstraint, ...]:
+    if not rows:
+        raise ValueError("fit_to_tbp requires non-empty tbp_cuts")
+
+    out = tuple(rows)
+    seen: set[str] = set()
+    prev: int | None = None
+    for row in out:
+        if row.name in seen:
+            raise ValueError("TBP cut names must be unique when fitting Pedersen to TBP data")
+        if row.carbon_number < Cn0:
+            raise ValueError("TBP fit cuts must not start below n_start")
+        if row.carbon_number_end < row.carbon_number:
+            raise ValueError("TBP fit cut carbon_number_end must be >= carbon_number")
+        if row.carbon_number_end > CnN:
+            raise ValueError("TBP fit cuts must not extend beyond n_end")
+        if prev is None:
+            if row.carbon_number != Cn0:
+                raise ValueError("The first TBP fit cut must start at n_start")
+        elif row.carbon_number <= prev:
+            raise ValueError("TBP fit cuts must be ordered, non-overlapping, and strictly increasing")
+        if not np.isfinite(row.z) or row.z <= 0.0:
+            raise ValueError("TBP fit cut z must be finite and > 0")
+        if not np.isfinite(row.mw) or row.mw <= 0.0:
+            raise ValueError("TBP fit cut mw must be finite and > 0")
+        prev = row.carbon_number_end
+        seen.add(row.name)
+    return out
+
+
+def _z_from_B(*, B: float, zP: float, MW: np.ndarray) -> tuple[float, np.ndarray]:
+    z, dA = _norm(_Zn(0.0, B, MW), zP)
+    return dA, z
+
+
+def _tbp_err(
+    *,
+    z: np.ndarray,
+    MW: np.ndarray,
+    Cn: np.ndarray,
+    rows: Sequence[PedersenTBPCutConstraint],
+    zP: float,
+    MWP: float,
+) -> np.ndarray:
+    s = float(z.sum())
+    if not np.isfinite(s) or s <= 0.0:
+        return np.full(len(rows) + 2, 1.0e6, dtype=float)
+
+    err: list[float] = []
+    for row in rows:
+        m = (Cn >= row.carbon_number) & (Cn <= row.carbon_number_end)
+        zc = float(z[m].sum())
+        err.append((zc - row.z) / max(row.z, 1.0e-12))
+        if row.carbon_number_end > row.carbon_number and zc > 0.0:
+            MWc = float((z[m] * MW[m]).sum() / zc)
+            err.append(0.5 * ((MWc - row.mw) / max(row.mw, 1.0e-12)))
+
+    MWm = float((z * MW).sum()) / s
+    err.append((s - zP) / max(zP, 1.0e-12))
+    err.append((MWm - MWP) / max(MWP, 1.0e-12))
+    return np.asarray(err, dtype=float)
+
+
+def _tbp_rms(
+    *,
+    z: np.ndarray,
+    Cn: np.ndarray,
+    rows: Sequence[PedersenTBPCutConstraint],
+) -> float:
+    err: list[float] = []
+    for row in rows:
+        m = (Cn >= row.carbon_number) & (Cn <= row.carbon_number_end)
+        zc = float(z[m].sum())
+        err.append((zc - row.z) / max(row.z, 1.0e-12))
+    return float(np.sqrt(np.mean(np.square(err), dtype=float)))
+
+
+def _tbp(
+    *,
+    zP: float,
+    MWP: float,
+    Cn: np.ndarray,
+    MW: np.ndarray,
+    rows: tuple[PedersenTBPCutConstraint, ...],
+    tol: float,
+    itmax: int,
+) -> tuple[float, float, np.ndarray, float]:
+    _, B0, _ = _bal(zP=zP, MWP=MWP, MW=MW, tol=tol, itmax=itmax)
+
+    def err(B: float) -> np.ndarray:
+        _, z = _z_from_B(B=B, zP=zP, MW=MW)
+        return _tbp_err(z=z, MW=MW, Cn=Cn, rows=rows, zP=zP, MWP=MWP)
+
+    best_B = float(B0)
+    best_e = err(best_B)
+    best_s = float(np.dot(best_e, best_e))
+    span = max(0.05, abs(best_B) * 4.0 + 0.02)
+
+    for _ in range(max(6, min(itmax, 10))):
+        hit = False
+        for B in np.linspace(best_B - span, best_B + span, 81):
+            e = err(float(B))
+            if not np.isfinite(e).all():
+                continue
+            s = float(np.dot(e, e))
+            if s < best_s:
+                best_B = float(B)
+                best_e = e
+                best_s = s
+                hit = True
+        if best_s < tol * tol:
+            break
+        span *= 0.5 if hit else 0.35
+
+    A, z = _z_from_B(B=best_B, zP=zP, MW=MW)
+    if not np.isfinite(z).all() or np.any(z <= 0.0):
+        raise RuntimeError("Pedersen TBP fit produced non-finite or non-positive z_n")
+    return float(A), float(best_B), z, _tbp_rms(z=z, Cn=Cn, rows=rows)
+
+
+####################
+# PEDERSEN SPLIT
+####################
+def plus_frac_split_pedersen(
+    *,
+    zP: float,
+    MWP: float,
+    Cn0: int = 7,
+    CnN: int = 45,
+    mw_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    mode: str = "balances",
+    cuts: Sequence[PedersenTBPCutConstraint] | None = None,
+    tol: float = 1e-12,
+    itmax: int = 50,
+) -> PedersenSplitResult:
+    if not (zP > 0.0):
+        raise ValueError(f"z_plus must be > 0, got {zP}")
+    if not (MWP > 0.0):
+        raise ValueError(f"MW_plus must be > 0, got {MWP}")
+    if CnN < Cn0:
+        raise ValueError(f"n_end must be >= n_start, got n_start={Cn0}, n_end={CnN}")
+
+    Cn = np.arange(Cn0, CnN + 1, dtype=int)
+    MW = np.asarray((mw_fn or _mw)(Cn), dtype=float)
+    if MW.shape != Cn.shape:
+        raise ValueError("scn_mw_fn must return array same shape as n")
+    if not np.isfinite(MW).all() or np.any(MW <= 0.0):
+        raise ValueError("MW_n must be finite and > 0 for all SCNs")
+
+    mode = mode.strip().lower()
+    if mode == "balances":
+        A, B, z = _bal(zP=zP, MWP=MWP, MW=MW, tol=tol, itmax=itmax)
+        return PedersenSplitResult(n=Cn, MW=MW, z=z, A=A, B=B, solve_ab_from=mode)
+
+    if mode == "fit_to_tbp":
+        rows = _cuts(cuts, Cn0=Cn0, CnN=CnN)
+        A, B, z, rms = _tbp(
+            zP=zP,
+            MWP=MWP,
+            Cn=Cn,
+            MW=MW,
+            rows=rows,
+            tol=tol,
+            itmax=itmax,
+        )
+        return PedersenSplitResult(
+            n=Cn,
+            MW=MW,
+            z=z,
+            A=A,
+            B=B,
+            solve_ab_from=mode,
+            tbp_cut_rms_relative_error=rms,
+        )
+
+    raise ValueError("solve_ab_from must be either 'balances' or 'fit_to_tbp'")
 
 
 def split_plus_fraction_pedersen(
@@ -59,352 +304,14 @@ def split_plus_fraction_pedersen(
     tol: float = 1e-12,
     max_iter: int = 50,
 ) -> PedersenSplitResult:
-    """
-    Split a plus fraction (Cn+) into SCNs via Pedersen exponential distribution.
-
-    Parameters
-    ----------
-    z_plus
-        Plus fraction mole fraction (must be > 0).
-    MW_plus
-        Plus fraction molecular weight in g/mol (must be > 0).
-    n_start, n_end
-        Inclusive SCN range to allocate the plus fraction (e.g., 7..45).
-    scn_mw_fn
-        Function returning MW_n array for SCN indices n.
-        If None, uses MW_n = 14*n - 4.
-    solve_ab_from
-        ``balances`` solves for ``A``/``B`` from aggregate material balances.
-        ``fit_to_tbp`` instead fits ``A``/``B`` to observed TBP cut data while
-        preserving the aggregate ``z_plus``/``MW_plus`` targets.
-    tbp_cuts
-        Ordered TBP cut constraints used when ``solve_ab_from="fit_to_tbp"``.
-    tol
-        Convergence tolerance on both constraint residuals.
-    max_iter
-        Maximum Newton / Gauss-Newton iterations.
-
-    Returns
-    -------
-    PedersenSplitResult
-        SCN indices, MWs, split mole fractions z_n, fitted A/B, and the solve mode used.
-    """
-    if not (z_plus > 0.0):
-        raise ValueError(f"z_plus must be > 0, got {z_plus}")
-    if not (MW_plus > 0.0):
-        raise ValueError(f"MW_plus must be > 0, got {MW_plus}")
-    if n_end < n_start:
-        raise ValueError(f"n_end must be >= n_start, got {n_start=}, {n_end=}")
-
-    n = np.arange(n_start, n_end + 1, dtype=int)
-    mw_fn = scn_mw_fn or _default_scn_mw
-    MW = np.asarray(mw_fn(n), dtype=float)
-
-    if MW.shape != n.shape:
-        raise ValueError("scn_mw_fn must return array same shape as n")
-    if not np.isfinite(MW).all() or np.any(MW <= 0.0):
-        raise ValueError("MW_n must be finite and > 0 for all SCNs")
-
-    solve_mode = solve_ab_from.strip().lower()
-    if solve_mode == "balances":
-        A, B, z = _solve_ab_from_balances(
-            z_plus=z_plus,
-            MW_plus=MW_plus,
-            MW=MW,
-            tol=tol,
-            max_iter=max_iter,
-        )
-        return PedersenSplitResult(
-            n=n,
-            MW=MW,
-            z=z,
-            A=float(A),
-            B=float(B),
-            solve_ab_from=solve_mode,
-        )
-
-    if solve_mode == "fit_to_tbp":
-        constraints = _validate_tbp_constraints(tbp_cuts, n_start=n_start, n_end=n_end)
-        A, B, z, rms = _solve_ab_from_tbp_fit(
-            z_plus=z_plus,
-            MW_plus=MW_plus,
-            n=n,
-            MW=MW,
-            tbp_cuts=constraints,
-            tol=tol,
-            max_iter=max_iter,
-        )
-        return PedersenSplitResult(
-            n=n,
-            MW=MW,
-            z=z,
-            A=float(A),
-            B=float(B),
-            solve_ab_from=solve_mode,
-            tbp_cut_rms_relative_error=rms,
-        )
-
-    raise ValueError("solve_ab_from must be either 'balances' or 'fit_to_tbp'")
-
-
-def _solve_ab_from_balances(
-    *,
-    z_plus: float,
-    MW_plus: float,
-    MW: np.ndarray,
-    tol: float,
-    max_iter: int,
-) -> tuple[float, float, np.ndarray]:
-    """Solve Pedersen A/B from aggregate z and MW balances."""
-    # Initial guess:
-    # B = 0 => uniform in ln-space => z_n = exp(A)
-    # Choose A to satisfy Σ z_n = z_plus
-    Ns = float(MW.size)
-    A = float(np.log(z_plus / Ns))
-    B = 0.0
-
-    target1 = z_plus
-    target2 = z_plus * MW_plus
-
-    def eval_constraints(a: float, b: float) -> Tuple[np.ndarray, float, float]:
-        z = _evaluate_exponential_distribution(a, b, MW)
-        s1 = float(z.sum())
-        s2 = float((z * MW).sum())
-        return z, s1 - target1, s2 - target2
-
-    for _ in range(max_iter):
-        z, F1, F2 = eval_constraints(A, B)
-        if abs(F1) < tol and abs(F2) < tol:
-            break
-
-        s1 = float(z.sum())
-        sMW = float((z * MW).sum())
-        sMW2 = float((z * MW * MW).sum())
-
-        J = np.array([[s1, sMW], [sMW, sMW2]], dtype=float)
-        F = np.array([F1, F2], dtype=float)
-
-        try:
-            dA, dB = np.linalg.solve(J, -F)
-        except np.linalg.LinAlgError as e:
-            raise RuntimeError("Pedersen split Newton step failed (singular Jacobian)") from e
-
-        step = 1.0
-        residual_norm = float(np.hypot(F1, F2))
-        accepted = False
-        for _ls in range(25):
-            A_try = A + step * float(dA)
-            B_try = B + step * float(dB)
-            _, f1_try, f2_try = eval_constraints(A_try, B_try)
-            trial_norm = float(np.hypot(f1_try, f2_try))
-            if np.isfinite(trial_norm) and trial_norm <= residual_norm:
-                A, B = A_try, B_try
-                accepted = True
-                break
-            step *= 0.5
-
-        if not accepted:
-            raise RuntimeError(
-                "Pedersen split failed to reduce residual (line search exhausted). "
-                f"Residual={residual_norm:.3e}"
-            )
-
-    z, _, _ = eval_constraints(A, B)
-    z, delta_a = _enforce_exact_total(z, z_plus)
-    A += delta_a
-
-    if not np.isfinite(z).all() or np.any(z <= 0.0):
-        raise RuntimeError("Pedersen split produced non-finite or non-positive z_n")
-
-    return float(A), float(B), z
-
-
-def _solve_ab_from_tbp_fit(
-    *,
-    z_plus: float,
-    MW_plus: float,
-    n: np.ndarray,
-    MW: np.ndarray,
-    tbp_cuts: tuple[PedersenTBPCutConstraint, ...],
-    tol: float,
-    max_iter: int,
-) -> tuple[float, float, np.ndarray, float]:
-    """Fit Pedersen A/B to observed TBP cuts while preserving aggregate targets."""
-    _, balance_b, _ = _solve_ab_from_balances(
-        z_plus=z_plus,
-        MW_plus=MW_plus,
-        MW=MW,
+    return plus_frac_split_pedersen(
+        zP=z_plus,
+        MWP=MW_plus,
+        Cn0=n_start,
+        CnN=n_end,
+        mw_fn=scn_mw_fn,
+        mode=solve_ab_from,
+        cuts=tbp_cuts,
         tol=tol,
-        max_iter=max_iter,
+        itmax=max_iter,
     )
-
-    def residual_vector_for_b(b: float) -> np.ndarray:
-        _a, z = _normalized_distribution_from_b(b=b, z_plus=z_plus, MW=MW)
-        return _tbp_fit_residual_vector(
-            z=z,
-            MW=MW,
-            n=n,
-            tbp_cuts=tbp_cuts,
-            z_plus=z_plus,
-            MW_plus=MW_plus,
-        )
-
-    best_b = float(balance_b)
-    best_residual = residual_vector_for_b(best_b)
-    best_score = float(np.dot(best_residual, best_residual))
-    half_width = max(0.05, abs(best_b) * 4.0 + 0.02)
-    refinement_rounds = max(6, min(max_iter, 10))
-
-    for _ in range(refinement_rounds):
-        candidates = np.linspace(best_b - half_width, best_b + half_width, 81)
-        improved = False
-        for candidate_b in candidates:
-            candidate_residual = residual_vector_for_b(float(candidate_b))
-            if not np.isfinite(candidate_residual).all():
-                continue
-            candidate_score = float(np.dot(candidate_residual, candidate_residual))
-            if candidate_score < best_score:
-                best_b = float(candidate_b)
-                best_residual = candidate_residual
-                best_score = candidate_score
-                improved = True
-        if best_score < tol * tol:
-            break
-        if not improved:
-            half_width *= 0.35
-        else:
-            half_width *= 0.5
-
-    A, z = _normalized_distribution_from_b(b=best_b, z_plus=z_plus, MW=MW)
-
-    if not np.isfinite(z).all() or np.any(z <= 0.0):
-        raise RuntimeError("Pedersen TBP fit produced non-finite or non-positive z_n")
-
-    rms = _tbp_cut_relative_rms(z=z, n=n, tbp_cuts=tbp_cuts)
-    return float(A), float(best_b), z, rms
-
-
-def _validate_tbp_constraints(
-    tbp_cuts: Sequence[PedersenTBPCutConstraint] | None,
-    *,
-    n_start: int,
-    n_end: int,
-) -> tuple[PedersenTBPCutConstraint, ...]:
-    """Validate the TBP cuts used to constrain the Pedersen fit."""
-    if not tbp_cuts:
-        raise ValueError("fit_to_tbp requires non-empty tbp_cuts")
-
-    normalized = tuple(tbp_cuts)
-    previous_end: int | None = None
-    seen_names: set[str] = set()
-
-    for cut in normalized:
-        if cut.name in seen_names:
-            raise ValueError("TBP cut names must be unique when fitting Pedersen to TBP data")
-        if cut.carbon_number < n_start:
-            raise ValueError("TBP fit cuts must not start below n_start")
-        if cut.carbon_number_end < cut.carbon_number:
-            raise ValueError("TBP fit cut carbon_number_end must be >= carbon_number")
-        if cut.carbon_number_end > n_end:
-            raise ValueError("TBP fit cuts must not extend beyond n_end")
-        if previous_end is None:
-            if cut.carbon_number != n_start:
-                raise ValueError("The first TBP fit cut must start at n_start")
-        elif cut.carbon_number <= previous_end:
-            raise ValueError("TBP fit cuts must be ordered, non-overlapping, and strictly increasing")
-        if not np.isfinite(cut.z) or cut.z <= 0.0:
-            raise ValueError("TBP fit cut z must be finite and > 0")
-        if not np.isfinite(cut.mw) or cut.mw <= 0.0:
-            raise ValueError("TBP fit cut mw must be finite and > 0")
-        previous_end = cut.carbon_number_end
-        seen_names.add(cut.name)
-
-    return normalized
-
-
-def _evaluate_exponential_distribution(a: float, b: float, MW: np.ndarray) -> np.ndarray:
-    """Evaluate the clipped Pedersen exponential distribution."""
-    exponent = np.clip(a + b * MW, -700.0, 700.0)
-    return np.exp(exponent)
-
-
-def _enforce_exact_total(z: np.ndarray, z_plus: float) -> tuple[np.ndarray, float]:
-    """Scale z to close the total balance exactly and return the equivalent ΔA."""
-    total = float(z.sum())
-    if not np.isfinite(total) or total <= 0.0:
-        raise RuntimeError("Pedersen split produced a non-positive total mole fraction")
-    scale = z_plus / total
-    return z * scale, float(np.log(scale))
-
-
-def _normalized_distribution_from_b(*, b: float, z_plus: float, MW: np.ndarray) -> tuple[float, np.ndarray]:
-    """Return the Pedersen distribution for a given B after enforcing the total balance."""
-    raw = _evaluate_exponential_distribution(0.0, b, MW)
-    normalized, delta_a = _enforce_exact_total(raw, z_plus)
-    return delta_a, normalized
-
-
-def _tbp_fit_residual_vector(
-    *,
-    z: np.ndarray,
-    MW: np.ndarray,
-    n: np.ndarray,
-    tbp_cuts: Sequence[PedersenTBPCutConstraint],
-    z_plus: float,
-    MW_plus: float,
-) -> np.ndarray:
-    """Build an overdetermined residual vector for fitting Pedersen to TBP cuts."""
-    total_z = float(z.sum())
-    if not np.isfinite(total_z) or total_z <= 0.0:
-        return np.full(len(tbp_cuts) + 2, 1.0e6, dtype=float)
-
-    residuals: list[float] = []
-    for cut in tbp_cuts:
-        mask = (n >= cut.carbon_number) & (n <= cut.carbon_number_end)
-        cut_z = float(z[mask].sum())
-        residuals.append((cut_z - cut.z) / max(cut.z, 1.0e-12))
-
-        if cut.carbon_number_end > cut.carbon_number and cut_z > 0.0:
-            cut_avg_mw = float((z[mask] * MW[mask]).sum() / cut_z)
-            residuals.append(0.5 * ((cut_avg_mw - cut.mw) / max(cut.mw, 1.0e-12)))
-
-    total_mw = float((z * MW).sum())
-    mw_avg = total_mw / total_z
-    residuals.append((total_z - z_plus) / max(z_plus, 1.0e-12))
-    residuals.append((mw_avg - MW_plus) / max(MW_plus, 1.0e-12))
-    return np.asarray(residuals, dtype=float)
-
-
-def _finite_difference_jacobian(
-    residual_fn: Callable[[float, float], np.ndarray],
-    *,
-    A: float,
-    B: float,
-    residual: np.ndarray,
-) -> np.ndarray:
-    """Finite-difference Jacobian for the two-parameter Pedersen fit."""
-    h_a = 1.0e-6 * max(1.0, abs(A))
-    h_b = 1.0e-6 * max(1.0, abs(B))
-
-    residual_a = residual_fn(A + h_a, B)
-    residual_b = residual_fn(A, B + h_b)
-
-    jacobian = np.empty((residual.size, 2), dtype=float)
-    jacobian[:, 0] = (residual_a - residual) / h_a
-    jacobian[:, 1] = (residual_b - residual) / h_b
-    return jacobian
-
-
-def _tbp_cut_relative_rms(
-    *,
-    z: np.ndarray,
-    n: np.ndarray,
-    tbp_cuts: Sequence[PedersenTBPCutConstraint],
-) -> float:
-    """Return the RMS relative error against observed TBP cut mole fractions."""
-    relative_errors: list[float] = []
-    for cut in tbp_cuts:
-        mask = (n >= cut.carbon_number) & (n <= cut.carbon_number_end)
-        cut_z = float(z[mask].sum())
-        relative_errors.append((cut_z - cut.z) / max(cut.z, 1.0e-12))
-    return float(np.sqrt(np.mean(np.square(relative_errors), dtype=float)))

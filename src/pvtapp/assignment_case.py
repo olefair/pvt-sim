@@ -11,11 +11,12 @@ from pvtapp.schemas import (
     CCEConfig,
     DLConfig,
     ComponentEntry,
+    EOSType,
     FluidComposition,
     InlineComponentSpec as AppInlineComponentSpec,
     SaturationPointConfig,
 )
-from pvtcore.eos import PengRobinsonEOS
+from pvtcore.eos import PR78EOS
 from pvtcore.flash import calculate_bubble_point
 from pvtcore.validation.pete665_assignment import (
     AssignmentCase,
@@ -32,6 +33,7 @@ class AssignmentDesktopPreset:
     """Resolved desktop preset for the PETE 665 assignment case."""
 
     case: AssignmentCase
+    eos_type: EOSType
     selected_initials: str | None
     temperature_f: float
     temperature_k: float
@@ -78,7 +80,7 @@ def build_assignment_desktop_preset(
     )
 
     _component_ids, components, composition_array = build_assignment_fluid(case)
-    eos = PengRobinsonEOS(components)
+    eos = PR78EOS(components)
     binary_interaction = np.zeros((len(components), len(components)), dtype=float)
     bubble_result = calculate_bubble_point(
         temperature=selected_temperature_k,
@@ -91,6 +93,7 @@ def build_assignment_desktop_preset(
 
     return AssignmentDesktopPreset(
         case=case,
+        eos_type=EOSType.PR78,
         selected_initials=selected_initials,
         temperature_f=selected_temperature_f,
         temperature_k=selected_temperature_k,

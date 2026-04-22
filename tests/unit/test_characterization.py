@@ -178,16 +178,6 @@ def test_lumping_delumping_roundtrip():
     scn_recon = result.lumping.delump_scn(lump_z)
     assert np.allclose(scn_recon, scn_z, atol=1e-14, rtol=0.0)
 
-    # --- legacy contiguous method ---
-    cfg_cont = CharacterizationConfig(lumping_enabled=True, lumping_n_groups=4, lumping_method="contiguous")
-    result_cont = characterize_fluid(
-        [("C1", 0.50), ("C2", 0.25)],
-        plus_fraction=PlusFractionSpec(z_plus=0.25, mw_plus=215.0, n_start=7),
-        config=cfg_cont,
-    )
-    assert result_cont.lumping is not None
-    assert len(result_cont.lumping.lump_component_ids) == 4
-
     # --- too many groups → error ---
     with pytest.raises(CharacterizationError):
         characterize_fluid(

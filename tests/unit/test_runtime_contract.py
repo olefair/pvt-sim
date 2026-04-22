@@ -28,6 +28,7 @@ from pvtapp.job_runner import (
     validate_runtime_config,
 )
 from pvtapp.schemas import (
+    EOSType,
     ConvergenceStatusEnum,
     PhaseEnvelopePoint,
     PhaseEnvelopeResult,
@@ -38,7 +39,13 @@ from pvtapp.schemas import (
     SolverDiagnostics,
     StabilityAnalysisResult,
 )
-from pvtcore.validation.pete665_assignment import psia_to_pa
+from pvtcore.eos import PR78EOS
+from pvtcore.flash import calculate_bubble_point
+from pvtcore.validation.pete665_assignment import (
+    build_assignment_fluid,
+    load_assignment_case,
+    psia_to_pa,
+)
 
 # ---------------------------------------------------------------------------
 # Shared config builders
@@ -1298,7 +1305,16 @@ def test_progress_callback() -> None:
 
 def test_assignment_preset() -> None:
     preset = build_assignment_desktop_preset(initials="TANS")
+    case = load_assignment_case()
+    _component_ids, components, composition = build_assignment_fluid(case)
+    reference = calculate_bubble_point(
+        preset.temperature_k,
+        composition,
+        components,
+        PR78EOS(components),
+    )
 
+    assert preset.eos_type is EOSType.PR78
     assert preset.selected_initials == "TANS"
     assert preset.temperature_f == pytest.approx(125.0)
     assert preset.temperature_k > 0.0
@@ -1311,6 +1327,7 @@ def test_assignment_preset() -> None:
     assert preset.dl_config.pressure_points_pa == pytest.approx(
         [psia_to_pa(500.0), psia_to_pa(300.0), psia_to_pa(100.0)]
     )
+    assert preset.bubble_pressure_pa == pytest.approx(float(reference.pressure))
     assert preset.bubble_point_config.pressure_initial_pa == pytest.approx(preset.bubble_pressure_pa)
     assert preset.dl_config.bubble_pressure_pa == pytest.approx(preset.bubble_pressure_pa)
     assert preset.dl_config.bubble_pressure_pa > max(preset.dl_config.pressure_points_pa)

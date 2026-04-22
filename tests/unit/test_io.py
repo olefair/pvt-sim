@@ -260,10 +260,11 @@ def test_fluid_definition_parser(tmp_path):
         assert np.isclose(float(r.composition.sum()), 1.0)
         assert isinstance(r.split_result, expected_type)
 
-    # --- legacy contiguous lumping ---
+    # --- unsupported legacy contiguous lumping ---
     d = _example_doc()
     d["fluid"]["plus_fraction"]["lumping"]["method"] = "contiguous"
-    assert characterize_from_schema(d).lumping is not None
+    with pytest.raises(ConfigurationError):
+        characterize_from_schema(d)
 
     # --- TBP-derived inputs ---
     tbp_res = characterize_from_schema(_tbp_example_doc())
