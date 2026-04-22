@@ -200,6 +200,16 @@ def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit
     return config.pressure_unit, config.temperature_unit
 
 
+def _cvd_units() -> tuple[PressureUnit, TemperatureUnit]:
+    """Return CVD display units.
+
+    CVDConfig does not carry pressure / temperature preference fields, so
+    the text output renders in the repo-wide US-petroleum defaults (psia /
+    °F) — same units the CVD results-panel and Excel export use.
+    """
+    return PressureUnit.PSIA, TemperatureUnit.F
+
+
 def _stability_units(config: Optional[StabilityAnalysisConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
         return PressureUnit.PSIA, TemperatureUnit.F
@@ -933,43 +943,145 @@ class TextOutputWidget(QWidget):
             )
             lines.append(f"Converged: {r.converged}")
             lines.append("")
+            # DL text output split into five narrow stacked tables so no
+            # horizontal scrolling is needed — same logical grouping as
+            # the results-panel split (see ResultsTableWidget._display_dl):
+            #   1. GOR                      (P, RsD, RsDb)              3 cols
+            #   2. Formation Volume Factors (P, Bo, Bg, BtD)             4 cols
+            #   3. Oil Phase                (Step, ρO, μO, n_L)          4 cols
+            #   4. Gas Phase                (Step, γg, Zg, μG)           4 cols
+            #   5. Vapor Frac. & Production (Step, β, Cum. Gas)          3 cols
+            # Uniform 12-char columns, two-row header (variable + unit).
+            dl_col = 12
+            step_rows = list(enumerate(r.steps[:80], start=1))
+
+            def _fmt_opt(value: Optional[float], precision: int) -> str:
+                if value is None or value <= 0:
+                    return "-"
+                return f"{value:.{precision}f}"
+
+            p_unit_label = f"[{pressure_unit.value}]"
+
+            # ── Table 1: GOR ─────────────────────────────────────────
+            lines.append("GOR")
             lines.append(
-                f"{f'P ({pressure_unit.value})':>10s} "
-                f"{'RsD':>10s} "
-                f"{'RsDb':>10s} "
-                f"{'Bo':>10s} "
-                f"{'Bg':>10s} "
-                f"{'BtD':>10s} "
-                f"{'CumGas':>9s} "
-                f"{'VaporFrac':>11s} "
-                f"{'\u03c1L':>9s} "
-                f"{'\u03bc_oil':>8s} "
-                f"{'GasSG':>8s} "
-                f"{'GasZ':>8s} "
-                f"{'\u03bc_gas':>8s}"
+                f"{'P':>{dl_col}s}"
+                f"{'RsD':>{dl_col}s}"
+                f"{'RsDb':>{dl_col}s}"
             )
-            for step in r.steps[:80]:
+            lines.append(
+                f"{p_unit_label:>{dl_col}s}"
+                f"{'[scf/STB]':>{dl_col}s}"
+                f"{'[scf/STB]':>{dl_col}s}"
+            )
+            for _, step in step_rows:
+                lines.append(
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{dl_col}.5f}"
+                    f"{step.rs:>{dl_col}.5f}"
+                    f"{r.rsi:>{dl_col}.5f}"
+                )
+            lines.append("")
+
+            # ── Table 2: Formation Volume Factors ────────────────────
+            lines.append("Formation volume factors")
+            lines.append(
+                f"{'P':>{dl_col}s}"
+                f"{'Bo':>{dl_col}s}"
+                f"{'Bg':>{dl_col}s}"
+                f"{'BtD':>{dl_col}s}"
+            )
+            lines.append(
+                f"{p_unit_label:>{dl_col}s}"
+                f"{'[rb/STB]':>{dl_col}s}"
+                f"{'[rb/scf]':>{dl_col}s}"
+                f"{'[rb/STB]':>{dl_col}s}"
+            )
+            for _, step in step_rows:
                 bg_txt = "-" if step.bg is None else f"{step.bg:.5f}"
-                cumulative_gas = "-" if step.cumulative_gas_produced is None else f"{step.cumulative_gas_produced:.5f}"
-                oil_density = "-" if step.oil_density_kg_per_m3 is None else f"{step.oil_density_kg_per_m3:.2f}"
-                oil_viscosity = "-" if step.oil_viscosity_cp is None else f"{step.oil_viscosity_cp:.4f}"
+                lines.append(
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{dl_col}.5f}"
+                    f"{step.bo:>{dl_col}.5f}"
+                    f"{bg_txt:>{dl_col}s}"
+                    f"{step.bt:>{dl_col}.5f}"
+                )
+            lines.append("")
+
+            # ── Table 3: Oil Phase ───────────────────────────────────
+            lines.append("Oil phase")
+            lines.append(
+                f"{'Step':>{dl_col}s}"
+                f"{'\u03c1O':>{dl_col}s}"
+                f"{'\u03bcO':>{dl_col}s}"
+                f"{'n_L':>{dl_col}s}"
+            )
+            lines.append(
+                f"{'[#]':>{dl_col}s}"
+                f"{'[kg/m\u00b3]':>{dl_col}s}"
+                f"{'[cP]':>{dl_col}s}"
+                f"{'[mol]':>{dl_col}s}"
+            )
+            for idx, step in step_rows:
+                oil_density = _fmt_opt(step.oil_density_kg_per_m3, 2)
+                oil_viscosity = _fmt_opt(step.oil_viscosity_cp, 4)
+                liquid_moles = (
+                    "-" if step.liquid_moles_remaining is None
+                    else f"{step.liquid_moles_remaining:.6f}"
+                )
+                lines.append(
+                    f"{idx:>{dl_col}d}"
+                    f"{oil_density:>{dl_col}s}"
+                    f"{oil_viscosity:>{dl_col}s}"
+                    f"{liquid_moles:>{dl_col}s}"
+                )
+            lines.append("")
+
+            # ── Table 4: Gas Phase ───────────────────────────────────
+            lines.append("Gas phase")
+            lines.append(
+                f"{'Step':>{dl_col}s}"
+                f"{'\u03b3g':>{dl_col}s}"
+                f"{'Zg':>{dl_col}s}"
+                f"{'\u03bcG':>{dl_col}s}"
+            )
+            lines.append(
+                f"{'[#]':>{dl_col}s}"
+                f"{'[\u2013]':>{dl_col}s}"
+                f"{'[\u2013]':>{dl_col}s}"
+                f"{'[cP]':>{dl_col}s}"
+            )
+            for idx, step in step_rows:
                 gas_gravity = "-" if step.gas_gravity is None else f"{step.gas_gravity:.4f}"
                 gas_z = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.4f}"
-                gas_viscosity = "-" if step.gas_viscosity_cp is None else f"{step.gas_viscosity_cp:.4f}"
+                gas_viscosity = _fmt_opt(step.gas_viscosity_cp, 4)
                 lines.append(
-                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>10.5f} "
-                    f"{step.rs:>10.5f} "
-                    f"{r.rsi:>10.5f} "
-                    f"{step.bo:>10.5f} "
-                    f"{bg_txt:>10s} "
-                    f"{step.bt:>10.5f} "
-                    f"{cumulative_gas:>9s} "
-                    f"{step.vapor_fraction:>11.5f} "
-                    f"{oil_density:>9s} "
-                    f"{oil_viscosity:>8s} "
-                    f"{gas_gravity:>8s} "
-                    f"{gas_z:>8s} "
-                    f"{gas_viscosity:>8s}"
+                    f"{idx:>{dl_col}d}"
+                    f"{gas_gravity:>{dl_col}s}"
+                    f"{gas_z:>{dl_col}s}"
+                    f"{gas_viscosity:>{dl_col}s}"
+                )
+            lines.append("")
+
+            # ── Table 5: Vapor Frac. & Production ────────────────────
+            lines.append("Vapor frac. & production")
+            lines.append(
+                f"{'Step':>{dl_col}s}"
+                f"{'\u03b2':>{dl_col}s}"
+                f"{'Cum. Gas':>{dl_col}s}"
+            )
+            lines.append(
+                f"{'[#]':>{dl_col}s}"
+                f"{'[frac]':>{dl_col}s}"
+                f"{'[scf/STB]':>{dl_col}s}"
+            )
+            for idx, step in step_rows:
+                cumulative_gas = (
+                    "-" if step.cumulative_gas_produced is None
+                    else f"{step.cumulative_gas_produced:.5f}"
+                )
+                lines.append(
+                    f"{idx:>{dl_col}d}"
+                    f"{step.vapor_fraction:>{dl_col}.5f}"
+                    f"{cumulative_gas:>{dl_col}s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")
@@ -994,56 +1106,95 @@ class TextOutputWidget(QWidget):
 
         elif result.cvd_result is not None:
             r = result.cvd_result
+            pressure_unit, temperature_unit = _cvd_units()
             lines.append("CVD")
             lines.append("---")
-            lines.append(f"T = {r.temperature_k:.3f} K")
-            lines.append(f"Pd = {_pa_to_bar(r.dew_pressure_pa):.5f} bar")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"Pd = {_format_pressure(r.dew_pressure_pa, pressure_unit)}")
             lines.append(f"Initial Z = {r.initial_z:.5f}")
             lines.append("")
+            # 9 CVD columns on one row forced horizontal scrolling.
+            # Split into two stacked tables — depletion summary +
+            # phase densities/viscosities — both indexed by Step so the
+            # reader can cross-reference by row without scrolling.
+            # Uniform 12-char columns, two-row header (variable + unit).
+            cvd_col = 12
+            step_rows = list(enumerate(r.steps[:80], start=1))
+
+            # ── Table 1: Depletion summary ───────────────────────────
+            lines.append("Depletion summary")
             lines.append(
-                f"{'P (bar)':>10s} "
-                f"{'Liquid Dropout':>16s} "
-                f"{'Gas Prod.':>11s} "
-                f"{'Cum. Gas':>10s} "
-                f"{'Z':>8s} "
-                f"{'\u03c1L':>9s} "
-                f"{'\u03c1V':>9s} "
-                f"{'\u03bcL':>8s} "
-                f"{'\u03bcV':>8s}"
+                f"{'Step':>{cvd_col}s}"
+                f"{'P':>{cvd_col}s}"
+                f"{'Liq. Dropout':>{cvd_col}s}"
+                f"{'Gas Prod.':>{cvd_col}s}"
+                f"{'Cum. Gas':>{cvd_col}s}"
+                f"{'Z':>{cvd_col}s}"
             )
-            for step in r.steps[:80]:
-                z_two_phase = "" if step.z_two_phase is None else f"{step.z_two_phase:.5f}"
-                gas_produced = "" if step.gas_produced is None else f"{step.gas_produced:.5f}"
+            lines.append(
+                f"{'[#]':>{cvd_col}s}"
+                f"{f'[{pressure_unit.value}]':>{cvd_col}s}"
+                f"{'[frac]':>{cvd_col}s}"
+                f"{'[frac]':>{cvd_col}s}"
+                f"{'[frac]':>{cvd_col}s}"
+                f"{'[\u2013]':>{cvd_col}s}"
+            )
+            for idx, step in step_rows:
+                z_two_phase = "-" if step.z_two_phase is None else f"{step.z_two_phase:.5f}"
+                gas_produced = "-" if step.gas_produced is None else f"{step.gas_produced:.5f}"
+                lines.append(
+                    f"{idx:>{cvd_col}d}"
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{cvd_col}.5f}"
+                    f"{step.liquid_dropout:>{cvd_col}.5f}"
+                    f"{gas_produced:>{cvd_col}s}"
+                    f"{step.cumulative_gas_produced:>{cvd_col}.5f}"
+                    f"{z_two_phase:>{cvd_col}s}"
+                )
+            lines.append("")
+
+            # ── Table 2: Phase densities & viscosities ───────────────
+            lines.append("Phase densities & viscosities")
+            lines.append(
+                f"{'Step':>{cvd_col}s}"
+                f"{'\u03c1L':>{cvd_col}s}"
+                f"{'\u03c1V':>{cvd_col}s}"
+                f"{'\u03bcL':>{cvd_col}s}"
+                f"{'\u03bcV':>{cvd_col}s}"
+            )
+            lines.append(
+                f"{'[#]':>{cvd_col}s}"
+                f"{'[kg/m\u00b3]':>{cvd_col}s}"
+                f"{'[kg/m\u00b3]':>{cvd_col}s}"
+                f"{'[cP]':>{cvd_col}s}"
+                f"{'[cP]':>{cvd_col}s}"
+            )
+            for idx, step in step_rows:
                 liquid_density = (
-                    ""
+                    "-"
                     if step.liquid_density_kg_per_m3 is None or step.liquid_density_kg_per_m3 <= 0
                     else f"{step.liquid_density_kg_per_m3:.2f}"
                 )
                 vapor_density = (
-                    ""
+                    "-"
                     if step.vapor_density_kg_per_m3 is None or step.vapor_density_kg_per_m3 <= 0
                     else f"{step.vapor_density_kg_per_m3:.2f}"
                 )
                 liquid_viscosity = (
-                    ""
+                    "-"
                     if step.liquid_viscosity_cp is None or step.liquid_viscosity_cp <= 0
                     else f"{step.liquid_viscosity_cp:.4f}"
                 )
                 vapor_viscosity = (
-                    ""
+                    "-"
                     if step.vapor_viscosity_cp is None or step.vapor_viscosity_cp <= 0
                     else f"{step.vapor_viscosity_cp:.4f}"
                 )
                 lines.append(
-                    f"{_pa_to_bar(step.pressure_pa):>10.5f} "
-                    f"{step.liquid_dropout:>16.5f} "
-                    f"{gas_produced:>11s} "
-                    f"{step.cumulative_gas_produced:>10.5f} "
-                    f"{z_two_phase:>8s} "
-                    f"{liquid_density:>9s} "
-                    f"{vapor_density:>9s} "
-                    f"{liquid_viscosity:>8s} "
-                    f"{vapor_viscosity:>8s}"
+                    f"{idx:>{cvd_col}d}"
+                    f"{liquid_density:>{cvd_col}s}"
+                    f"{vapor_density:>{cvd_col}s}"
+                    f"{liquid_viscosity:>{cvd_col}s}"
+                    f"{vapor_viscosity:>{cvd_col}s}"
                 )
             if len(r.steps) > 80:
                 lines.append(f"... ({len(r.steps) - 80} more)")

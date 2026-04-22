@@ -1292,11 +1292,40 @@ def test_dl_results_surface_sections(app: QApplication) -> None:
     table.display_result(result)
     summary = _summary_values(table)
     assert summary["Residual Oil Density"] == "782.00 kg/m³"
-    assert table.composition_table.horizontalHeaderItem(4).text() == "Bg"
-    # DL Details header compacted to standard petroleum-engineering symbols
-    # (Greek letter + single-capital phase suffix) so all 8 columns fit the
-    # right-rail width without truncation. Column 2 is now ρO (rho + O).
-    assert table.details_table.horizontalHeaderItem(2).text() == "\u03c1O"
+    # DL results render as five narrow (3–4 col) stacked tables so the
+    # whole surface fits the rail with no horizontal scrolling:
+    #   composition_table → GOR                        [P, RsD, RsDb]
+    #   details_table     → Formation Volume Factors   [P, Bo, Bg, BtD]
+    #   extra_table       → Oil Phase                  [Step, ρO, μO, n_L]
+    #   extra_table_2     → Gas Phase                  [Step, γg, Zg, μG]
+    #   extra_table_3     → Vapor Frac. & Production   [Step, β, Cum. Gas]
+    assert table.composition_section.title() == "GOR"
+    assert table.composition_table.columnCount() == 3
+    assert table.composition_table.horizontalHeaderItem(1).text() == "RsD"
+    assert table.composition_table.horizontalHeaderItem(2).text() == "RsDb"
+
+    assert table.details_section.title() == "Formation Volume Factors"
+    assert table.details_table.columnCount() == 4
+    assert table.details_table.horizontalHeaderItem(1).text() == "Bo"
+    assert table.details_table.horizontalHeaderItem(2).text() == "Bg"
+    assert table.details_table.horizontalHeaderItem(3).text() == "BtD"
+
+    assert table.extra_section.title() == "Oil Phase"
+    assert table.extra_table.columnCount() == 4
+    assert table.extra_table.horizontalHeaderItem(1).text() == "\u03c1O"
+    assert table.extra_table.horizontalHeaderItem(2).text() == "\u03bcO"
+    assert table.extra_table.horizontalHeaderItem(3).text() == "n_L"
+
+    assert table.extra_section_2.title() == "Gas Phase"
+    assert table.extra_table_2.columnCount() == 4
+    assert table.extra_table_2.horizontalHeaderItem(1).text() == "\u03b3g"
+    assert table.extra_table_2.horizontalHeaderItem(2).text() == "Zg"
+    assert table.extra_table_2.horizontalHeaderItem(3).text() == "\u03bcG"
+
+    assert table.extra_section_3.title() == "Vapor Frac. & Production"
+    assert table.extra_table_3.columnCount() == 3
+    assert table.extra_table_3.horizontalHeaderItem(1).text() == "\u03b2"
+    assert table.extra_table_3.horizontalHeaderItem(2).text() == "Cum. Gas"
 
 
 def test_stability_result_widgets_surface_trial_diagnostics(app: QApplication) -> None:

@@ -619,6 +619,7 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
         [
             _pressure_header(p_unit),
             "RsD (Solution GOR)",
+            "RsDb (Initial Rs at Pb)",
             "Bo",
             "Bg",
             "BtD (Total FVF)",
@@ -630,6 +631,12 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
             [
                 pressure_from_pa(step.pressure_pa, p_unit),
                 float(step.rs),
+                # RsDb is the initial solution GOR at the bubble point
+                # (constant for every DL step). Included as a per-row
+                # column so the professor can plot RsD + RsDb vs pressure
+                # directly from the exported deliverable — the PETE665
+                # term project requires plotting both.
+                float(r.rsi),
                 float(step.bo),
                 _optional_number(step.bg),
                 float(step.bt),
@@ -641,6 +648,7 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
         ],
         number_formats=[
             _FMT_PRESSURE,
+            _FMT_DIMENSIONLESS_LOW,
             _FMT_DIMENSIONLESS_LOW,
             _FMT_DIMENSIONLESS_LOW,
             _FMT_DIMENSIONLESS_LOW,

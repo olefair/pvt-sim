@@ -67,7 +67,12 @@ from pvtapp.widgets import (
 )
 from pvtapp.widgets.two_pane_workspace import PANE_MODE_DOUBLE
 from pvtapp.workers import CalculationThread
-from pvtapp.job_runner import execute_bubble_point, load_run_config
+from pvtapp.job_runner import (
+    execute_bubble_point,
+    list_runs,
+    load_run_config,
+    load_run_result,
+)
 from pvtapp.style import (
     DEFAULT_THEME,
     DEFAULT_UI_SCALE,
@@ -113,6 +118,13 @@ class PVTSimulatorWindow(QMainWindow):
         self._theme_mode = self._load_persisted_theme_mode()
         self.workspace.set_theme_mode(self._theme_mode, emit_signal=False)
         self._apply_ui_scale(self._ui_scale, announce=False)
+
+        # Auto-restore the most recent completed run so reopening the app
+        # picks up where the user left off. Deferred one event-loop tick
+        # so the widgets finish their initial layout pass first (otherwise
+        # column-width / row-height math in ResultsTableWidget runs against
+        # stale geometry).
+        QTimer.singleShot(0, self._restore_last_completed_run)
 
     def _setup_window(self) -> None:
         """Configure main window properties."""
@@ -1419,6 +1431,59 @@ class PVTSimulatorWindow(QMainWindow):
 
         run_name = config.run_name or config.run_id or Path(run_dir).name
         self._load_run_config_into_inputs(config, status_message=f"Loaded inputs: {run_name}")
+
+    def _restore_last_completed_run(self) -> None:
+        """Auto-restore the most recent completed run on app startup.
+
+        Every run is already persisted by the worker to
+        ``%LOCALAPPDATA%/PVTSimulator/runs/<timestamp>_<id>/``. On reopen
+        we pick the most recent *completed* run (cancelled / failed runs
+        are skipped), load its config into the inputs panel, and render
+        its result into the right-rail + text-output + plot surfaces so
+        the user picks up exactly where they left off.
+        Silent on any failure — a first-launch with no saved runs is a
+        normal case, not an error.
+        """
+        try:
+            recent = list_runs(limit=10)
+        except Exception:
+            return
+
+        target = None
+        for entry in recent:
+            if entry.get("status") == "completed":
+                target = entry
+                break
+        if target is None:
+            return
+
+        run_dir = Path(target["path"])
+        try:
+            config = load_run_config(run_dir)
+            result = load_run_result(run_dir)
+        except Exception:
+            return
+
+        if config is None or result is None:
+            return
+
+        try:
+            self._load_run_config_into_inputs(
+                config, status_message="Restored last run"
+            )
+        except Exception:
+            pass
+
+        try:
+            self._set_results_pane_title(self._results_title_for_config(result.config))
+            self.results_sidebar.display_cached_result(result)
+            self.text_output_widget.display_result(result)
+            self.diagnostics_widget.display_result(result)
+            self.results_plot.display_result(result)
+        except Exception:
+            # Any rendering failure leaves the UI clean (inputs restored,
+            # results empty) — the user can re-run to repopulate.
+            pass
 
     @Slot(object)
     def _on_logged_run_selected(self, result: Optional[RunResult]) -> None:

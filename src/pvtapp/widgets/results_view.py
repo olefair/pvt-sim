@@ -330,6 +330,25 @@ class ResultsTableWidget(QWidget):
         self.viscosity_table = self._create_section_table()
         self.viscosity_section = self._build_table_section("Phase Viscosities", self.viscosity_table)
 
+        # Auxiliary tables used by _display_dl to split the DL results
+        # into five narrow (3–4 column) sections so the whole surface fits
+        # the rail without horizontal scrolling. Section mapping:
+        #   composition_table  → GOR                       (P, RsD, RsDb)
+        #   details_table      → Formation Volume Factors  (P, Bo, Bg, BtD)
+        #   extra_table        → Oil Phase                 (Step, ρO, μO, n_L)
+        #   extra_table_2      → Gas Phase                 (Step, γg, Zg, μG)
+        #   extra_table_3      → Vapor Frac. & Production  (Step, β, Cum. Gas)
+        # extra_table is also used by other calc types via the generic
+        # "Extra" slot (cleared on display_result so stale rows don't leak).
+        self.extra_table = self._create_section_table()
+        self.extra_section = self._build_table_section("Extra", self.extra_table)
+
+        self.extra_table_2 = self._create_section_table()
+        self.extra_section_2 = self._build_table_section("Extra 2", self.extra_table_2)
+
+        self.extra_table_3 = self._create_section_table()
+        self.extra_section_3 = self._build_table_section("Extra 3", self.extra_table_3)
+
         # Zero-delay header tooltips on every result table. Any column
         # whose ``horizontalHeaderItem`` carries a non-empty tooltip
         # (e.g. the Rel. Vol. column on CCE) pops immediately on hover
@@ -385,6 +404,9 @@ class ResultsTableWidget(QWidget):
             self.composition_section,
             self.details_section,
             self.viscosity_section,
+            self.extra_section,
+            self.extra_section_2,
+            self.extra_section_3,
             self.captured_section,
         )
 
@@ -402,6 +424,9 @@ class ResultsTableWidget(QWidget):
         self._sections_layout.addWidget(self.composition_section)
         self._sections_layout.addWidget(self.details_section)
         self._sections_layout.addWidget(self.viscosity_section)
+        self._sections_layout.addWidget(self.extra_section)
+        self._sections_layout.addWidget(self.extra_section_2)
+        self._sections_layout.addWidget(self.extra_section_3)
         self._sections_layout.addWidget(self.captured_section)
         self._sections_layout.addStretch(1)
 
@@ -680,7 +705,18 @@ class ResultsTableWidget(QWidget):
 
     def _apply_table_fixed_height(self, table: QTableWidget) -> None:
         """Read current row/header heights and setFixedHeight on the table."""
-        if table is None or table.columnCount() == 0:
+        if table is None:
+            return
+        # A deferred QTimer.singleShot(0, ...) callback can fire after the
+        # widget's underlying C++ object has been torn down (notably in
+        # pytest-qt-style teardown where Python releases the wrapper in a
+        # different order). Calling any method on a dead shiboken object
+        # raises RuntimeError — treat that as "nothing to resize" rather
+        # than failing the enclosing test / scheduled tick.
+        try:
+            if table.columnCount() == 0:
+                return
+        except RuntimeError:
             return
         header = table.horizontalHeader()
         header_height = max(header.sizeHint().height(), header.height())
@@ -724,12 +760,18 @@ class ResultsTableWidget(QWidget):
         self._compact_data_columns(self.composition_table)
         self._compact_data_columns(self.details_table)
         self._compact_data_columns(self.viscosity_table)
+        self._compact_data_columns(self.extra_table)
+        self._compact_data_columns(self.extra_table_2)
+        self._compact_data_columns(self.extra_table_3)
         self._compact_data_columns(self.captured_table)
         for table in (
             self.summary_table,
             self.composition_table,
             self.details_table,
             self.viscosity_table,
+            self.extra_table,
+            self.extra_table_2,
+            self.extra_table_3,
             self.captured_table,
         ):
             self._expand_columns_to_fill(table)
@@ -739,6 +781,9 @@ class ResultsTableWidget(QWidget):
             self.composition_table,
             self.details_table,
             self.viscosity_table,
+            self.extra_table,
+            self.extra_table_2,
+            self.extra_table_3,
             self.captured_table,
         ):
             self._sync_table_height(table)
@@ -747,6 +792,9 @@ class ResultsTableWidget(QWidget):
         self.composition_section.setVisible(self._section_has_content(self.composition_table))
         self.details_section.setVisible(self._section_has_content(self.details_table))
         self.viscosity_section.setVisible(self._section_has_content(self.viscosity_table))
+        self.extra_section.setVisible(self._section_has_content(self.extra_table))
+        self.extra_section_2.setVisible(self._section_has_content(self.extra_table_2))
+        self.extra_section_3.setVisible(self._section_has_content(self.extra_table_3))
         self.captured_section.setVisible(bool(self._captured_rows))
 
     def resizeEvent(self, event) -> None:
@@ -775,11 +823,20 @@ class ResultsTableWidget(QWidget):
         self.composition_section.setTitle("Compositions")
         self.details_section.setTitle("Details")
         self.viscosity_section.setTitle("Phase Viscosities")
+        self.extra_section.setTitle("Extra")
+        self.extra_section_2.setTitle("Extra 2")
+        self.extra_section_3.setTitle("Extra 3")
         self.summary_table.setRowCount(0)
         self.composition_table.setRowCount(0)
         self.details_table.setRowCount(0)
         self.viscosity_table.setRowCount(0)
         self.viscosity_table.setColumnCount(0)
+        self.extra_table.setRowCount(0)
+        self.extra_table.setColumnCount(0)
+        self.extra_table_2.setRowCount(0)
+        self.extra_table_2.setColumnCount(0)
+        self.extra_table_3.setRowCount(0)
+        self.extra_table_3.setColumnCount(0)
         if clear_captured:
             self.clear_captured()
         self._finalize_section_tables()
@@ -817,10 +874,20 @@ class ResultsTableWidget(QWidget):
         self.composition_section.setTitle("Compositions")
         self.details_section.setTitle("Details")
         self.viscosity_section.setTitle("Phase Viscosities")
-        # Reset the auxiliary viscosity table so non-CCE result types don't
-        # carry over a stale section.
+        self.extra_section.setTitle("Extra")
+        self.extra_section_2.setTitle("Extra 2")
+        self.extra_section_3.setTitle("Extra 3")
+        # Reset auxiliary tables so non-matching result types don't carry
+        # over stale sections. viscosity_table is re-populated by CCE;
+        # extra_table{,_2,_3} are re-populated by DL.
         self.viscosity_table.setRowCount(0)
         self.viscosity_table.setColumnCount(0)
+        self.extra_table.setRowCount(0)
+        self.extra_table.setColumnCount(0)
+        self.extra_table_2.setRowCount(0)
+        self.extra_table_2.setColumnCount(0)
+        self.extra_table_3.setRowCount(0)
+        self.extra_table_3.setColumnCount(0)
 
         # Reset per-result view state (e.g. saturation display-unit override).
         self._saturation_unit_override = None
@@ -1859,107 +1926,141 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        # DL Compositions header compacted to match CCE's "P ({unit})"
-        # short-form — "Pressure" was getting truncated to "ressure" in
-        # the right-rail width, losing the leading P.
-        self.composition_table.setColumnCount(7)
-        self.composition_table.setHorizontalHeaderLabels(
-            [f"P ({pressure_unit.value})", "RsD", "RsDb", "Bo", "Bg", "BtD", "Cum. Gas"]
-        )
+        # DL results split into five narrow (3–4 column) stacked tables
+        # so the whole surface fits the right-rail width without any
+        # horizontal scrolling:
+        #
+        #   Section                        Columns
+        #   ────────────────────────────── ───────────────────────────
+        #   "GOR"                          P, RsD, RsDb
+        #   "Formation Volume Factors"     P, Bo, Bg, BtD
+        #   "Oil Phase"                    Step, ρO, μO, n_L
+        #   "Gas Phase"                    Step, γg, Zg, μG
+        #   "Vapor Frac. & Production"     Step, β, Cum. Gas
+        #
+        # Greek/phase-suffix symbols (ρO, μO, γg, Zg, μG) retained so
+        # every column header is 2–4 chars — see the earlier rationale.
+        self.composition_section.setTitle("GOR")
+        self.details_section.setTitle("Formation Volume Factors")
+        self.extra_section.setTitle("Oil Phase")
+        self.extra_section_2.setTitle("Gas Phase")
+        self.extra_section_3.setTitle("Vapor Frac. & Production")
+
+        p_header = f"P ({pressure_unit.value})"
+
+        # Table 1: GOR
+        self.composition_table.setColumnCount(3)
+        self.composition_table.setHorizontalHeaderLabels([p_header, "RsD", "RsDb"])
         self.composition_table.setRowCount(len(result.steps))
 
-        # DL Details header uses standard petroleum-engineering symbols
-        # (Greek letter + single-capital phase suffix, same plain-letter
-        # style the CCE text output adopted for ρL / ρV / μL / μV). That
-        # gives every column a 2–4 character header so all eight columns
-        # fit the rail without truncation. Mapping:
-        #   Oil Density       →  ρO   (rho  + O)
-        #   Oil Viscosity     →  μO   (mu   + O)
-        #   Gas Gravity       →  γg   (gamma + g)   — specific gravity
-        #   Gas Z-factor      →  Zg
-        #   Gas Viscosity     →  μG   (mu   + G)
-        #   Liquid Moles Rem. →  n_L  — keep explicit; no standard symbol
-        self.details_table.setColumnCount(8)
-        self.details_table.setHorizontalHeaderLabels(
-            [
-                "Step",
-                "\u03b2",                # β (vapor fraction)
-                "\u03c1O",               # ρO
-                "\u03bcO",               # μO
-                "\u03b3g",               # γg
-                "Zg",
-                "\u03bcG",               # μG
-                "n_L",
-            ]
-        )
+        # Table 2: Formation Volume Factors
+        self.details_table.setColumnCount(4)
+        self.details_table.setHorizontalHeaderLabels([p_header, "Bo", "Bg", "BtD"])
         self.details_table.setRowCount(len(result.steps))
 
+        # Table 3: Oil Phase
+        self.extra_table.setColumnCount(4)
+        self.extra_table.setHorizontalHeaderLabels(
+            ["Step", "\u03c1O", "\u03bcO", "n_L"]
+        )
+        self.extra_table.setRowCount(len(result.steps))
+
+        # Table 4: Gas Phase
+        self.extra_table_2.setColumnCount(4)
+        self.extra_table_2.setHorizontalHeaderLabels(
+            ["Step", "\u03b3g", "Zg", "\u03bcG"]
+        )
+        self.extra_table_2.setRowCount(len(result.steps))
+
+        # Table 5: Vapor Frac. & Production
+        self.extra_table_3.setColumnCount(3)
+        self.extra_table_3.setHorizontalHeaderLabels(
+            ["Step", "\u03b2", "Cum. Gas"]
+        )
+        self.extra_table_3.setRowCount(len(result.steps))
+
         for row, step in enumerate(result.steps):
-            self.composition_table.setItem(
-                row,
-                0,
-                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"),
-            )
+            p_txt = f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"
+            step_txt = str(row + 1)
+
+            # Table 1: GOR (P, RsD, RsDb)
+            self.composition_table.setItem(row, 0, QTableWidgetItem(p_txt))
             self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs:.4f}"))
             self.composition_table.setItem(row, 2, QTableWidgetItem(f"{result.rsi:.4f}"))
-            self.composition_table.setItem(row, 3, QTableWidgetItem(f"{step.bo:.4f}"))
-            self.composition_table.setItem(
-                row,
-                4,
+
+            # Table 2: Formation Volume Factors (P, Bo, Bg, BtD)
+            self.details_table.setItem(row, 0, QTableWidgetItem(p_txt))
+            self.details_table.setItem(row, 1, QTableWidgetItem(f"{step.bo:.4f}"))
+            self.details_table.setItem(
+                row, 2,
                 QTableWidgetItem("-" if step.bg is None else f"{step.bg:.4f}"),
             )
-            self.composition_table.setItem(row, 5, QTableWidgetItem(f"{step.bt:.4f}"))
-            self.composition_table.setItem(
-                row,
-                6,
-                QTableWidgetItem(
-                    "-" if step.cumulative_gas_produced is None else f"{step.cumulative_gas_produced:.4f}"
-                ),
-            )
+            self.details_table.setItem(row, 3, QTableWidgetItem(f"{step.bt:.4f}"))
 
-            self.details_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
-            self.details_table.setItem(row, 1, QTableWidgetItem(f"{step.vapor_fraction:.4f}"))
+            # Table 3: Oil Phase (Step, ρO, μO, n_L)
             oil_density = (
                 "-"
                 if step.oil_density_kg_per_m3 is None or step.oil_density_kg_per_m3 <= 0
                 else f"{step.oil_density_kg_per_m3:.2f}"
             )
-            gas_gravity = "-" if step.gas_gravity is None else f"{step.gas_gravity:.4f}"
-            gas_z = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.4f}"
             oil_viscosity = (
                 "-"
                 if step.oil_viscosity_cp is None or step.oil_viscosity_cp <= 0
                 else f"{step.oil_viscosity_cp:.4f}"
             )
-            gas_viscosity = (
-                "-"
-                if step.gas_viscosity_cp is None or step.gas_viscosity_cp <= 0
-                else f"{step.gas_viscosity_cp:.4f}"
-            )
-            self.details_table.setItem(row, 2, QTableWidgetItem(oil_density))
-            self.details_table.setItem(row, 3, QTableWidgetItem(oil_viscosity))
-            self.details_table.setItem(row, 4, QTableWidgetItem(gas_gravity))
-            self.details_table.setItem(row, 5, QTableWidgetItem(gas_z))
-            self.details_table.setItem(row, 6, QTableWidgetItem(gas_viscosity))
             liquid_moles = (
                 "-"
                 if step.liquid_moles_remaining is None
                 else f"{step.liquid_moles_remaining:.6f}"
             )
-            self.details_table.setItem(row, 7, QTableWidgetItem(liquid_moles))
+            self.extra_table.setItem(row, 0, QTableWidgetItem(step_txt))
+            self.extra_table.setItem(row, 1, QTableWidgetItem(oil_density))
+            self.extra_table.setItem(row, 2, QTableWidgetItem(oil_viscosity))
+            self.extra_table.setItem(row, 3, QTableWidgetItem(liquid_moles))
 
-        self.composition_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.details_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+            # Table 4: Gas Phase (Step, γg, Zg, μG)
+            gas_gravity = "-" if step.gas_gravity is None else f"{step.gas_gravity:.4f}"
+            gas_z = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.4f}"
+            gas_viscosity = (
+                "-"
+                if step.gas_viscosity_cp is None or step.gas_viscosity_cp <= 0
+                else f"{step.gas_viscosity_cp:.4f}"
+            )
+            self.extra_table_2.setItem(row, 0, QTableWidgetItem(step_txt))
+            self.extra_table_2.setItem(row, 1, QTableWidgetItem(gas_gravity))
+            self.extra_table_2.setItem(row, 2, QTableWidgetItem(gas_z))
+            self.extra_table_2.setItem(row, 3, QTableWidgetItem(gas_viscosity))
+
+            # Table 5: Vapor Frac. & Production (Step, β, Cum. Gas)
+            cum_gas = (
+                "-"
+                if step.cumulative_gas_produced is None
+                else f"{step.cumulative_gas_produced:.4f}"
+            )
+            self.extra_table_3.setItem(row, 0, QTableWidgetItem(step_txt))
+            self.extra_table_3.setItem(row, 1, QTableWidgetItem(f"{step.vapor_fraction:.4f}"))
+            self.extra_table_3.setItem(row, 2, QTableWidgetItem(cum_gas))
+
+        for t in (
+            self.composition_table,
+            self.details_table,
+            self.extra_table,
+            self.extra_table_2,
+            self.extra_table_3,
+        ):
+            t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     def _display_cvd(self, result: CVDResult) -> None:
         """Display CVD results."""
+        # CVDConfig does not carry unit preferences (see note in the
+        # composition-table block below), so use the repo-wide
+        # US-petroleum defaults (psia / °F) — same units the CVD results
+        # columns render in.
+        cvd_pressure_unit = PressureUnit.PSIA
+        cvd_temperature_unit = TemperatureUnit.F
         summary_data = [
-            ("Temperature", f"{result.temperature_k - 273.15:.2f} {_format_temperature_unit(TemperatureUnit.C)}"),
-            ("Dew Pressure", f"{result.dew_pressure_pa / 1e5:.2f} bar"),
+            ("Temperature", _format_temperature(result.temperature_k, cvd_temperature_unit)),
+            ("Dew Pressure", _format_pressure(result.dew_pressure_pa, cvd_pressure_unit)),
             ("Initial Z", f"{result.initial_z:.4f}"),
             ("Steps", str(len(result.steps))),
         ]
@@ -1970,11 +2071,9 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        # Header + values use the repo-wide default US-petroleum units
-        # (psia). CVDConfig does not carry its own unit-preference field;
-        # if a follow-up adds one, wire ``cvd_pressure_unit`` through the
-        # same way ``_cce_display_units`` does.
-        cvd_pressure_unit = PressureUnit.PSIA
+        # Header + values use ``cvd_pressure_unit`` computed above. If a
+        # follow-up adds a ``pressure_unit`` field to CVDConfig, wire it
+        # through the same way ``_cce_display_units`` does.
         self.composition_table.setColumnCount(6)
         # Compact "P ({unit})" form to match CCE / DL — "Pressure (psia)"
         # gets truncated in the right-rail width.
@@ -3196,6 +3295,11 @@ class ResultsPlotWidget(QWidget):
                 values=[result.rsi for _ in result.steps],
                 color="#86efac",
                 linestyle=":",
+                # PETE665 term project requires plotting RsDb alongside
+                # RsD. Ship it default-selected so the reference demo
+                # shows all five required curves (Bg, Bo, RsD, RsDb, BtD)
+                # without the user having to open the series dropdown.
+                default_selected=True,
             ),
             "bo": PlotSeriesSpec(
                 key="bo",
@@ -3216,6 +3320,9 @@ class ResultsPlotWidget(QWidget):
                 values=[step.bg for step in result.steps],
                 color="#38bdf8",
                 marker="s",
+                # PETE665 term project requires plotting Bg alongside Bo,
+                # BtD, RsD, RsDb. Default-select to match the assignment.
+                default_selected=True,
             ),
             "btd": PlotSeriesSpec(
                 key="btd",
@@ -3478,17 +3585,23 @@ class ResultsPlotWidget(QWidget):
             return
 
         clusters = self._cluster_selected_series(specs)
-        # Pick a grid that keeps each panel reasonably square: with four or
-        # more clusters we switch to a near-square (rows x cols) grid so
-        # individual plots don't get vertically crushed. Stacked Nx1 is
-        # fine for up to 3 clusters.
+        # Grid layout:
+        #   1 plot  → 1×1 (full width)
+        #   2 plots → 2×1 (stacked vertically)
+        #   3+      → 2 rows, ceil(n/2) cols — 3/4 of a square at n=3,
+        #             full 2×2 at n=4, then grow rightward (2×3, 2×4, …).
+        # Keeps plots from getting vertically crushed once there are
+        # more than two and mirrors how a reader naturally lays out
+        # multiple companion charts on a page.
         n_clusters = len(clusters)
-        if n_clusters >= 4:
-            import math
-            cols = math.ceil(math.sqrt(n_clusters))
-            rows = math.ceil(n_clusters / cols)
+        if n_clusters <= 1:
+            rows, cols = 1, 1
+        elif n_clusters == 2:
+            rows, cols = 2, 1
         else:
-            rows, cols = n_clusters, 1
+            import math
+            rows = 2
+            cols = math.ceil(n_clusters / 2)
         axes: list[object] = []
         for index in range(len(clusters)):
             share_axis = axes[0] if axes else None
@@ -3621,17 +3734,23 @@ class ResultsPlotWidget(QWidget):
             return
 
         clusters = self._cluster_selected_series(specs)
-        # Pick a grid that keeps each panel reasonably square: with four or
-        # more clusters we switch to a near-square (rows x cols) grid so
-        # individual plots don't get vertically crushed. Stacked Nx1 is
-        # fine for up to 3 clusters.
+        # Grid layout:
+        #   1 plot  → 1×1 (full width)
+        #   2 plots → 2×1 (stacked vertically)
+        #   3+      → 2 rows, ceil(n/2) cols — 3/4 of a square at n=3,
+        #             full 2×2 at n=4, then grow rightward (2×3, 2×4, …).
+        # Keeps plots from getting vertically crushed once there are
+        # more than two and mirrors how a reader naturally lays out
+        # multiple companion charts on a page.
         n_clusters = len(clusters)
-        if n_clusters >= 4:
-            import math
-            cols = math.ceil(math.sqrt(n_clusters))
-            rows = math.ceil(n_clusters / cols)
+        if n_clusters <= 1:
+            rows, cols = 1, 1
+        elif n_clusters == 2:
+            rows, cols = 2, 1
         else:
-            rows, cols = n_clusters, 1
+            import math
+            rows = 2
+            cols = math.ceil(n_clusters / 2)
         axes: list[object] = []
         for index in range(len(clusters)):
             share_axis = axes[0] if axes else None
