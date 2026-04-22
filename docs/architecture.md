@@ -123,11 +123,16 @@ Equation of state implementations.
 | File | Purpose |
 |------|---------|
 | `base.py` | Abstract `CubicEOS` protocol |
-| `mixing_rules.py` | van der Waals mixing, BIP handling |
-| `cubic_solver.py` | Cardano's formula, root selection |
 | `peng_robinson.py` | PR (1976) implementation |
+| `pr78.py` | PR (1978) implementation (runtime-wired) |
 | `srk.py` | SRK (1972) implementation |
-| `volume_translation.py` | Peneloux correction for density |
+| `ppr78.py` | Predictive PR78 group-contribution k_ij(T) model (Jaubert & Mutelet 2004). **Kernel-present, not runtime-wired** — treated as experimental until validated and exposed through `pvtapp`. |
+| `groups/` | PPR78 group definitions and component decomposition |
+
+Shared helpers for cubic roots, mixing rules, and volume translation live
+alongside these files (`base.py`, SRK, PR modules). The runtime EOS surface
+exposed through `src/pvtapp/capabilities.py` is Peng-Robinson (1976),
+Peng-Robinson (1978), and SRK.
 
 ### stability/
 
@@ -204,7 +209,7 @@ EOS parameter regression.
 
 ### io/
 
-Data import/export.
+Data import/export inside `pvtcore`.
 
 | File | Purpose |
 |------|---------|
@@ -212,6 +217,12 @@ Data import/export.
 | `import_excel.py` | Parse Excel PVT reports |
 | `export_csv.py` | Write results to CSV |
 | `report_templates/` | Standard PVT report formats |
+
+Application-facing export lives in `pvtapp`:
+
+| File | Purpose |
+|------|---------|
+| `src/pvtapp/excel_export.py` | Multi-sheet `.xlsx` export of a completed `RunResult`. Uses `openpyxl` Tables (`TableStyleMedium2`) with per-calc sections (e.g. CCE → Expansion / Phase Densities / Phase Viscosities / Per-Step Liquid / Per-Step Vapor). All values are written in US-petroleum display units (psia, °F, ...) to match the GUI and text output. Public entry point: `export_result_to_excel`. |
 
 ---
 
@@ -362,3 +373,84 @@ class FlashResult:
 2. **Caching:** EOS parameters (a, b) don't change during flash iteration—compute once
 3. **Lazy Evaluation:** Don't compute viscosity/IFT unless requested
 4. **Profiling Points:** Flash inner loop, cubic solver, fugacity coefficient calculation
+
+---
+
+## Desktop Runtime Surface (pvtapp)
+
+The desktop app layers three persistence surfaces on top of the kernel:
+
+### Run persistence
+
+Every completed run is written to a timestamped directory by the worker
+thread in `src/pvtapp/job_runner.py`:
+
+- Windows: `%LOCALAPPDATA%/PVTSimulator/runs/<YYYYMMDD_HHMMSS>_<run_id>/`
+- Other platforms: `~/.pvtsimulator/runs/<YYYYMMDD_HHMMSS>_<run_id>/`
+
+The directory is created by `get_default_runs_directory()` /
+`create_run_directory()`. Saved runs are reloaded via:
+
+- `pvtapp.job_runner.load_run_config(run_dir)` → `RunConfig | None`
+- `pvtapp.job_runner.load_run_result(run_dir)` → `RunResult | None`
+- `pvtapp.job_runner.list_runs(limit=...)` → status-annotated recent runs
+
+### Auto-restore on open
+
+`PVTSimulatorWindow._restore_last_completed_run` runs once on startup via a
+queued `QTimer.singleShot(0, ...)` hook. It picks the most recent
+`completed` entry from `list_runs(limit=10)`, loads its config back into the
+inputs panel, and replays its result into the right-rail, text output,
+diagnostics, and plot surfaces. Cancelled and failed runs are skipped.
+Failures at any stage are silent — a first launch with no saved runs is a
+normal case and leaves the UI empty.
+
+### Excel export
+
+`pvtapp.excel_export.export_result_to_excel(result, path)` writes a
+multi-sheet `.xlsx` workbook using `openpyxl`. The workbook contains:
+
+- a `Summary` sheet with run metadata and per-calc highlights
+- one data sheet per logical section per calc type (e.g. for CCE:
+  `Expansion`, `Phase Densities`, `Phase Viscosities`, `Per-Step Liquid`,
+  `Per-Step Vapor`)
+
+Each data sheet uses `Table` with `TableStyleMedium2`, frozen header panes,
+and unit-labelled column headers (`P (psia)`, `Liquid Density (kg/m³)`,
+...). Every pressure / temperature / density / viscosity / GOR / FVF value
+is rendered in US-petroleum display units to match the GUI and text output.
+
+---
+
+## Known Architectural Limitations
+
+These are architectural, not numerical, and the ones that affect runtime
+shape. Numerical / validation gaps are tracked in
+`docs/validation_plan.md` and per-module validation matrices.
+
+- **Phase envelope plotter does not inject the critical point.** Per the
+  comment in `src/pvtapp/widgets/results_view.py._plot_phase_envelope._curve_xy`,
+  the detected critical point is deliberately not stitched into the bubble
+  and dew polylines because the CP generally does not lie on the discrete
+  traced locus and sorting by T would fabricate spikes. The test
+  `test_phase_envelope_plot_connects_curves_through_critical_point` is kept
+  `xfail` (strict=False) as the reminder. Resolution requires the
+  phase-envelope accuracy/continuity redesign (see
+  `docs/blueprints/fast_phase_envelope.md`).
+- **BIP panel is diagnostic, not runtime.** `src/pvtapp/main.py` does not
+  feed the GUI BIP selection into `RunConfig`. Runtime default is zero-BIP
+  unless supplied through config data. This violates the runtime-surface
+  standard (`docs/runtime_surface_standard.md` §4) and is tracked as an
+  explicit upgrade.
+- **PPR78 is kernel-only.** `src/pvtcore/eos/ppr78.py` implements Jaubert &
+  Mutelet (2004) with the group interaction table, but no `pvtapp` module
+  imports it. Treated as experimental until the numerical output is
+  validated against Jaubert literature cases.
+- **CVD pressure schedule is step-based.** `CVDConfig.n_steps` still
+  requires `>= 5`. CCE and DL now accept explicit descending
+  `pressure_points_pa` lists; CVD does not.
+- **Flash SS fallback is unaccelerated.** When Michelsen-Newton fails,
+  `_ss_flash_loop` runs pure successive substitution. On non-pathological
+  failures (contractive SS operator), GDEM acceleration would reduce the
+  iteration count 3–5×. See
+  `docs/blueprints/selective_gdem_flash_ss_fallback.md`.

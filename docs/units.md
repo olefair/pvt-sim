@@ -6,6 +6,27 @@ This document defines the **canonical internal units** used throughout the PVT-S
 
 **Golden Rule:** No EOS, flash, or envelope function should ever receive non-canonical units.
 
+### Two layers, one contract
+
+The units contract is split into two layers that must not be confused:
+
+- **Internal (kernel) layer** — canonical SI: Pa, K, g/mol, m³/mol, kg/m³,
+  Pa·s, N/m. Everything under `src/pvtcore/` operates on these units.
+  This is the canonical internal side of the contract and is non-negotiable.
+- **I/O boundary layer** — the `pvtapp` runtime *defaults to* US-petroleum
+  display units for user-facing surfaces: **pressure in psia, temperature
+  in °F, volumes in bbl** where appropriate. The GUI widgets, the Excel
+  export (`src/pvtapp/excel_export.py`), the text output, and the CSV
+  export all render these units by default. Input parsing accepts the
+  full allowed-input set documented below; conversion into canonical SI
+  happens at the schema / config-intake boundary through helpers such as
+  `pvtapp.schemas.pressure_from_pa` and `temperature_from_k` (and their
+  inverses).
+
+Nothing in `pvtcore` has changed — the kernel still sees Pa and K only.
+The US-petroleum default lives entirely in the boundary translation layer
+and in the presentation widgets.
+
 ---
 
 ## Canonical Internal Units

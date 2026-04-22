@@ -290,10 +290,19 @@ MI-PVT cross-check lane separated cleanly.
 The current CI surface should match the repo's verified reality rather than the
 longer-term aspiration.
 
-### GitHub Actions `ci` workflow (PRs + pushes to `main`)
+### GitHub Actions `ci` workflow (PRs + pushes to `main`) — currently paused
 - **`python scripts/run_premerge_checks.py --baseline-only`** — single entry for the fast baseline (module validation, the same curated unit/contract files, and canonical `pvtapp.cli` validate/run on the example configs). Do not re-list those steps in other workflows.
 - **`python -m pytest`** — routine headless surface from `pyproject.toml` (`tests/unit` + `tests/contracts/test_invariants.py`, with `gui_contract` / `nightly` deselected unless opted in).
 - **`python -m build`** — parallel job; packaging sanity.
+
+> **Status note (2026-04-21):** the workflow files in `.github/workflows/`
+> (`ci.yml`, `gui.yml`, `nightly.yml`, `smoke.yml`, `static.yml`) are present
+> on disk but `.gitignore` currently excludes `.github/workflows/` while the
+> repo is in a focused execution phase. The GitHub Actions lane is therefore
+> effectively paused. The commands above describe the *intended* CI steps;
+> they are executed locally via `python scripts/run_premerge_checks.py`
+> (see `docs/development.md`) as the active merge gate until the workflows
+> are re-tracked.
 
 ### Lane / worktree pre-merge (local or integration root)
 - **`python scripts/run_premerge_checks.py`** — baseline plus git-based touched-surface add-ons vs `main` (or `--all-fast` / `--files` as documented on the script).

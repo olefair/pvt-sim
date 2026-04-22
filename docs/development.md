@@ -214,7 +214,7 @@ confused:
 
 Current verification surfaces:
 
-- **CI (`.github/workflows/ci.yml`)** — `python scripts/run_premerge_checks.py --baseline-only`, then routine `pytest`, plus a parallel `python -m build` job. The baseline script is the only place the “smoke” file list and example CLI runs should be defined.
+- **CI (`.github/workflows/ci.yml`, currently untracked)** — the intended CI entry is `python scripts/run_premerge_checks.py --baseline-only`, then routine `pytest`, plus a parallel `python -m build` job. The baseline script is the only place the “smoke” file list and example CLI runs should be defined. **Status as of 2026-04-21:** the workflow files exist on disk but `.github/workflows/` is gitignored while the repo is in a focused-execution phase, so the GitHub Actions lane is effectively paused. The active merge gate is the same script run locally against the integration root (see below). Re-tracking the workflows is a post-demo housekeeping task.
 - **Integration-root / merge gate (`--baseline-only` / `--integration-root`)** — **not** a minimal vanity check: it includes full `tests/unit/test_flash.py`, workflow + CLI + invariant tests, `validate_modules.py`, and canonical example validate/run steps. It is meant to be **firm on regressions** before absorb. Routine `pytest` afterward still runs the full headless suite. **Merge conflicts** must be resolved by **combining** the intended behavior from both sides (preserve features, no silent deletion); tests validate the result — they do not perform the merge.
 - `pytest` for the default routine headless kernel/runtime surface
 - `python .\scripts\run_premerge_checks.py` for the full lane/worktree gate (baseline + touched-surface add-ons)
@@ -236,6 +236,49 @@ The default `pytest` path intentionally keeps the routine surface narrow:
 
 That keeps the default regression lane aligned with everyday work while the
 longer validation and robustness surfaces stay explicit.
+
+### Known test state
+
+As of 2026-04-15 the default headless `pytest` lane carries 9 pre-existing
+failures on `main`. They are *known* and do not block feature work, but a
+new failure in the same general area should be confirmed against this
+baseline before being dismissed as pre-existing. The categories:
+
+- **Dew characterization** — characterization-path dew-point regressions
+  that predate the current GUI work.
+- **Thermopack envelope** — `tests/validation/thermopack/` parity checks
+  that fail when the permissive thermopack backend disagrees with the
+  repo kernel outside the agreed tolerance.
+- **Stability robustness** — edge cases in the stability solver's initial
+  guess recovery that have not been hardened yet.
+- **Flash fixture invariants** — contract invariants on a specific flash
+  fixture that predate the unit-consistency refactor.
+- **MI PVT bubble point** — the MI-PVT proxy comparison at the bubble
+  point lane that has been kept as a visible red to force attention when
+  the MI-PVT surface is revisited.
+
+Also kept `xfail` (strict=False) and not counted in the 9 above:
+
+- `test_phase_envelope_plot_connects_curves_through_critical_point` in
+  `tests/unit/test_gui_contracts.py`. See `docs/architecture.md` →
+  Known Architectural Limitations and
+  `docs/blueprints/fast_phase_envelope.md`.
+
+The 9 pre-existing failures should either be fixed or explicitly retired
+with documentation — silence is not retirement, per the merge-reconciliation
+gate below.
+
+### Planned work (blueprints)
+
+The repo carries proposal-status design blueprints for two near-term
+numerical upgrades. They are not yet implemented; CLAUDE.md and the
+roadmap in `README.md` reference them as scheduled rather than shipped.
+
+- `docs/blueprints/fast_phase_envelope.md` — direct Michelsen-style Newton
+  replacement for the TPD-plus-Brent envelope inner loop.
+- `docs/blueprints/selective_gdem_flash_ss_fallback.md` — classify Newton
+  failure mode and route non-pathological failures through GDEM-accelerated
+  SS for a 3–5× speedup; leave pure SS in place for pathological regimes.
 
 ### Due-date posture (small edits, no accidental loss)
 
