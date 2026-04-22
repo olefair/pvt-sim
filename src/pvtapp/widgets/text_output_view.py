@@ -935,7 +935,7 @@ class TextOutputWidget(QWidget):
             lines.append("-----------------------")
             lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
             lines.append(f"Pb = {_format_pressure(r.bubble_pressure_pa, pressure_unit)}")
-            lines.append(f"RsDb = {r.rsi:.5f}")
+            lines.append(f"RsDb = {r.rsi_scf_stb:.5f} scf/STB")
             lines.append(f"Boi = {r.boi:.5f}")
             lines.append(
                 "Residual oil density = "
@@ -977,8 +977,8 @@ class TextOutputWidget(QWidget):
             for _, step in step_rows:
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{dl_col}.5f}"
-                    f"{step.rs:>{dl_col}.5f}"
-                    f"{r.rsi:>{dl_col}.5f}"
+                    f"{step.rs_scf_stb:>{dl_col}.5f}"
+                    f"{r.rsi_scf_stb:>{dl_col}.5f}"
                 )
             lines.append("")
 

@@ -647,18 +647,21 @@ def _dl_res() -> RunResult:
         _dl_cfg(),
         dl_result=DLResult(
             temperature_k=350.0, bubble_pressure_pa=1.5e7,
-            rsi=620.0, boi=1.48, residual_oil_density_kg_per_m3=782.0,
+            rsi=620.0, rsi_scf_stb=620.0 * 5.615,
+            boi=1.48, residual_oil_density_kg_per_m3=782.0,
             converged=True,
             steps=[
                 DLStepResult(
-                    pressure_pa=1.5e7, rs=620.0, bg=None, bo=1.48, bt=1.48,
+                    pressure_pa=1.5e7, rs=620.0, rs_scf_stb=620.0 * 5.615,
+                    bg=None, bo=1.48, bt=1.48,
                     vapor_fraction=0.0, oil_density_kg_per_m3=648.2,
                     oil_viscosity_pa_s=0.0015, gas_gravity=None, gas_z_factor=None,
                     gas_viscosity_pa_s=None, cumulative_gas_produced=0.0,
                     liquid_moles_remaining=1.0,
                 ),
                 DLStepResult(
-                    pressure_pa=5.0e6, rs=210.0, bg=0.0048, bo=1.18, bt=1.23,
+                    pressure_pa=5.0e6, rs=210.0, rs_scf_stb=210.0 * 5.615,
+                    bg=0.0048, bo=1.18, bt=1.23,
                     vapor_fraction=0.28, oil_density_kg_per_m3=701.4,
                     oil_viscosity_pa_s=0.0011, gas_gravity=0.8123, gas_z_factor=0.9456,
                     gas_viscosity_pa_s=0.000018, cumulative_gas_produced=410.0,

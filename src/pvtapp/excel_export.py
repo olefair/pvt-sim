@@ -605,7 +605,7 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
         ("Converged", bool(r.converged)),
         ("Temperature", f"{temperature_from_k(r.temperature_k, t_unit):.2f} \u00b0{t_unit.value}"),
         ("Bubble Pressure", f"{pressure_from_pa(r.bubble_pressure_pa, p_unit):.2f} {p_unit.value}"),
-        ("Rsi (Initial Solution GOR)", float(r.rsi)),
+        ("Rsi (Initial Solution GOR, scf/STB)", float(r.rsi_scf_stb)),
         ("Boi (Initial FVF)", float(r.boi)),
         ("Residual Oil Density (kg/m³)", _optional_number(r.residual_oil_density_kg_per_m3)),
         ("Steps", len(r.steps)),
@@ -630,13 +630,9 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
         [
             [
                 pressure_from_pa(step.pressure_pa, p_unit),
-                float(step.rs),
-                # RsDb is the initial solution GOR at the bubble point
-                # (constant for every DL step). Included as a per-row
-                # column so the professor can plot RsD + RsDb vs pressure
-                # directly from the exported deliverable — the PETE665
-                # term project requires plotting both.
-                float(r.rsi),
+                float(step.rs_scf_stb),
+                # RsDb: initial Rs at Pb, constant across steps.
+                float(r.rsi_scf_stb),
                 float(step.bo),
                 _optional_number(step.bg),
                 float(step.bt),

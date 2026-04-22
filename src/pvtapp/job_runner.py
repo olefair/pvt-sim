@@ -3047,6 +3047,7 @@ def execute_dl(
             DLStepResult(
                 pressure_pa=float(step.pressure),
                 rs=float(step.Rs),
+                rs_scf_stb=float(step.Rs_scf_stb),
                 bg=_finite_or_none(bg),
                 bo=float(step.Bo),
                 bt=float(step.Bt),
@@ -3090,6 +3091,7 @@ def execute_dl(
         temperature_k=float(result.temperature),
         bubble_pressure_pa=float(result.bubble_pressure),
         rsi=float(result.Rsi),
+        rsi_scf_stb=float(result.Rsi_scf_stb),
         boi=float(result.Boi),
         residual_oil_density_kg_per_m3=_finite_or_none(result.residual_oil_density),
         converged=bool(result.converged),

@@ -325,21 +325,11 @@ class ResultsTableWidget(QWidget):
         self.composition_section = self._build_table_section("Compositions", self.composition_table)
         self.details_section = self._build_table_section("Details", self.details_table)
 
-        # Auxiliary table used by _display_cce to present viscosities in a
-        # separate, un-cramped section beneath phase densities.
+        # CCE phase viscosities table.
         self.viscosity_table = self._create_section_table()
         self.viscosity_section = self._build_table_section("Phase Viscosities", self.viscosity_table)
 
-        # Auxiliary tables used by _display_dl to split the DL results
-        # into five narrow (3–4 column) sections so the whole surface fits
-        # the rail without horizontal scrolling. Section mapping:
-        #   composition_table  → GOR                       (P, RsD, RsDb)
-        #   details_table      → Formation Volume Factors  (P, Bo, Bg, BtD)
-        #   extra_table        → Oil Phase                 (Step, ρO, μO, n_L)
-        #   extra_table_2      → Gas Phase                 (Step, γg, Zg, μG)
-        #   extra_table_3      → Vapor Frac. & Production  (Step, β, Cum. Gas)
-        # extra_table is also used by other calc types via the generic
-        # "Extra" slot (cleared on display_result so stale rows don't leak).
+        # DL auxiliary tables (oil phase, gas phase, vapor frac. & production).
         self.extra_table = self._create_section_table()
         self.extra_section = self._build_table_section("Extra", self.extra_table)
 
@@ -349,11 +339,7 @@ class ResultsTableWidget(QWidget):
         self.extra_table_3 = self._create_section_table()
         self.extra_section_3 = self._build_table_section("Extra 3", self.extra_table_3)
 
-        # Zero-delay header tooltips on every result table. Any column
-        # whose ``horizontalHeaderItem`` carries a non-empty tooltip
-        # (e.g. the Rel. Vol. column on CCE) pops immediately on hover
-        # instead of Qt's ~700 ms wake-up. Stored on self to prevent
-        # garbage-collection of the installed event filters.
+        # Zero-delay header tooltips (Qt's ~700ms wake-up is too slow).
         self._composition_header_tooltip = _ImmediateHeaderTooltipFilter(
             self.composition_table, self
         )
@@ -1906,7 +1892,7 @@ class ResultsTableWidget(QWidget):
         summary_data = [
             ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
             ("Bubble Pressure", _format_pressure(result.bubble_pressure_pa, pressure_unit)),
-            ("Initial Rs", f"{result.rsi:.4f}"),
+            ("Initial Rs", f"{result.rsi_scf_stb:.4f}"),
             ("Initial Bo", f"{result.boi:.4f}"),
             (
                 "Residual Oil Density",
@@ -1926,20 +1912,7 @@ class ResultsTableWidget(QWidget):
             self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
             self.summary_table.setItem(row, 1, QTableWidgetItem(value))
 
-        # DL results split into five narrow (3–4 column) stacked tables
-        # so the whole surface fits the right-rail width without any
-        # horizontal scrolling:
-        #
-        #   Section                        Columns
-        #   ────────────────────────────── ───────────────────────────
-        #   "GOR"                          P, RsD, RsDb
-        #   "Formation Volume Factors"     P, Bo, Bg, BtD
-        #   "Oil Phase"                    Step, ρO, μO, n_L
-        #   "Gas Phase"                    Step, γg, Zg, μG
-        #   "Vapor Frac. & Production"     Step, β, Cum. Gas
-        #
-        # Greek/phase-suffix symbols (ρO, μO, γg, Zg, μG) retained so
-        # every column header is 2–4 chars — see the earlier rationale.
+        # Five stacked tables: GOR / FVF / Oil Phase / Gas Phase / Vapor & Prod.
         self.composition_section.setTitle("GOR")
         self.details_section.setTitle("Formation Volume Factors")
         self.extra_section.setTitle("Oil Phase")
@@ -1983,10 +1956,10 @@ class ResultsTableWidget(QWidget):
             p_txt = f"{pressure_from_pa(step.pressure_pa, pressure_unit):.2f}"
             step_txt = str(row + 1)
 
-            # Table 1: GOR (P, RsD, RsDb)
+            # Table 1: GOR
             self.composition_table.setItem(row, 0, QTableWidgetItem(p_txt))
-            self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs:.4f}"))
-            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{result.rsi:.4f}"))
+            self.composition_table.setItem(row, 1, QTableWidgetItem(f"{step.rs_scf_stb:.4f}"))
+            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{result.rsi_scf_stb:.4f}"))
 
             # Table 2: Formation Volume Factors (P, Bo, Bg, BtD)
             self.details_table.setItem(row, 0, QTableWidgetItem(p_txt))
@@ -3295,10 +3268,6 @@ class ResultsPlotWidget(QWidget):
                 values=[result.rsi for _ in result.steps],
                 color="#86efac",
                 linestyle=":",
-                # PETE665 term project requires plotting RsDb alongside
-                # RsD. Ship it default-selected so the reference demo
-                # shows all five required curves (Bg, Bo, RsD, RsDb, BtD)
-                # without the user having to open the series dropdown.
                 default_selected=True,
             ),
             "bo": PlotSeriesSpec(

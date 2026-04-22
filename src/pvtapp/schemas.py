@@ -1717,10 +1717,15 @@ class DewPointResult(BaseModel):
 
 
 class DLStepResult(BaseModel):
-    """Results for a single DL pressure step."""
+    """Results for a single DL pressure step.
+
+    ``rs`` is sm³/sm³; ``rs_scf_stb`` is scf/STB. Conversion lives in
+    ``pvtcore.experiments.dl``.
+    """
 
     pressure_pa: float
     rs: float
+    rs_scf_stb: float
     bg: Optional[float] = None
     bo: float
     bt: float
@@ -1751,11 +1756,15 @@ class DLStepResult(BaseModel):
 
 
 class DLResult(BaseModel):
-    """Results from Differential Liberation."""
+    """Results from Differential Liberation.
+
+    ``rsi`` is sm³/sm³; ``rsi_scf_stb`` is scf/STB.
+    """
 
     temperature_k: float
     bubble_pressure_pa: float
     rsi: float
+    rsi_scf_stb: float
     boi: float
     residual_oil_density_kg_per_m3: Optional[float] = None
     converged: bool

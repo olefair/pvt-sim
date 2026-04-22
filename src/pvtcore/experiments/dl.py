@@ -43,28 +43,22 @@ from ..flash.pt_flash import pt_flash
 from ..properties.density import calculate_density, mixture_molecular_weight
 
 
+# 1 sm³/sm³ = 5.615 scf/STB (1 STB = 5.615 ft³).
+SCF_PER_STB = 5.615
+
+
 @dataclass
 class DLStepResult:
     """Results from a single DL pressure step.
 
-    Attributes:
-        pressure: Pressure at this step (Pa)
-        temperature: Temperature (K)
-        Rs: Solution GOR at this step (sm³/sm³)
-        Bo: Oil formation volume factor (m³/sm³)
-        oil_density: Oil density at this P,T (kg/m³)
-        gas_gravity: Specific gravity of liberated gas
-        gas_Z: Gas compressibility factor
-        Bt: Total volume factor (m³/sm³)
-        liquid_composition: Liquid composition after gas removal
-        gas_composition: Composition of liberated gas
-        vapor_fraction: Molar vapor fraction before removal
-        cumulative_gas: Cumulative gas produced (sm³/sm³ original)
-        liquid_moles_remaining: Liquid moles retained after this step (fraction of initial)
+    Pressure Pa, temperature K, density kg/m³.
+    Rs sm³/sm³; Rs_scf_stb is scf/STB (Rs * SCF_PER_STB).
+    Bo / Bt rb/STB. gas_gravity, gas_Z dimensionless.
     """
     pressure: float
     temperature: float
     Rs: float
+    Rs_scf_stb: float
     Bo: float
     oil_density: float
     gas_gravity: float
@@ -79,22 +73,10 @@ class DLStepResult:
 
 @dataclass
 class DLResult:
-    """Complete results from DL simulation.
+    """Complete DL simulation results.
 
-    Attributes:
-        temperature: Test temperature (K)
-        bubble_pressure: Bubble point pressure (Pa)
-        steps: List of results for each pressure step
-        pressures: Array of pressures (Pa)
-        Rs_values: Array of solution GOR
-        Bo_values: Array of oil FVF
-        oil_densities: Array of oil densities (kg/m³)
-        Bt_values: Array of total volume factors
-        Rsi: Initial solution GOR at bubble point
-        Boi: Initial oil FVF at bubble point
-        residual_oil_density: Stock-tank oil density (kg/m³)
-        feed_composition: Original feed composition
-        converged: True if all steps converged
+    Rsi sm³/sm³; Rsi_scf_stb is scf/STB. Bo / Bt rb/STB. Pressures Pa,
+    temperature K, densities kg/m³.
     """
     temperature: float
     bubble_pressure: float
@@ -105,6 +87,7 @@ class DLResult:
     oil_densities: NDArray[np.float64]
     Bt_values: NDArray[np.float64]
     Rsi: float
+    Rsi_scf_stb: float
     Boi: float
     residual_oil_density: float
     feed_composition: NDArray[np.float64]
@@ -215,6 +198,7 @@ def simulate_dl(
         pressure=P_b,
         temperature=T,
         Rs=Rsi,
+        Rs_scf_stb=Rsi * SCF_PER_STB,
         Bo=Boi,
         oil_density=rho_initial.mass_density,
         gas_gravity=0.0,
@@ -245,6 +229,7 @@ def simulate_dl(
                 pressure=P,
                 temperature=T,
                 Rs=np.nan,
+                Rs_scf_stb=np.nan,
                 Bo=np.nan,
                 oil_density=np.nan,
                 gas_gravity=np.nan,
@@ -274,6 +259,7 @@ def simulate_dl(
         oil_densities=oil_densities,
         Bt_values=Bt_values,
         Rsi=Rsi,
+        Rsi_scf_stb=Rsi * SCF_PER_STB,
         Boi=Boi,
         residual_oil_density=residual_oil_density,
         feed_composition=z,
@@ -317,6 +303,7 @@ def _dl_step(
                 pressure=P,
                 temperature=T,
                 Rs=Rs,
+                Rs_scf_stb=Rs * SCF_PER_STB,
                 Bo=V_o / V_sto_initial,
                 oil_density=rho.mass_density,
                 gas_gravity=0.0,
@@ -373,6 +360,7 @@ def _dl_step(
             pressure=P,
             temperature=T,
             Rs=Rs,
+            Rs_scf_stb=Rs * SCF_PER_STB,
             Bo=Bo,
             oil_density=rho_L.mass_density,
             gas_gravity=gas_gravity,
