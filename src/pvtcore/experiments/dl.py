@@ -11,7 +11,18 @@ from numpy.typing import NDArray
 from ..core.errors import ConvergenceError, PhaseError, ValidationError
 from ..eos.base import CubicEOS
 from ..flash.pt_flash import pt_flash
-from ..helper_functions import P_sc, T_sc_petroleum, _Bo, _Bt, _Rs, _V, _flash_sc, _gas_V, _scf_stb
+from ..helper_functions import (
+    P_sc,
+    SCF_PER_STB_PER_SM3_SM3,
+    T_sc_petroleum,
+    _Bo,
+    _Bt,
+    _Rs,
+    _V,
+    _flash_sc,
+    _gas_V,
+    _scf_stb,
+)
 from ..models.component import Component
 from ..properties.density import calculate_density, mixture_molecular_weight
 
@@ -32,10 +43,13 @@ class DLStepResult:
     gas_gravity: float
     gas_Z: float
     Bt: float
+    Bg: Optional[float]
+    Bg_rb_per_scf: Optional[float]
     liquid_composition: NDArray[np.float64]
     gas_composition: NDArray[np.float64]
     vapor_fraction: float
     cumulative_gas: float
+    cumulative_gas_scf_stb: float
     liquid_moles_remaining: float
 
 
@@ -115,10 +129,13 @@ def _dl_step(
                 gas_gravity=np.nan,
                 gas_Z=Zg,
                 Bt=Bt,
+                Bg=None,
+                Bg_rb_per_scf=None,
                 liquid_composition=z.copy(),
                 gas_composition=np.zeros_like(z),
                 vapor_fraction=0.0,
                 cumulative_gas=Gp,
+                cumulative_gas_scf_stb=_scf_stb(Gp),
                 liquid_moles_remaining=n,
             ),
             z.copy(),
@@ -148,7 +165,9 @@ def _dl_step(
     st = _flash_sc(x, nL, cs, eos, kij, Psc, Tsc)
     Rs = _Rs(float(st["Vg_sc"]), Vo_st)
     Bo = _Bo(Vo, Vo_st)
-    Bt = _Bt(Vo, _V(nV, float(ZV), T, P), Vo_st)
+    Vg = _V(nV, float(ZV), T, P)
+    Bt = _Bt(Vo, Vg, Vo_st)
+    Bg = Vg / Vg_sc if Vg_sc > 0.0 else None
 
     return (
         DLStepResult(
@@ -161,10 +180,13 @@ def _dl_step(
             gas_gravity=gg,
             gas_Z=float(ZV),
             Bt=Bt,
+            Bg=Bg,
+            Bg_rb_per_scf=(Bg / SCF_PER_STB_PER_SM3_SM3) if Bg is not None else None,
             liquid_composition=x.copy(),
             gas_composition=y.copy(),
             vapor_fraction=float(fl.vapor_fraction),
             cumulative_gas=Gp,
+            cumulative_gas_scf_stb=_scf_stb(Gp),
             liquid_moles_remaining=nL,
         ),
         x.copy(),
@@ -217,10 +239,13 @@ def simulate_dl(
             gas_gravity=np.nan,
             gas_Z=Zg_sc,
             Bt=Boi,
+            Bg=None,
+            Bg_rb_per_scf=None,
             liquid_composition=z.copy(),
             gas_composition=np.zeros_like(z),
             vapor_fraction=0.0,
             cumulative_gas=0.0,
+            cumulative_gas_scf_stb=0.0,
             liquid_moles_remaining=1.0,
         )
     ]
@@ -261,10 +286,13 @@ def simulate_dl(
                     gas_gravity=np.nan,
                     gas_Z=np.nan,
                     Bt=np.nan,
+                    Bg=None,
+                    Bg_rb_per_scf=None,
                     liquid_composition=x.copy(),
                     gas_composition=np.zeros_like(z),
                     vapor_fraction=np.nan,
                     cumulative_gas=Gp,
+                    cumulative_gas_scf_stb=_scf_stb(Gp),
                     liquid_moles_remaining=n,
                 )
             )

@@ -1719,14 +1719,17 @@ class DewPointResult(BaseModel):
 class DLStepResult(BaseModel):
     """Results for a single DL pressure step.
 
-    ``rs`` is sm³/sm³; ``rs_scf_stb`` is scf/STB. Conversion lives in
-    ``pvtcore.experiments.dl``.
+    SI fields (rs, bg, cumulative_gas_produced) are dimensionless
+    volumetric ratios. Field-unit counterparts (rs_scf_stb,
+    bg_rb_per_scf, cumulative_gas_produced_scf_stb) are populated by
+    the DL kernel.
     """
 
     pressure_pa: float
     rs: float
     rs_scf_stb: float
     bg: Optional[float] = None
+    bg_rb_per_scf: Optional[float] = None
     bo: float
     bt: float
     vapor_fraction: float
@@ -1736,6 +1739,7 @@ class DLStepResult(BaseModel):
     gas_z_factor: Optional[float] = None
     gas_viscosity_pa_s: Optional[float] = None
     cumulative_gas_produced: Optional[float] = None
+    cumulative_gas_produced_scf_stb: Optional[float] = None
     liquid_moles_remaining: Optional[float] = None
     liquid_composition: Optional[Dict[str, float]] = None
     gas_composition: Optional[Dict[str, float]] = None

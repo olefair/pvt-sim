@@ -43,8 +43,8 @@ class CriticalPropsWidget(QWidget):
         self.table.setHorizontalHeaderLabels([
             "ID",
             "Name",
-            "Tc (K)",
-            "Pc (bar)",
+            "Tc (°F)",
+            "Pc (psia)",
             "ω",
             "MW (g/mol)",
             "Zc",
@@ -78,21 +78,20 @@ class CriticalPropsWidget(QWidget):
                     comp = self._db.get(canonical)
 
             name = comp.name if comp else "(unknown)"
-            Tc = comp.Tc if comp else None
-            Pc_bar = comp.Pc_bar if comp else None
+            Tc_f = (comp.Tc - 273.15) * 9.0 / 5.0 + 32.0 if (comp and comp.Tc) else None
+            Pc_psia = comp.Pc / 6894.757 if (comp and comp.Pc) else None
             omega = comp.omega if comp else None
             mw = comp.MW if comp else None
 
             Zc = None
             if comp and comp.Tc and comp.Pc and comp.Vc and comp.Tc > 0:
-                # Zc = Pc*Vc/(R*Tc)
                 Zc = (comp.Pc * comp.Vc) / (R.Pa_m3_per_mol_K * comp.Tc)
 
             values = [
                 cid,
                 name,
-                f"{Tc:.3f}" if Tc is not None else "",
-                f"{Pc_bar:.3f}" if Pc_bar is not None else "",
+                f"{Tc_f:.2f}" if Tc_f is not None else "",
+                f"{Pc_psia:.2f}" if Pc_psia is not None else "",
                 f"{omega:.5f}" if omega is not None else "",
                 f"{mw:.4f}" if mw is not None else "",
                 f"{Zc:.5f}" if Zc is not None else "",

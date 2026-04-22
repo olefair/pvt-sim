@@ -3010,48 +3010,17 @@ def execute_dl(
         callback.on_progress(config.run_id or "", 0.9, "Processing results...")
 
     steps: list[DLStepResult] = []
-    previous_liquid_moles = 1.0
     for step in result.steps:
-        bg = None
-        vapor_fraction = float(step.vapor_fraction)
-        gas_z = _finite_or_none(step.gas_Z)
-        if vapor_fraction > 0.0 and gas_z is not None:
-            n_gas = float(previous_liquid_moles) * vapor_fraction
-            gas_z_std = eos.compressibility(
-                SC_IMPERIAL.P,
-                SC_IMPERIAL.T,
-                step.gas_composition,
-                phase="vapor",
-                binary_interaction=binary_interaction,
-            )
-            if isinstance(gas_z_std, list):
-                gas_z_std = gas_z_std[-1]
-            v_gas_at_standard = (
-                n_gas
-                * float(gas_z_std)
-                * R.Pa_m3_per_mol_K
-                * SC_IMPERIAL.T
-                / SC_IMPERIAL.P
-            )
-            if v_gas_at_standard > 0.0:
-                v_gas_at_reservoir = (
-                    n_gas
-                    * float(gas_z)
-                    * R.Pa_m3_per_mol_K
-                    * float(step.temperature)
-                    / float(step.pressure)
-                )
-                bg = v_gas_at_reservoir / v_gas_at_standard
-
         steps.append(
             DLStepResult(
                 pressure_pa=float(step.pressure),
                 rs=float(step.Rs),
                 rs_scf_stb=float(step.Rs_scf_stb),
-                bg=_finite_or_none(bg),
+                bg=_finite_or_none(step.Bg),
+                bg_rb_per_scf=_finite_or_none(step.Bg_rb_per_scf),
                 bo=float(step.Bo),
                 bt=float(step.Bt),
-                vapor_fraction=vapor_fraction,
+                vapor_fraction=float(step.vapor_fraction),
                 oil_density_kg_per_m3=_finite_or_none(step.oil_density),
                 oil_viscosity_pa_s=_compute_phase_viscosity(
                     float(step.pressure),
@@ -3074,6 +3043,7 @@ def execute_dl(
                     step.gas_composition,
                 ),
                 cumulative_gas_produced=_finite_or_none(step.cumulative_gas),
+                cumulative_gas_produced_scf_stb=_finite_or_none(step.cumulative_gas_scf_stb),
                 liquid_moles_remaining=_finite_or_none(step.liquid_moles_remaining),
                 liquid_composition=_composition_array_to_dict(
                     component_ids, step.liquid_composition
@@ -3083,9 +3053,6 @@ def execute_dl(
                 ),
             )
         )
-        liquid_moles_remaining = _finite_or_none(step.liquid_moles_remaining)
-        if liquid_moles_remaining is not None:
-            previous_liquid_moles = float(liquid_moles_remaining)
 
     return DLResult(
         temperature_k=float(result.temperature),

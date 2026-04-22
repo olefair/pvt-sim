@@ -693,29 +693,46 @@ class TextOutputWidget(QWidget):
                     dew_stop = f"{dew_stop} @ {r.dew_termination_temperature_k:.3f} K"
                 lines.append(f"Dew stop:      {dew_stop}")
 
+            env_p = PressureUnit.PSIA
+            env_t = TemperatureUnit.F
             if r.critical_point is not None:
                 cp = r.critical_point
-                lines.append(f"Critical: T={cp.temperature_k:.3f} K, P={_pa_to_bar(cp.pressure_pa):.5f} bar")
+                lines.append(
+                    f"Critical: T={_format_temperature(cp.temperature_k, env_t)}, "
+                    f"P={_format_pressure(cp.pressure_pa, env_p)}"
+                )
             if r.cricondenbar is not None:
                 cb = r.cricondenbar
-                lines.append(f"Cricondenbar: T={cb.temperature_k:.3f} K, P={_pa_to_bar(cb.pressure_pa):.5f} bar")
+                lines.append(
+                    f"Cricondenbar: T={_format_temperature(cb.temperature_k, env_t)}, "
+                    f"P={_format_pressure(cb.pressure_pa, env_p)}"
+                )
             if r.cricondentherm is not None:
                 ct = r.cricondentherm
-                lines.append(f"Cricondentherm: T={ct.temperature_k:.3f} K, P={_pa_to_bar(ct.pressure_pa):.5f} bar")
+                lines.append(
+                    f"Cricondentherm: T={_format_temperature(ct.temperature_k, env_t)}, "
+                    f"P={_format_pressure(ct.pressure_pa, env_p)}"
+                )
             lines.append("")
 
             lines.append("Bubble curve (sample)")
-            lines.append("T (K)          P (bar)")
+            lines.append(f"T ({_format_temperature_unit(env_t)})          P ({env_p.value})")
             for pt in r.bubble_curve[:60]:
-                lines.append(f"{pt.temperature_k:>10.4f} { _pa_to_bar(pt.pressure_pa):>14.6f}")
+                lines.append(
+                    f"{temperature_from_k(pt.temperature_k, env_t):>10.4f} "
+                    f"{pressure_from_pa(pt.pressure_pa, env_p):>14.4f}"
+                )
             if len(r.bubble_curve) > 60:
                 lines.append(f"... ({len(r.bubble_curve) - 60} more)")
             lines.append("")
 
             lines.append("Dew curve (sample)")
-            lines.append("T (K)          P (bar)")
+            lines.append(f"T ({_format_temperature_unit(env_t)})          P ({env_p.value})")
             for pt in r.dew_curve[:60]:
-                lines.append(f"{pt.temperature_k:>10.4f} { _pa_to_bar(pt.pressure_pa):>14.6f}")
+                lines.append(
+                    f"{temperature_from_k(pt.temperature_k, env_t):>10.4f} "
+                    f"{pressure_from_pa(pt.pressure_pa, env_p):>14.4f}"
+                )
             if len(r.dew_curve) > 60:
                 lines.append(f"... ({len(r.dew_curve) - 60} more)")
             lines.append("")
@@ -997,7 +1014,7 @@ class TextOutputWidget(QWidget):
                 f"{'[rb/STB]':>{dl_col}s}"
             )
             for _, step in step_rows:
-                bg_txt = "-" if step.bg is None else f"{step.bg:.5f}"
+                bg_txt = "-" if step.bg_rb_per_scf is None else f"{step.bg_rb_per_scf:.5f}"
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{dl_col}.5f}"
                     f"{step.bo:>{dl_col}.5f}"
@@ -1075,8 +1092,8 @@ class TextOutputWidget(QWidget):
             )
             for idx, step in step_rows:
                 cumulative_gas = (
-                    "-" if step.cumulative_gas_produced is None
-                    else f"{step.cumulative_gas_produced:.5f}"
+                    "-" if step.cumulative_gas_produced_scf_stb is None
+                    else f"{step.cumulative_gas_produced_scf_stb:.5f}"
                 )
                 lines.append(
                     f"{idx:>{dl_col}d}"
@@ -1258,17 +1275,18 @@ class TextOutputWidget(QWidget):
 
         elif result.separator_result is not None:
             r = result.separator_result
+            sep_p = PressureUnit.PSIA
+            sep_t = TemperatureUnit.F
             lines.append("Separator train")
             lines.append("---------------")
             lines.append(f"Converged = {r.converged}")
-            lines.append(f"Bo = {r.bo:.5f}")
-            lines.append(f"Rs = {r.rs:.5f}")
+            lines.append(f"Bo (rb/STB) = {r.bo:.5f}")
             lines.append(f"Rs (scf/STB) = {r.rs_scf_stb:.5f}")
-            lines.append(f"Bg = {r.bg:.5f}")
+            lines.append(f"Bg (rb/scf) = {(r.bg / 5.615):.5f}")
             lines.append(f"API = {r.api_gravity:.3f}")
-            lines.append(f"Stock-tank oil density = {r.stock_tank_oil_density:.5f}")
+            lines.append(f"Stock-tank oil density = {r.stock_tank_oil_density:.3f} kg/m³")
             if r.stock_tank_oil_mw_g_per_mol is not None:
-                lines.append(f"Stock-tank MW = {r.stock_tank_oil_mw_g_per_mol:.5f} g/mol")
+                lines.append(f"Stock-tank MW = {r.stock_tank_oil_mw_g_per_mol:.4f} g/mol")
             if r.stock_tank_oil_specific_gravity is not None:
                 lines.append(f"Stock-tank SG = {r.stock_tank_oil_specific_gravity:.5f}")
             if r.total_gas_moles is not None:
@@ -1278,8 +1296,8 @@ class TextOutputWidget(QWidget):
             lines.append("")
             lines.append(
                 f"{'Stage':<12s} "
-                f"{'P (bar)':>10s} "
-                f"{'T (K)':>10s} "
+                f"{f'P ({sep_p.value})':>10s} "
+                f"{f'T ({_format_temperature_unit(sep_t)})':>10s} "
                 f"{'VaporFrac':>11s} "
                 f"{'LiquidMol':>11s} "
                 f"{'VaporMol':>11s} "
@@ -1306,8 +1324,8 @@ class TextOutputWidget(QWidget):
                 vapor_z = "" if stage.vapor_z_factor is None else f"{stage.vapor_z_factor:.5f}"
                 lines.append(
                     f"{stage.stage_name[:12]:<12s} "
-                    f"{_pa_to_bar(stage.pressure_pa):>10.5f} "
-                    f"{stage.temperature_k:>10.3f} "
+                    f"{pressure_from_pa(stage.pressure_pa, sep_p):>10.2f} "
+                    f"{temperature_from_k(stage.temperature_k, sep_t):>10.2f} "
                     f"{vapor_fraction:>11s} "
                     f"{liquid_moles:>11s} "
                     f"{vapor_moles:>11s} "
