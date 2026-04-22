@@ -1966,7 +1966,7 @@ class ResultsTableWidget(QWidget):
             self.details_table.setItem(row, 1, QTableWidgetItem(f"{step.bo:.4f}"))
             self.details_table.setItem(
                 row, 2,
-                QTableWidgetItem("-" if step.bg is None else f"{step.bg:.4f}"),
+                QTableWidgetItem("-" if step.bg_rb_per_scf is None else f"{step.bg_rb_per_scf:.5f}"),
             )
             self.details_table.setItem(row, 3, QTableWidgetItem(f"{step.bt:.4f}"))
 
@@ -2007,8 +2007,8 @@ class ResultsTableWidget(QWidget):
             # Table 5: Vapor Frac. & Production (Step, β, Cum. Gas)
             cum_gas = (
                 "-"
-                if step.cumulative_gas_produced is None
-                else f"{step.cumulative_gas_produced:.4f}"
+                if step.cumulative_gas_produced_scf_stb is None
+                else f"{step.cumulative_gas_produced_scf_stb:.4f}"
             )
             self.extra_table_3.setItem(row, 0, QTableWidgetItem(step_txt))
             self.extra_table_3.setItem(row, 1, QTableWidgetItem(f"{step.vapor_fraction:.4f}"))
@@ -3286,11 +3286,9 @@ class ResultsPlotWidget(QWidget):
                 axis_group="fvf",
                 axis_label="Formation Volume Factor",
                 overlay_group="gas_fvf",
-                values=[step.bg for step in result.steps],
+                values=[step.bg_rb_per_scf for step in result.steps],
                 color="#38bdf8",
                 marker="s",
-                # PETE665 term project requires plotting Bg alongside Bo,
-                # BtD, RsD, RsDb. Default-select to match the assignment.
                 default_selected=True,
             ),
             "btd": PlotSeriesSpec(

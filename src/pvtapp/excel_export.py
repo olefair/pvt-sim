@@ -618,26 +618,25 @@ def _write_dl(wb: Workbook, result: RunResult, meta_rows: list[tuple[str, Any]])
         "Steps",
         [
             _pressure_header(p_unit),
-            "RsD (Solution GOR)",
-            "RsDb (Initial Rs at Pb)",
-            "Bo",
-            "Bg",
-            "BtD (Total FVF)",
+            "RsD (scf/STB)",
+            "RsDb (scf/STB)",
+            "Bo (rb/STB)",
+            "Bg (rb/scf)",
+            "BtD (rb/STB)",
             "Vapor Frac.",
-            "Cum. Gas",
+            "Cum. Gas (scf/STB)",
             "Liquid Moles Remaining",
         ],
         [
             [
                 pressure_from_pa(step.pressure_pa, p_unit),
                 float(step.rs_scf_stb),
-                # RsDb: initial Rs at Pb, constant across steps.
                 float(r.rsi_scf_stb),
                 float(step.bo),
-                _optional_number(step.bg),
+                _optional_number(step.bg_rb_per_scf),
                 float(step.bt),
                 float(step.vapor_fraction),
-                _optional_number(step.cumulative_gas_produced),
+                _optional_number(step.cumulative_gas_produced_scf_stb),
                 _optional_number(step.liquid_moles_remaining),
             ]
             for step in r.steps

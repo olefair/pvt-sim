@@ -43,7 +43,9 @@ from ..flash.pt_flash import pt_flash
 from ..properties.density import calculate_density, mixture_molecular_weight
 
 
-# 1 sm³/sm³ = 5.615 scf/STB (1 STB = 5.615 ft³).
+# 1 STB = 5.615 ft³. Same factor, used differently:
+#   Rs, cumulative_gas:  dimensionless × 5.615 = scf/STB   (barrel in denom)
+#   Bg:                  dimensionless / 5.615 = rb/scf    (barrel in numer)
 SCF_PER_STB = 5.615
 
 
@@ -51,9 +53,8 @@ SCF_PER_STB = 5.615
 class DLStepResult:
     """Results from a single DL pressure step.
 
-    Pressure Pa, temperature K, density kg/m³.
-    Rs sm³/sm³; Rs_scf_stb is scf/STB (Rs * SCF_PER_STB).
-    Bo / Bt rb/STB. gas_gravity, gas_Z dimensionless.
+    SI fields: Pa, K, kg/m³, dimensionless ratios.
+    Field-unit counterparts end in _scf_stb / _rb_scf / etc.
     """
     pressure: float
     temperature: float
@@ -64,10 +65,13 @@ class DLStepResult:
     gas_gravity: float
     gas_Z: float
     Bt: float
+    Bg: Optional[float]
+    Bg_rb_per_scf: Optional[float]
     liquid_composition: NDArray[np.float64]
     gas_composition: NDArray[np.float64]
     vapor_fraction: float
     cumulative_gas: float
+    cumulative_gas_scf_stb: float
     liquid_moles_remaining: float
 
 
@@ -204,10 +208,13 @@ def simulate_dl(
         gas_gravity=0.0,
         gas_Z=1.0,
         Bt=Boi,
+        Bg=None,
+        Bg_rb_per_scf=None,
         liquid_composition=z.copy(),
         gas_composition=np.zeros_like(z),
         vapor_fraction=0.0,
         cumulative_gas=0.0,
+        cumulative_gas_scf_stb=0.0,
         liquid_moles_remaining=1.0,
     ))
 
@@ -235,10 +242,13 @@ def simulate_dl(
                 gas_gravity=np.nan,
                 gas_Z=np.nan,
                 Bt=np.nan,
+                Bg=None,
+                Bg_rb_per_scf=None,
                 liquid_composition=current_liquid.copy(),
                 gas_composition=np.zeros_like(z),
                 vapor_fraction=np.nan,
                 cumulative_gas=cumulative_gas,
+                cumulative_gas_scf_stb=cumulative_gas * SCF_PER_STB,
                 liquid_moles_remaining=n_liquid,
             ))
 
@@ -309,10 +319,13 @@ def _dl_step(
                 gas_gravity=0.0,
                 gas_Z=1.0,
                 Bt=V_o / V_sto_initial,
+                Bg=None,
+                Bg_rb_per_scf=None,
                 liquid_composition=z.copy(),
                 gas_composition=np.zeros_like(z),
                 vapor_fraction=0.0,
                 cumulative_gas=cumulative_gas,
+                cumulative_gas_scf_stb=cumulative_gas * SCF_PER_STB,
                 liquid_moles_remaining=n_liquid,
             ),
             z.copy(),
@@ -350,10 +363,13 @@ def _dl_step(
     remaining_gas = _calculate_remaining_gas(x, T, components, eos, binary_interaction, P_std, T_std)
     Rs = remaining_gas
 
-    # Bo and Bt
+    # Bo, Bt, Bg
     Bo = V_o / V_sto_initial
     V_gas_at_P = n_gas * Z_gas * R.Pa_m3_per_mol_K * T / P
     Bt = (V_o + V_gas_at_P) / V_sto_initial
+    # Bg = V_gas_res / V_gas_std (dimensionless m³/m³). gas_at_std is
+    # the V_gas_std for this step's liberated n_gas moles.
+    Bg = V_gas_at_P / gas_at_std if gas_at_std > 0.0 else None
 
     return (
         DLStepResult(
@@ -366,10 +382,13 @@ def _dl_step(
             gas_gravity=gas_gravity,
             gas_Z=Z_gas,
             Bt=Bt,
+            Bg=Bg,
+            Bg_rb_per_scf=(Bg / SCF_PER_STB) if Bg is not None else None,
             liquid_composition=x.copy(),
             gas_composition=y.copy(),
             vapor_fraction=nv,
             cumulative_gas=cumulative_gas,
+            cumulative_gas_scf_stb=cumulative_gas * SCF_PER_STB,
             liquid_moles_remaining=n_liquid_new,
         ),
         x.copy(),  # New liquid composition

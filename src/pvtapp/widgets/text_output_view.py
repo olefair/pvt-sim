@@ -997,7 +997,7 @@ class TextOutputWidget(QWidget):
                 f"{'[rb/STB]':>{dl_col}s}"
             )
             for _, step in step_rows:
-                bg_txt = "-" if step.bg is None else f"{step.bg:.5f}"
+                bg_txt = "-" if step.bg_rb_per_scf is None else f"{step.bg_rb_per_scf:.5f}"
                 lines.append(
                     f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{dl_col}.5f}"
                     f"{step.bo:>{dl_col}.5f}"
@@ -1075,8 +1075,8 @@ class TextOutputWidget(QWidget):
             )
             for idx, step in step_rows:
                 cumulative_gas = (
-                    "-" if step.cumulative_gas_produced is None
-                    else f"{step.cumulative_gas_produced:.5f}"
+                    "-" if step.cumulative_gas_produced_scf_stb is None
+                    else f"{step.cumulative_gas_produced_scf_stb:.5f}"
                 )
                 lines.append(
                     f"{idx:>{dl_col}d}"

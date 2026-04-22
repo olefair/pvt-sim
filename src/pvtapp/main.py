@@ -1158,11 +1158,11 @@ class PVTSimulatorWindow(QMainWindow):
                     writer.writerow(
                         [
                             "Pressure_psia",
-                            "RsD",
-                            "RsDb",
-                            "Bo",
-                            "Bg",
-                            "BtD",
+                            "RsD_scf_STB",
+                            "RsDb_scf_STB",
+                            "Bo_rb_STB",
+                            "Bg_rb_scf",
+                            "BtD_rb_STB",
                             "VaporFraction",
                             "LiquidMolesRemaining",
                         ]
@@ -1170,10 +1170,10 @@ class PVTSimulatorWindow(QMainWindow):
                     for step in result.dl_result.steps:
                         writer.writerow([
                             pressure_from_pa(step.pressure_pa, PressureUnit.PSIA),
-                            step.rs,
-                            result.dl_result.rsi,
+                            step.rs_scf_stb,
+                            result.dl_result.rsi_scf_stb,
                             step.bo,
-                            step.bg,
+                            step.bg_rb_per_scf,
                             step.bt,
                             step.vapor_fraction,
                             step.liquid_moles_remaining,
