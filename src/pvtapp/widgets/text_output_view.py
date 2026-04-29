@@ -21,6 +21,7 @@ from pvtapp.schemas import (
     SaturationPointConfig,
     CCEConfig,
     DLConfig,
+    WhitsonTorpConfig,
     SwellingTestConfig,
     StabilityAnalysisConfig,
     TemperatureUnit,
@@ -195,6 +196,12 @@ def _cce_units(config: Optional[CCEConfig]) -> tuple[PressureUnit, TemperatureUn
 
 
 def _dl_units(config: Optional[DLConfig]) -> tuple[PressureUnit, TemperatureUnit]:
+    if config is None:
+        return PressureUnit.PSIA, TemperatureUnit.F
+    return config.pressure_unit, config.temperature_unit
+
+
+def _whitson_torp_units(config: Optional[WhitsonTorpConfig]) -> tuple[PressureUnit, TemperatureUnit]:
     if config is None:
         return PressureUnit.PSIA, TemperatureUnit.F
     return config.pressure_unit, config.temperature_unit
@@ -1103,6 +1110,85 @@ class TextOutputWidget(QWidget):
                     field="gas_composition",
                 )
             )
+
+        elif result.whitson_torp_result is not None:
+            r = result.whitson_torp_result
+            pressure_unit, temperature_unit = _whitson_torp_units(cfg.whitson_torp_config)
+            lines.append("Whitson-Torp")
+            lines.append("-------------")
+            lines.append(f"T = {_format_temperature(r.temperature_k, temperature_unit)}")
+            lines.append(f"Pk = {_format_pressure(r.convergence_pressure_pa, pressure_unit)}")
+            lines.append(f"Pb = {_format_pressure(r.bubble_pressure_pa, pressure_unit)}")
+            lines.append(f"Converged = {r.converged}")
+            lines.append("")
+
+            lines.append("Incipient vapor at bubble point (y)")
+            for cid, value in sorted(r.bubble_vapor_composition.items()):
+                lines.append(f"{cid:<8s} {value:>12.6f}")
+            lines.append("")
+
+            wt_col = 12
+            lines.append("DL flash steps")
+            lines.append(
+                f"{'Step':>{wt_col}s}"
+                f"{'P':>{wt_col}s}"
+                f"{'nL':>{wt_col}s}"
+                f"{'nL actual':>{wt_col}s}"
+                f"{'Bg':>{wt_col}s}"
+                f"{'Zg':>{wt_col}s}"
+            )
+            lines.append(
+                f"{'[#]':>{wt_col}s}"
+                f"{f'[{pressure_unit.value}]':>{wt_col}s}"
+                f"{'[frac]':>{wt_col}s}"
+                f"{'[mol]':>{wt_col}s}"
+                f"{'[bbl/scf]':>{wt_col}s}"
+                f"{'[-]':>{wt_col}s}"
+            )
+            for step in r.steps[:80]:
+                bg_txt = "-" if step.bg_bbl_per_scf is None else f"{step.bg_bbl_per_scf:.6f}"
+                z_txt = "-" if step.gas_z_factor is None else f"{step.gas_z_factor:.5f}"
+                lines.append(
+                    f"{step.step_index:>{wt_col}d}"
+                    f"{pressure_from_pa(step.pressure_pa, pressure_unit):>{wt_col}.3f}"
+                    f"{step.liquid_fraction:>{wt_col}.6f}"
+                    f"{step.liquid_moles_actual:>{wt_col}.6f}"
+                    f"{bg_txt:>{wt_col}s}"
+                    f"{z_txt:>{wt_col}s}"
+                )
+            lines.append("")
+
+            for step in r.steps[:12]:
+                lines.append(
+                    f"Step {step.step_index} liquid composition (x), "
+                    f"P = {_format_pressure(step.pressure_pa, pressure_unit, precision=3)}"
+                )
+                for cid, value in sorted(step.liquid_composition.items()):
+                    lines.append(f"{cid:<8s} {value:>12.6f}")
+                lines.append("")
+                lines.append(f"Step {step.step_index} vapor composition (y)")
+                for cid, value in sorted(step.vapor_composition.items()):
+                    lines.append(f"{cid:<8s} {value:>12.6f}")
+                lines.append("")
+
+            sep = r.separator
+            lines.append("Stock-tank separator")
+            lines.append("--------------------")
+            lines.append(f"P = {_format_pressure(sep.pressure_pa, pressure_unit)}")
+            lines.append(f"T = {_format_temperature(sep.temperature_k, temperature_unit)}")
+            lines.append(f"GOR = {sep.gor_scf_stb:.5f} scf/STB")
+            lines.append(f"Oil MW = {sep.stock_tank_oil_mw_g_per_mol:.5f} g/mol")
+            lines.append(f"Oil API = {sep.stock_tank_oil_api:.5f}")
+            lines.append(f"Oil SG = {sep.stock_tank_oil_specific_gravity:.5f}")
+            lines.append("")
+            lines.append("Stock-tank gas composition")
+            for cid, value in sorted(sep.stock_tank_gas_composition.items()):
+                lines.append(f"{cid:<8s} {value:>12.6f}")
+            lines.append("")
+            lines.append("Stock-tank oil composition")
+            for cid, value in sorted(sep.stock_tank_oil_composition.items()):
+                lines.append(f"{cid:<8s} {value:>12.6f}")
+            lines.append("")
 
         elif result.cvd_result is not None:
             r = result.cvd_result

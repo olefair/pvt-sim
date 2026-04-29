@@ -39,9 +39,11 @@ from numpy.typing import NDArray
 
 # Local imports from characterization package
 from .plus_splitting import (
+    katz_residual_plus_split,
     split_plus_fraction_pedersen,
     split_plus_fraction_katz,
     split_plus_fraction_lohrenz,
+    KatzResidualSplitResult,
     PedersenSplitResult,
     KatzSplitResult,
     LohrenzSplitResult,
@@ -73,6 +75,7 @@ class PlusFractionMethod(Enum):
     """Plus-fraction splitting method selection."""
     PEDERSEN = auto()
     KATZ = auto()
+    KATZ_RESIDUAL = auto()
     LOHRENZ = auto()
 
 
@@ -370,6 +373,19 @@ class CharacterizedFluid:
                     n_start=7,
                     n_end=n_scn_end,
                 )
+            elif plus_fraction_method == PlusFractionMethod.KATZ_RESIDUAL:
+                def scn_sg_fn(n: np.ndarray) -> np.ndarray:
+                    idx = n.astype(int) - 7
+                    return scn_props.sg_6060[idx]
+
+                split = katz_residual_plus_split(
+                    z_plus=plus_fraction_z,
+                    MW_plus=plus_fraction_MW,
+                    n_start=7,
+                    n_terminal=n_scn_end,
+                    SG_plus=plus_fraction_SG,
+                    scn_sg_fn=scn_sg_fn,
+                )
             elif plus_fraction_method == PlusFractionMethod.LOHRENZ:
                 split = split_plus_fraction_lohrenz(
                     z_plus=plus_fraction_z,
@@ -392,7 +408,15 @@ class CharacterizedFluid:
                 # Estimate SG for this SCN
                 # Use SCN table if available, otherwise interpolate from plus fraction
                 scn_idx = n_scn - 7  # Index into scn_props
-                if scn_idx < len(scn_props.sg_6060):
+                split_sg = getattr(split, "sg", None)
+                if split_sg is not None:
+                    SG_i = split_sg[i]
+                    Tb_i = scn_props.tb_k[scn_idx] if scn_idx < len(scn_props.tb_k) else estimate_Tb(
+                        MW_i,
+                        SG_i,
+                        BoilingPointMethod.SOREIDE,
+                    )
+                elif scn_idx < len(scn_props.sg_6060):
                     SG_i = scn_props.sg_6060[scn_idx]
                     Tb_i = scn_props.tb_k[scn_idx]
                 else:

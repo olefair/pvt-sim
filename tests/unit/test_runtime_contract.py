@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from pvtapp.job_runner import (
     _infer_phase_envelope_runtime_family,
     _prepare_fluid_inputs,
     build_rerun_config,
+    execute_cvd,
     load_run_config,
     load_run_result,
     rerun_saved_run,
@@ -168,6 +170,35 @@ def _cvd_config() -> dict:
             "n_steps": 8,
         },
     }
+
+
+def test_execute_cvd_uses_explicit_pressure_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_simulate_cvd(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            temperature=kwargs["temperature"],
+            dew_pressure=kwargs["dew_pressure"],
+            initial_Z=1.0,
+            converged=True,
+            steps=[],
+        )
+
+    monkeypatch.setattr("pvtcore.experiments.simulate_cvd", fake_simulate_cvd)
+    config = RunConfig.model_validate({
+        **_cvd_config(),
+        "cvd_config": {
+            "temperature_k": 380.0,
+            "dew_pressure_pa": 20e6,
+            "pressure_points_pa": [15e6, 10e6, 5e6],
+        },
+    })
+
+    result = execute_cvd(config)
+
+    assert result.dew_pressure_pa == pytest.approx(20e6)
+    assert list(captured["pressure_steps"]) == pytest.approx([15e6, 10e6, 5e6])
 
 
 def _separator_config() -> dict:

@@ -17,7 +17,12 @@ import numpy as np
 
 from ..core.errors import CharacterizationError, CompositionError, ValidationError
 from ..models.component import Component, get_components_cached
-from .plus_splitting.katz import KatzSplitResult, split_plus_fraction_katz
+from .plus_splitting.katz import (
+    KatzResidualSplitResult,
+    KatzSplitResult,
+    katz_residual_plus_split,
+    split_plus_fraction_katz,
+)
 from .plus_splitting.lohrenz import LohrenzSplitResult, split_plus_fraction_lohrenz
 from .plus_splitting.pedersen import (
     PedersenSplitResult,
@@ -33,7 +38,9 @@ from .pseudo_correlations import (
 )
 
 
-PlusFractionSplitResult = PedersenSplitResult | KatzSplitResult | LohrenzSplitResult
+PlusFractionSplitResult = (
+    PedersenSplitResult | KatzSplitResult | KatzResidualSplitResult | LohrenzSplitResult
+)
 
 
 @dataclass(frozen=True)
@@ -62,7 +69,7 @@ class CharacterizationConfig:
 
     n_end: int = 45
     extrapolate_scn: bool = True
-    split_method: str = "pedersen"  # "pedersen", "katz", or "lohrenz"
+    split_method: str = "pedersen"  # "pedersen", "katz", "katz_residual", or "lohrenz"
     split_mw_model: str = "paraffin"  # "paraffin" (14n-4) or "table"
     normalize_composition: bool = True
     normalization_tol: float = 1e-6
@@ -479,6 +486,26 @@ def characterize_fluid(
             n_end=cfg.n_end,
             scn_mw_fn=scn_mw_fn,
         )
+    elif split_method == "katz_residual":
+        scn_sg_fn = None
+        if plus_fraction.sg_plus is not None:
+            n_start = plus_fraction.n_start
+
+            def scn_sg_fn(n: np.ndarray) -> np.ndarray:
+                idx = n.astype(int) - n_start
+                if np.any(idx < 0) or np.any(idx >= scn_props.sg_6060.size):
+                    raise CharacterizationError("SCN SG lookup out of range.")
+                return scn_props.sg_6060[idx]
+
+        split = katz_residual_plus_split(
+            z_plus=plus_fraction.z_plus,
+            MW_plus=plus_fraction.mw_plus,
+            n_start=plus_fraction.n_start,
+            n_terminal=cfg.n_end,
+            SG_plus=plus_fraction.sg_plus,
+            scn_mw_fn=scn_mw_fn,
+            scn_sg_fn=scn_sg_fn,
+        )
     elif split_method == "lohrenz":
         split = split_plus_fraction_lohrenz(
             z_plus=plus_fraction.z_plus,
@@ -490,7 +517,7 @@ def characterize_fluid(
     else:
         raise CharacterizationError(
             f"Unsupported split method '{cfg.split_method}'. "
-            "Use 'pedersen', 'katz', or 'lohrenz'."
+            "Use 'pedersen', 'katz', 'katz_residual', or 'lohrenz'."
         )
 
     corr = _resolve_correlation(cfg.correlation)
@@ -509,7 +536,7 @@ def characterize_fluid(
                 Pc=float(pseudo_props.Pc[idx]),
                 Vc=float(pseudo_props.Vc[idx]),
                 omega=float(pseudo_props.omega[idx]),
-                MW=float(scn_props.mw[idx]),
+                MW=float(split.MW[idx]),
                 Tb=float(scn_props.tb_k[idx]),
                 note="Pseudo-component from SCN characterization",
             )

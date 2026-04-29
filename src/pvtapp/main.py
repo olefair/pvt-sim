@@ -69,6 +69,7 @@ from pvtapp.widgets.two_pane_workspace import PANE_MODE_DOUBLE
 from pvtapp.workers import CalculationThread
 from pvtapp.job_runner import (
     execute_bubble_point,
+    execute_dew_point,
     list_runs,
     load_run_config,
     load_run_result,
@@ -352,6 +353,9 @@ class PVTSimulatorWindow(QMainWindow):
         self._dl_bubble_preview_timer = QTimer(self)
         self._dl_bubble_preview_timer.setSingleShot(True)
         self._dl_bubble_preview_timer.timeout.connect(self._refresh_dl_bubble_pressure_preview)
+        self._cvd_dew_preview_timer = QTimer(self)
+        self._cvd_dew_preview_timer.setSingleShot(True)
+        self._cvd_dew_preview_timer.timeout.connect(self._refresh_cvd_dew_pressure_preview)
 
     def _set_status_message(
         self,
@@ -397,8 +401,9 @@ class PVTSimulatorWindow(QMainWindow):
     def _on_composition_edited(self) -> None:
         """Invalidate composition-derived previews before refreshing dependent views."""
         self.conditions_widget.clear_dl_bubble_pressure()
+        self.conditions_widget.clear_cvd_dew_pressure()
         self._update_component_dependent_views()
-        self._schedule_dl_bubble_pressure_preview()
+        self._schedule_saturation_pressure_preview()
 
     @Slot()
     def _sync_characterization_context(self) -> None:
@@ -406,7 +411,7 @@ class PVTSimulatorWindow(QMainWindow):
         calc_type = self.conditions_widget.get_calculation_type()
         self.composition_widget.set_calculation_type_context(calc_type)
         self._sync_input_mode_for_calculation_type(calc_type)
-        self._schedule_dl_bubble_pressure_preview()
+        self._schedule_saturation_pressure_preview()
 
     @staticmethod
     def _calculation_requires_composition(calc_type: CalculationType) -> bool:
@@ -597,6 +602,23 @@ class PVTSimulatorWindow(QMainWindow):
             return
         self._dl_bubble_preview_timer.start(250)
 
+    def _schedule_cvd_dew_pressure_preview(self) -> None:
+        """Debounce the CVD dew-pressure preview so the field fills after inputs settle."""
+        if self.conditions_widget.get_calculation_type() != CalculationType.CVD:
+            self._cvd_dew_preview_timer.stop()
+            return
+        if self.conditions_widget.get_cvd_dew_pressure_pa() is not None:
+            self._cvd_dew_preview_timer.stop()
+            return
+        if self._build_preview_composition() is None:
+            self._cvd_dew_preview_timer.stop()
+            return
+        self._cvd_dew_preview_timer.start(250)
+
+    def _schedule_saturation_pressure_preview(self) -> None:
+        self._schedule_dl_bubble_pressure_preview()
+        self._schedule_cvd_dew_pressure_preview()
+
     @Slot()
     def _refresh_dl_bubble_pressure_preview(self) -> None:
         """Fill the DL bubble-pressure field from the active feed/temperature when possible."""
@@ -623,6 +645,33 @@ class PVTSimulatorWindow(QMainWindow):
             and self.conditions_widget.get_dl_bubble_pressure_pa() is None
         ):
             self.conditions_widget.set_dl_bubble_pressure_pa(bubble_pressure_pa)
+
+    @Slot()
+    def _refresh_cvd_dew_pressure_preview(self) -> None:
+        """Fill the CVD dew-pressure field from the active feed/temperature when possible."""
+        if self.conditions_widget.get_calculation_type() != CalculationType.CVD:
+            return
+        if self.conditions_widget.get_cvd_dew_pressure_pa() is not None:
+            return
+
+        composition = self._build_preview_composition()
+        if composition is None:
+            return
+
+        try:
+            dew_pressure_pa = self._derive_cvd_dew_pressure_pa(
+                composition,
+                self.conditions_widget.get_eos_type(),
+                self.conditions_widget.get_solver_settings(),
+            )
+        except Exception:
+            return
+
+        if (
+            self.conditions_widget.get_calculation_type() == CalculationType.CVD
+            and self.conditions_widget.get_cvd_dew_pressure_pa() is None
+        ):
+            self.conditions_widget.set_cvd_dew_pressure_pa(dew_pressure_pa)
 
     def _derive_dl_bubble_pressure_pa(
         self,
@@ -654,6 +703,37 @@ class PVTSimulatorWindow(QMainWindow):
             solver_settings=solver_settings,
         )
         return float(execute_bubble_point(preview_config).pressure_pa)
+
+    def _derive_cvd_dew_pressure_pa(
+        self,
+        composition: FluidComposition,
+        eos_type: EOSType,
+        solver_settings,
+    ) -> float:
+        """Calculate the CVD dew pressure from the active feed and CVD temperature."""
+        runtime_composition = composition
+        plus_fraction = composition.plus_fraction
+        if plus_fraction is not None:
+            resolved_plus = resolve_plus_fraction_entry(
+                composition.components,
+                plus_fraction,
+                CalculationType.CVD,
+            )
+            if resolved_plus != plus_fraction:
+                runtime_composition = composition.model_copy(update={"plus_fraction": resolved_plus})
+
+        preview_config = RunConfig(
+            run_id="cvd-autopd",
+            run_name="cvd_auto_dew",
+            calculation_type=CalculationType.DEW_POINT,
+            eos_type=eos_type,
+            composition=runtime_composition,
+            dew_point_config=SaturationPointConfig(
+                temperature_k=self.conditions_widget.get_cvd_temperature_k(),
+            ),
+            solver_settings=solver_settings,
+        )
+        return float(execute_dew_point(preview_config).pressure_pa)
 
     def _reset_composition_inputs_silently(self) -> None:
         """Clear the composition editor without prompting when a non-feed workflow is loaded."""
@@ -782,7 +862,26 @@ class PVTSimulatorWindow(QMainWindow):
                 return None
             config_kwargs["dl_config"] = dl_config
 
+        elif calc_type == CalculationType.WHITSON_TORP:
+            wt_config = self.conditions_widget.get_whitson_torp_config()
+            if wt_config is None:
+                return None
+            config_kwargs["whitson_torp_config"] = wt_config
+
         elif calc_type == CalculationType.CVD:
+            assert composition is not None
+            dew_pressure_pa = self.conditions_widget.get_cvd_dew_pressure_pa()
+            if dew_pressure_pa is None:
+                try:
+                    dew_pressure_pa = self._derive_cvd_dew_pressure_pa(
+                        composition,
+                        eos_type,
+                        solver_settings,
+                    )
+                except Exception as e:
+                    self._show_validation_error(str(e))
+                    return None
+                self.conditions_widget.set_cvd_dew_pressure_pa(dew_pressure_pa)
             cvd_config = self.conditions_widget.get_cvd_config()
             if cvd_config is None:
                 return None

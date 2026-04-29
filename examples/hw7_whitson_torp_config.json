@@ -1,0 +1,172 @@
+{
+  "run_name": "HW7 Whitson-Torp South Texas oil",
+  "calculation_type": "whitson_torp",
+  "eos_type": "pr78",
+  "composition": {
+    "components": [
+      {"component_id": "HW7_CO2", "mole_fraction": 0.0111},
+      {"component_id": "HW7_C1", "mole_fraction": 0.3950},
+      {"component_id": "HW7_C2", "mole_fraction": 0.0969},
+      {"component_id": "HW7_C3", "mole_fraction": 0.0784},
+      {"component_id": "HW7_iC4", "mole_fraction": 0.0159},
+      {"component_id": "HW7_nC4", "mole_fraction": 0.0372},
+      {"component_id": "HW7_iC5", "mole_fraction": 0.0123},
+      {"component_id": "HW7_nC5", "mole_fraction": 0.0211},
+      {"component_id": "HW7_C6", "mole_fraction": 0.0295},
+      {"component_id": "HW7_F1", "mole_fraction": 0.1578},
+      {"component_id": "HW7_F2", "mole_fraction": 0.1243},
+      {"component_id": "HW7_F3", "mole_fraction": 0.0205}
+    ],
+    "inline_components": [
+      {
+        "component_id": "HW7_CO2",
+        "name": "CO2",
+        "formula": "CO2",
+        "molecular_weight_g_per_mol": 44.01,
+        "critical_temperature_k": 304.22222222222223,
+        "critical_pressure_pa": 7381527.158066046,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.2310
+      },
+      {
+        "component_id": "HW7_C1",
+        "name": "C1",
+        "formula": "C1",
+        "molecular_weight_g_per_mol": 16.04,
+        "critical_temperature_k": 190.55555555555554,
+        "critical_pressure_pa": 4604318.920377831,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.0115
+      },
+      {
+        "component_id": "HW7_C2",
+        "name": "C2",
+        "formula": "C2",
+        "molecular_weight_g_per_mol": 30.07,
+        "critical_temperature_k": 305.44444444444446,
+        "critical_pressure_pa": 4880109.212104565,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.0908
+      },
+      {
+        "component_id": "HW7_C3",
+        "name": "C3",
+        "formula": "C3",
+        "molecular_weight_g_per_mol": 44.09,
+        "critical_temperature_k": 369.8333333333333,
+        "critical_pressure_pa": 4249238.91977966,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.1454
+      },
+      {
+        "component_id": "HW7_iC4",
+        "name": "i-C4",
+        "formula": "i-C4",
+        "molecular_weight_g_per_mol": 58.12,
+        "critical_temperature_k": 408.1666666666667,
+        "critical_pressure_pa": 3648016.08381538,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.1756
+      },
+      {
+        "component_id": "HW7_nC4",
+        "name": "n-C4",
+        "formula": "n-C4",
+        "molecular_weight_g_per_mol": 58.12,
+        "critical_temperature_k": 425.1666666666667,
+        "critical_pressure_pa": 3796942.8413478164,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.1928
+      },
+      {
+        "component_id": "HW7_iC5",
+        "name": "i-C5",
+        "formula": "i-C5",
+        "molecular_weight_g_per_mol": 72.15,
+        "critical_temperature_k": 460.44444444444446,
+        "critical_pressure_pa": 3381188.976569764,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.2273
+      },
+      {
+        "component_id": "HW7_nC5",
+        "name": "n-C5",
+        "formula": "n-C5",
+        "molecular_weight_g_per_mol": 72.15,
+        "critical_temperature_k": 469.6666666666667,
+        "critical_pressure_pa": 3368778.4134420613,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.2510
+      },
+      {
+        "component_id": "HW7_C6",
+        "name": "C6",
+        "formula": "C6",
+        "molecular_weight_g_per_mol": 86.17,
+        "critical_temperature_k": 507.44444444444446,
+        "critical_pressure_pa": 3012319.4613852566,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.2957
+      },
+      {
+        "component_id": "HW7_F1",
+        "name": "F1",
+        "formula": "F1",
+        "molecular_weight_g_per_mol": 114.10,
+        "critical_temperature_k": 591.9444444444445,
+        "critical_pressure_pa": 2824092.5872817608,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.3255
+      },
+      {
+        "component_id": "HW7_F2",
+        "name": "F2",
+        "formula": "F2",
+        "molecular_weight_g_per_mol": 223.10,
+        "critical_temperature_k": 753.3333333333334,
+        "critical_pressure_pa": 1620957.4396238816,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 0.6538
+      },
+      {
+        "component_id": "HW7_F3",
+        "name": "F3",
+        "formula": "F3",
+        "molecular_weight_g_per_mol": 455.00,
+        "critical_temperature_k": 938.3888888888889,
+        "critical_pressure_pa": 928034.3316604614,
+        "critical_temperature_unit": "R",
+        "critical_pressure_unit": "psia",
+        "omega": 1.1489
+      }
+    ]
+  },
+  "whitson_torp_config": {
+    "temperature_k": 386.4833333333333,
+    "c7plus_mw_g_per_mol": 181.96896893588897,
+    "pressure_points_pa": [
+      27579029.17267344,
+      20684271.879505083,
+      13789514.58633672
+    ],
+    "separator_pressure_pa": 101352.9322095749,
+    "separator_temperature_k": 288.7055555555555,
+    "pressure_unit": "psia",
+    "temperature_unit": "F"
+  },
+  "solver_settings": {
+    "tolerance": 1e-10,
+    "max_iterations": 200
+  }
+}

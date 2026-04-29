@@ -98,6 +98,16 @@ class KatzSplitResult:
     B: float
 
 
+@dataclass(frozen=True)
+class KatzResidualSplitResult:
+    n: np.ndarray
+    MW: np.ndarray
+    z: np.ndarray
+    A: float
+    B: float
+    sg: np.ndarray | None = None
+
+
 def plus_frac_split_katz(
     *,
     zP: float,
@@ -163,3 +173,74 @@ def katz_classic_split(
     B = 0.25903
     z = _norm(_Zn(A, B, Cn), z_plus)
     return KatzSplitResult(n=Cn, MW=MW, z=z, A=A, B=B)
+
+
+def katz_residual_plus_split(
+    *,
+    z_plus: float,
+    MW_plus: float,
+    n_start: int = 7,
+    n_terminal: int = 30,
+    SG_plus: float | None = None,
+    scn_mw_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+    scn_sg_fn: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> KatzResidualSplitResult:
+    """Course-style Katz split with the terminal plus fraction by residual balance.
+
+    The PETE 665 lecture/homework Katz workflow uses the fixed Katz
+    coefficients for C7..C(N-1), then computes C(N)+ by mole, mass, and
+    optional liquid-volume residual balance. This is deliberately separate
+    from ``split_plus_fraction_katz``, which refits A/B for EOS runtime use.
+    """
+    if not (z_plus > 0.0):
+        raise ValueError(f"z_plus must be > 0, got {z_plus}")
+    if not (MW_plus > 0.0):
+        raise ValueError(f"MW_plus must be > 0, got {MW_plus}")
+    if n_terminal <= n_start:
+        raise ValueError("n_terminal must be greater than n_start")
+    if SG_plus is not None and SG_plus <= 0.0:
+        raise ValueError(f"SG_plus must be > 0, got {SG_plus}")
+
+    n_head = np.arange(n_start, n_terminal, dtype=int)
+    mw_head = np.asarray((scn_mw_fn or _mw)(n_head), dtype=float)
+    if mw_head.shape != n_head.shape:
+        raise ValueError("scn_mw_fn must return array same shape as carbon numbers")
+    if not np.isfinite(mw_head).all() or np.any(mw_head <= 0.0):
+        raise ValueError("MW_n must be finite and > 0 for all SCNs")
+
+    A = 1.38205 * float(z_plus)
+    B = 0.25903
+    z_head = _Zn(A, B, n_head)
+    z_terminal = float(z_plus) - float(z_head.sum())
+    if not np.isfinite(z_terminal) or z_terminal <= 0.0:
+        raise RuntimeError("Katz residual split produced a non-positive terminal plus fraction")
+
+    mass_head = float((z_head * mw_head).sum())
+    mass_terminal = float(z_plus) * float(MW_plus) - mass_head
+    if not np.isfinite(mass_terminal) or mass_terminal <= 0.0:
+        raise RuntimeError("Katz residual split produced a non-positive terminal plus mass")
+    mw_terminal = mass_terminal / z_terminal
+
+    n = np.append(n_head, int(n_terminal))
+    z = np.append(z_head, z_terminal)
+    MW = np.append(mw_head, mw_terminal)
+
+    sg: np.ndarray | None = None
+    if SG_plus is not None:
+        if scn_sg_fn is None:
+            raise ValueError("scn_sg_fn is required when SG_plus is supplied")
+        sg_head = np.asarray(scn_sg_fn(n_head), dtype=float)
+        if sg_head.shape != n_head.shape:
+            raise ValueError("scn_sg_fn must return array same shape as carbon numbers")
+        if not np.isfinite(sg_head).all() or np.any(sg_head <= 0.0):
+            raise ValueError("SG_n must be finite and > 0 for all SCNs")
+
+        total_volume = float(z_plus) * float(MW_plus) / float(SG_plus)
+        head_volume = float((z_head * mw_head / sg_head).sum())
+        terminal_volume = total_volume - head_volume
+        if not np.isfinite(terminal_volume) or terminal_volume <= 0.0:
+            raise RuntimeError("Katz residual split produced a non-positive terminal plus liquid volume")
+        sg_terminal = mass_terminal / terminal_volume
+        sg = np.append(sg_head, sg_terminal)
+
+    return KatzResidualSplitResult(n=n, MW=MW, z=z, A=A, B=B, sg=sg)

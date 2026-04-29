@@ -405,7 +405,7 @@ class CompositionInputWidget(QWidget):
         self.plus_end_spin.setRange(1, 200)
         self.plus_end_spin.setValue(45)
         self.plus_split_method = NoWheelComboBox()
-        self.plus_split_method.addItems(["pedersen", "katz", "lohrenz"])
+        self.plus_split_method.addItems(["pedersen", "katz", "katz_residual", "lohrenz"])
         self.plus_split_method.setCurrentText("pedersen")
         self.plus_split_mw_model = NoWheelComboBox()
         self.plus_split_mw_model.addItems(["paraffin", "table"])

@@ -31,6 +31,7 @@ PRESSURE_MAX_PA = 1e9        # 10,000 bar - far beyond any realistic reservoir
 # Temperature bounds (K)
 TEMPERATURE_MIN_K = 100.0    # Below this, most hydrocarbons are solid
 TEMPERATURE_MAX_K = 800.0    # Above this, thermal cracking dominates
+PSEUDO_CRITICAL_TEMPERATURE_MAX_K = 2000.0
 
 # Composition bounds
 COMPOSITION_MIN = 0.0
@@ -62,6 +63,7 @@ class CalculationType(str, Enum):
     CVD = "cvd"
     SWELLING_TEST = "swelling_test"
     SEPARATOR = "separator"
+    WHITSON_TORP = "whitson_torp"
 
 
 class PhaseEnvelopeTracingMethod(str, Enum):
@@ -394,7 +396,7 @@ class PlusFractionEntry(BaseModel):
         le=200,
         description="Maximum SCN carbon number to include when splitting the plus fraction",
     )
-    split_method: Literal["pedersen", "katz", "lohrenz"] = Field(
+    split_method: Literal["pedersen", "katz", "katz_residual", "lohrenz"] = Field(
         default="pedersen",
         description="Canonical plus-fraction splitting method",
     )
@@ -474,7 +476,7 @@ class InlineComponentSpec(BaseModel):
     critical_temperature_k: float = Field(
         ...,
         ge=TEMPERATURE_MIN_K,
-        le=TEMPERATURE_MAX_K,
+        le=PSEUDO_CRITICAL_TEMPERATURE_MAX_K,
         description="Critical temperature in Kelvin",
     )
     critical_pressure_pa: float = Field(
@@ -904,6 +906,68 @@ class DLConfig(BaseModel):
         return self
 
 
+class WhitsonTorpConfig(BaseModel):
+    """Configuration for Whitson-Torp K-value bubble, DL, and separator flashes."""
+
+    temperature_k: float = Field(
+        ...,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Reservoir temperature (K)",
+    )
+    convergence_pressure_pa: Optional[float] = Field(
+        default=None,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Optional convergence pressure Pk (Pa). If omitted, Standing Pk is computed from C7+ MW.",
+    )
+    c7plus_mw_g_per_mol: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="C7+ molecular weight used by Standing's convergence-pressure correlation",
+    )
+    pressure_points_pa: List[float] = Field(
+        default_factory=list,
+        description="Descending DL flash pressures in Pa",
+    )
+    separator_pressure_pa: float = Field(
+        default=101352.932209575,
+        ge=PRESSURE_MIN_PA,
+        le=PRESSURE_MAX_PA,
+        description="Stock-tank separator pressure (Pa)",
+    )
+    separator_temperature_k: float = Field(
+        default=288.705555555556,
+        ge=TEMPERATURE_MIN_K,
+        le=TEMPERATURE_MAX_K,
+        description="Stock-tank separator temperature (K)",
+    )
+    pressure_unit: PressureUnit = Field(
+        default=PressureUnit.PSIA,
+        description="Preferred pressure unit for GUI input/output",
+    )
+    temperature_unit: TemperatureUnit = Field(
+        default=TemperatureUnit.F,
+        description="Preferred temperature unit for GUI input/output",
+    )
+
+    @field_validator('pressure_points_pa')
+    @classmethod
+    def validate_pressure_points(cls, values: List[float]) -> List[float]:
+        normalized = _validate_descending_pressure_points(
+            values,
+            label="Whitson-Torp",
+            min_points=1,
+        )
+        return [] if normalized is None else normalized
+
+    @model_validator(mode='after')
+    def validate_convergence_input(self) -> 'WhitsonTorpConfig':
+        if self.convergence_pressure_pa is None and self.c7plus_mw_g_per_mol is None:
+            raise ValueError("Whitson-Torp requires convergence_pressure_pa or c7plus_mw_g_per_mol")
+        return self
+
+
 class CVDConfig(BaseModel):
     """Configuration for Constant Volume Depletion."""
 
@@ -919,22 +983,47 @@ class CVDConfig(BaseModel):
         le=PRESSURE_MAX_PA,
         description="Dew-point pressure (Pa)"
     )
-    pressure_end_pa: float = Field(
-        ...,
+    pressure_end_pa: Optional[float] = Field(
+        default=None,
         ge=PRESSURE_MIN_PA,
         le=PRESSURE_MAX_PA,
         description="Final depletion pressure (Pa)"
     )
-    n_steps: int = Field(
+    n_steps: Optional[int] = Field(
         default=15,
         ge=5,
         le=200,
         description="Number of pressure steps"
     )
+    pressure_points_pa: Optional[List[float]] = Field(
+        default=None,
+        description=(
+            "Optional explicit descending pressure schedule below the dew point in Pa. "
+            "When provided, it overrides pressure_end_pa/n_steps."
+        ),
+    )
+
+    @field_validator('pressure_points_pa')
+    @classmethod
+    def validate_pressure_points(cls, values: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_descending_pressure_points(values, label="CVD", min_points=1)
 
     @model_validator(mode='after')
     def validate_pressure_range(self) -> 'CVDConfig':
-        """Ensure dew pressure is greater than final pressure."""
+        """Ensure a valid CVD pressure schedule is provided."""
+        if self.pressure_points_pa:
+            if any(pressure >= self.dew_pressure_pa for pressure in self.pressure_points_pa):
+                raise ValueError(
+                    "CVD pressure_points_pa must stay strictly below dew_pressure_pa"
+                )
+            self.pressure_end_pa = self.pressure_points_pa[-1]
+            self.n_steps = len(self.pressure_points_pa) + 1
+            return self
+
+        if self.pressure_end_pa is None or self.n_steps is None:
+            raise ValueError(
+                "CVD requires either pressure_points_pa or pressure_end_pa/n_steps"
+            )
         if self.dew_pressure_pa <= self.pressure_end_pa:
             raise ValueError(
                 f"dew_pressure_pa ({self.dew_pressure_pa}) must be greater than "
@@ -1186,6 +1275,7 @@ class RunConfig(BaseModel):
     tbp_config: Optional[TBPConfig] = None
     cce_config: Optional[CCEConfig] = None
     dl_config: Optional[DLConfig] = None
+    whitson_torp_config: Optional[WhitsonTorpConfig] = None
     cvd_config: Optional[CVDConfig] = None
     swelling_test_config: Optional[SwellingTestConfig] = None
     separator_config: Optional[SeparatorConfig] = None
@@ -1233,6 +1323,9 @@ class RunConfig(BaseModel):
         elif self.calculation_type == CalculationType.DL:
             if self.dl_config is None:
                 raise ValueError("dl_config is required for DL calculation")
+        elif self.calculation_type == CalculationType.WHITSON_TORP:
+            if self.whitson_torp_config is None:
+                raise ValueError("whitson_torp_config is required for WHITSON_TORP calculation")
         elif self.calculation_type == CalculationType.CVD:
             if self.cvd_config is None:
                 raise ValueError("cvd_config is required for CVD calculation")
@@ -1771,6 +1864,53 @@ class DLResult(BaseModel):
     steps: List[DLStepResult]
 
 
+class WhitsonTorpStepResult(BaseModel):
+    """Results for one Whitson-Torp differential-liberation flash step."""
+
+    step_index: int
+    pressure_pa: float
+    vapor_fraction: float
+    liquid_fraction: float
+    feed_moles: float
+    vapor_moles_actual: float
+    liquid_moles_actual: float
+    gas_z_factor: Optional[float] = None
+    bg_bbl_per_scf: Optional[float] = None
+    liquid_composition: Dict[str, float]
+    vapor_composition: Dict[str, float]
+    k_values: Dict[str, float]
+
+
+class WhitsonTorpSeparatorResult(BaseModel):
+    """Single-stage stock-tank flash result for the Whitson-Torp workflow."""
+
+    pressure_pa: float
+    temperature_k: float
+    vapor_fraction: float
+    liquid_fraction: float
+    gas_moles_actual: float
+    oil_moles_actual: float
+    gor_scf_stb: float
+    stock_tank_oil_mw_g_per_mol: float
+    stock_tank_oil_api: float
+    stock_tank_oil_specific_gravity: float
+    stock_tank_gas_composition: Dict[str, float]
+    stock_tank_oil_composition: Dict[str, float]
+
+
+class WhitsonTorpResult(BaseModel):
+    """Whitson-Torp K-value bubble, DL, and stock-tank flash results."""
+
+    temperature_k: float
+    convergence_pressure_pa: float
+    bubble_pressure_pa: float
+    bubble_vapor_composition: Dict[str, float]
+    bubble_k_values: Dict[str, float]
+    steps: List[WhitsonTorpStepResult]
+    separator: WhitsonTorpSeparatorResult
+    converged: bool
+
+
 class CVDStepResult(BaseModel):
     """Results for a single CVD pressure step."""
 
@@ -2171,7 +2311,7 @@ class RuntimeCharacterizationResult(BaseModel):
     z_plus: float = Field(..., gt=0.0, le=COMPOSITION_MAX)
     mw_plus_g_per_mol: float = Field(..., gt=0.0)
     sg_plus_60f: Optional[float] = Field(default=None, gt=0.0)
-    split_method: Literal["pedersen", "katz", "lohrenz"] = Field(
+    split_method: Literal["pedersen", "katz", "katz_residual", "lohrenz"] = Field(
         ...,
         description="Configured runtime split method that produced the preserved SCN basis",
     )
@@ -2237,6 +2377,7 @@ class RunResult(BaseModel):
     tbp_result: Optional[TBPExperimentResult] = None
     cce_result: Optional[CCEResult] = None
     dl_result: Optional[DLResult] = None
+    whitson_torp_result: Optional[WhitsonTorpResult] = None
     cvd_result: Optional[CVDResult] = None
     swelling_test_result: Optional[SwellingTestResult] = None
     separator_result: Optional[SeparatorResult] = None

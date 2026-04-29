@@ -49,6 +49,11 @@ Entry points:
 pytest -q
 ```
 
+## Development
+
+- Contribution rules: `CONTRIBUTING.md`
+- Engineering standard: `docs/development.md`
+
 ## Notes
 
 - The desktop app now opens on `Bubble Point` with `PR78` selected so the first visible workflow matches the PETE 665 submission path.

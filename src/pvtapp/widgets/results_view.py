@@ -53,12 +53,14 @@ from pvtapp.schemas import (
     TBPExperimentResult,
     CCEResult,
     DLResult,
+    WhitsonTorpResult,
     CVDResult,
     SwellingTestResult,
     SeparatorResult,
     SaturationPointConfig,
     CCEConfig,
     DLConfig,
+    WhitsonTorpConfig,
     SwellingTestConfig,
     PressureUnit,
     TemperatureUnit,
@@ -895,6 +897,8 @@ class ResultsTableWidget(QWidget):
             self._display_cce(result.cce_result)
         elif result.dl_result:
             self._display_dl(result.dl_result)
+        elif result.whitson_torp_result:
+            self._display_whitson_torp(result.whitson_torp_result)
         elif result.cvd_result:
             self._display_cvd(result.cvd_result)
         elif result.swelling_test_result:
@@ -1127,6 +1131,15 @@ class ResultsTableWidget(QWidget):
         config: Optional[DLConfig] = None
         if self._current_result is not None:
             config = self._current_result.config.dl_config
+        if config is None:
+            return PressureUnit.PSIA, TemperatureUnit.F
+        return config.pressure_unit, config.temperature_unit
+
+    def _whitson_torp_display_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred Whitson-Torp display units."""
+        config: Optional[WhitsonTorpConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.whitson_torp_config
         if config is None:
             return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
@@ -2023,6 +2036,128 @@ class ResultsTableWidget(QWidget):
         ):
             t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
+    def _display_whitson_torp(self, result: WhitsonTorpResult) -> None:
+        """Display Whitson-Torp K-value results."""
+        pressure_unit, temperature_unit = self._whitson_torp_display_units()
+        summary_data = [
+            ("Temperature", _format_temperature(result.temperature_k, temperature_unit)),
+            ("Bubble Pressure", _format_pressure(result.bubble_pressure_pa, pressure_unit)),
+            ("Convergence Pressure", _format_pressure(result.convergence_pressure_pa, pressure_unit)),
+            ("DL Steps", str(len(result.steps))),
+            ("Separator GOR", f"{result.separator.gor_scf_stb:.4f} scf/STB"),
+            ("Converged", "Yes" if result.converged else "No"),
+        ]
+
+        self.summary_table.setRowCount(len(summary_data))
+        for row, (prop, value) in enumerate(summary_data):
+            self.summary_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.summary_table.setItem(row, 1, QTableWidgetItem(value))
+
+        self.composition_section.setTitle("DL Flash Steps")
+        self.details_section.setTitle("Bubble Vapor Composition")
+        self.extra_section.setTitle("Separator Summary")
+        self.extra_section_2.setTitle("Stock-Tank Gas")
+        self.extra_section_3.setTitle("Stock-Tank Oil")
+
+        p_header = f"P ({pressure_unit.value})"
+        self.composition_table.setColumnCount(6)
+        self.composition_table.setHorizontalHeaderLabels(
+            ["Step", p_header, "nL", "nL actual", "Zg", "Bg"]
+        )
+        self.composition_table.setRowCount(len(result.steps))
+        for row, step in enumerate(result.steps):
+            self.composition_table.setItem(row, 0, QTableWidgetItem(str(step.step_index)))
+            self.composition_table.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{pressure_from_pa(step.pressure_pa, pressure_unit):.3f}"),
+            )
+            self.composition_table.setItem(row, 2, QTableWidgetItem(f"{step.liquid_fraction:.6f}"))
+            self.composition_table.setItem(row, 3, QTableWidgetItem(f"{step.liquid_moles_actual:.6f}"))
+            self.composition_table.setItem(
+                row,
+                4,
+                QTableWidgetItem("-" if step.gas_z_factor is None else f"{step.gas_z_factor:.5f}"),
+            )
+            self.composition_table.setItem(
+                row,
+                5,
+                QTableWidgetItem("-" if step.bg_bbl_per_scf is None else f"{step.bg_bbl_per_scf:.6f}"),
+            )
+
+        bubble_components = sorted(result.bubble_vapor_composition)
+        self.details_table.setColumnCount(2)
+        self.details_table.setHorizontalHeaderLabels(["Component", "y at Pb"])
+        self.details_table.setRowCount(len(bubble_components))
+        for row, component_id in enumerate(bubble_components):
+            self.details_table.setItem(
+                row,
+                0,
+                QTableWidgetItem(_display_component_label(component_id, self._current_result)),
+            )
+            self.details_table.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{result.bubble_vapor_composition[component_id]:.6f}"),
+            )
+
+        sep = result.separator
+        separator_rows = [
+            ("Pressure", _format_pressure(sep.pressure_pa, pressure_unit)),
+            ("Temperature", _format_temperature(sep.temperature_k, temperature_unit)),
+            ("GOR", f"{sep.gor_scf_stb:.4f} scf/STB"),
+            ("Oil MW", f"{sep.stock_tank_oil_mw_g_per_mol:.4f} g/mol"),
+            ("Oil API", f"{sep.stock_tank_oil_api:.4f}"),
+            ("Oil SG", f"{sep.stock_tank_oil_specific_gravity:.5f}"),
+        ]
+        self.extra_table.setColumnCount(2)
+        self.extra_table.setHorizontalHeaderLabels(["Property", "Value"])
+        self.extra_table.setRowCount(len(separator_rows))
+        for row, (prop, value) in enumerate(separator_rows):
+            self.extra_table.setItem(row, 0, QTableWidgetItem(prop))
+            self.extra_table.setItem(row, 1, QTableWidgetItem(value))
+
+        gas_components = sorted(sep.stock_tank_gas_composition)
+        self.extra_table_2.setColumnCount(2)
+        self.extra_table_2.setHorizontalHeaderLabels(["Component", "y"])
+        self.extra_table_2.setRowCount(len(gas_components))
+        for row, component_id in enumerate(gas_components):
+            self.extra_table_2.setItem(
+                row,
+                0,
+                QTableWidgetItem(_display_component_label(component_id, self._current_result)),
+            )
+            self.extra_table_2.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{sep.stock_tank_gas_composition[component_id]:.6f}"),
+            )
+
+        oil_components = sorted(sep.stock_tank_oil_composition)
+        self.extra_table_3.setColumnCount(2)
+        self.extra_table_3.setHorizontalHeaderLabels(["Component", "x"])
+        self.extra_table_3.setRowCount(len(oil_components))
+        for row, component_id in enumerate(oil_components):
+            self.extra_table_3.setItem(
+                row,
+                0,
+                QTableWidgetItem(_display_component_label(component_id, self._current_result)),
+            )
+            self.extra_table_3.setItem(
+                row,
+                1,
+                QTableWidgetItem(f"{sep.stock_tank_oil_composition[component_id]:.6f}"),
+            )
+
+        for table in (
+            self.composition_table,
+            self.details_table,
+            self.extra_table,
+            self.extra_table_2,
+            self.extra_table_3,
+        ):
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+
     def _display_cvd(self, result: CVDResult) -> None:
         """Display CVD results."""
         # CVDConfig does not carry unit preferences (see note in the
@@ -2849,6 +2984,8 @@ class ResultsPlotWidget(QWidget):
             self._plot_cce(result.cce_result)
         elif result.dl_result:
             self._plot_dl(result.dl_result)
+        elif result.whitson_torp_result:
+            self._plot_whitson_torp(result.whitson_torp_result)
         elif result.cvd_result:
             self._plot_cvd(result.cvd_result)
         elif result.swelling_test_result:
@@ -2989,6 +3126,15 @@ class ResultsPlotWidget(QWidget):
         config: Optional[DLConfig] = None
         if self._current_result is not None:
             config = self._current_result.config.dl_config
+        if config is None:
+            return PressureUnit.PSIA, TemperatureUnit.F
+        return config.pressure_unit, config.temperature_unit
+
+    def _whitson_torp_plot_units(self) -> tuple[PressureUnit, TemperatureUnit]:
+        """Return the preferred Whitson-Torp plot units."""
+        config: Optional[WhitsonTorpConfig] = None
+        if self._current_result is not None:
+            config = self._current_result.config.whitson_torp_config
         if config is None:
             return PressureUnit.PSIA, TemperatureUnit.F
         return config.pressure_unit, config.temperature_unit
@@ -3346,6 +3492,7 @@ class ResultsPlotWidget(QWidget):
                 overlay_group="gas_release",
                 values=[step.gas_produced for step in result.steps],
                 color="#f97316",
+                default_selected=True,
             ),
             "cumulative_gas_produced": PlotSeriesSpec(
                 key="cumulative_gas_produced",
@@ -3375,7 +3522,6 @@ class ResultsPlotWidget(QWidget):
                 overlay_group="z_factor",
                 values=[step.z_two_phase for step in result.steps],
                 color="#8b5cf6",
-                default_selected=True,
                 marker="d",
             ),
             "liquid_density": PlotSeriesSpec(
@@ -4087,16 +4233,56 @@ class ResultsPlotWidget(QWidget):
             ),
         )
 
+    def _plot_whitson_torp(self, result: WhitsonTorpResult) -> None:
+        """Plot Whitson-Torp DL liquid moles and gas FVF against pressure."""
+        pressure_unit, temperature_unit = self._whitson_torp_plot_units()
+        pressures = [pressure_from_pa(step.pressure_pa, pressure_unit) for step in result.steps]
+        liquid_moles = [step.liquid_moles_actual for step in result.steps]
+        bg_values = [
+            float("nan") if step.bg_bbl_per_scf is None else step.bg_bbl_per_scf
+            for step in result.steps
+        ]
+        ax = self.figure.add_subplot(111)
+        ax.set_facecolor(PLOT_CANVAS_COLOR)
+        ax.plot(pressures, liquid_moles, marker="o", label="nL actual")
+        ax.set_xlabel(f"Pressure ({pressure_unit.value})")
+        ax.set_ylabel("Liquid moles")
+        ax.invert_xaxis()
+        ax.grid(True, color=PLOT_GRID_COLOR, alpha=0.4)
+
+        if any(math.isfinite(value) for value in bg_values):
+            ax2 = ax.twinx()
+            ax2.plot(pressures, bg_values, marker="s", color="#22c55e", label="Bg")
+            ax2.set_ylabel("Bg (bbl/scf)")
+            ax2.tick_params(colors=PLOT_TEXT_COLOR)
+            ax2.yaxis.label.set_color(PLOT_TEXT_COLOR)
+
+        ax.set_title(
+            "Whitson-Torp DL at "
+            f"{_format_temperature(result.temperature_k, temperature_unit, precision=1)}"
+        )
+        ax.tick_params(colors=PLOT_TEXT_COLOR)
+        ax.xaxis.label.set_color(PLOT_TEXT_COLOR)
+        ax.yaxis.label.set_color(PLOT_TEXT_COLOR)
+        ax.title.set_color(PLOT_TEXT_COLOR)
+        for spine in ax.spines.values():
+            spine.set_color(PLOT_GRID_COLOR)
+
     def _plot_cvd(self, result: CVDResult) -> None:
         """Plot the selected CVD pressure-series."""
-        pressures = [s.pressure_pa / 1e5 for s in result.steps]
+        pressure_unit = PressureUnit.PSIA
+        temperature_unit = TemperatureUnit.F
+        pressures = [pressure_from_pa(s.pressure_pa, pressure_unit) for s in result.steps]
         self._plot_selected_pressure_series(
             pressures=pressures,
             specs=self._current_series_specs(),
-            pressure_unit=PressureUnit.BAR,
-            title=f"CVD Trends at {result.temperature_k - 273.15:.1f} {_format_temperature_unit(TemperatureUnit.C)}",
-            reference_pressure=result.dew_pressure_pa / 1e5,
-            reference_label=f"Pd = {result.dew_pressure_pa / 1e5:.2f} bar",
+            pressure_unit=pressure_unit,
+            title=f"CVD Trends at {_format_temperature(result.temperature_k, temperature_unit, precision=1)}",
+            reference_pressure=pressure_from_pa(result.dew_pressure_pa, pressure_unit),
+            reference_label=(
+                f"Pd = {pressure_from_pa(result.dew_pressure_pa, pressure_unit):.2f} "
+                f"{pressure_unit.value}"
+            ),
         )
 
     def _plot_swelling(self, result: SwellingTestResult) -> None:
