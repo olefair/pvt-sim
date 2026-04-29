@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from pvtcore.core.constants import R, SC_IMPERIAL
+from pvtcore.core.constants import R, SC_IMPERIAL, PSI_TO_PA
 from pvtapp.schemas import (
     RunConfig, RunResult, RunManifest, RunStatus,
     CalculationType, EOSType, PhaseEnvelopeTracingMethod,
@@ -41,6 +41,7 @@ from pvtapp.schemas import (
     CCEResult, CCEStepResult,
     BubblePointResult, DewPointResult,
     DLResult, DLStepResult,
+    WhitsonTorpResult, WhitsonTorpStepResult, WhitsonTorpSeparatorResult,
     CVDResult, CVDStepResult,
     SwellingTestResult, SwellingStepResultData,
     SeparatorResult, SeparatorStageResult,
@@ -1793,6 +1794,7 @@ def _build_runtime_characterization_result(
         scn_mass_fraction = scn_raw_mass / total_plus_mass_basis
     else:
         scn_mass_fraction = np.zeros_like(scn_raw_mass)
+    split_sg = getattr(split, "sg", None)
 
     pseudo_props = RiaziDaubertCorrelation(prefer_tb_form=True).estimate(scn_props)
     scn_component_ids = [f"SCN{int(value)}" for value in split.n]
@@ -1804,7 +1806,11 @@ def _build_runtime_characterization_result(
             normalized_plus_mole_fraction=float(split.z[index]) / z_plus,
             normalized_plus_mass_fraction=float(scn_mass_fraction[index]),
             molecular_weight_g_per_mol=float(split.MW[index]),
-            specific_gravity_60f=float(scn_props.sg_6060[index]),
+            specific_gravity_60f=float(
+                scn_props.sg_6060[index]
+                if split_sg is None
+                else split_sg[index]
+            ),
             boiling_point_k=float(scn_props.tb_k[index]),
             critical_temperature_k=float(pseudo_props.Tc[index]),
             critical_pressure_pa=float(pseudo_props.Pc[index]),
@@ -3066,6 +3072,233 @@ def execute_dl(
     )
 
 
+_FT3_PER_STB = 5.614583333333333
+_STOCK_TANK_OIL_DENSITY_WATER_LBM_FT3 = 62.43
+_STOCK_TANK_STANDARD_PRESSURE_PSIA = 14.7
+_STOCK_TANK_STANDARD_TEMPERATURE_R = 519.67
+_SCF_PER_LBMOL_AT_SC = (
+    R.psia_ft3_per_lbmol_R
+    * _STOCK_TANK_STANDARD_TEMPERATURE_R
+    / _STOCK_TANK_STANDARD_PRESSURE_PSIA
+)
+
+
+def _composition_dict(component_ids: list[str], values: np.ndarray) -> dict[str, float]:
+    return {
+        component_id: float(value)
+        for component_id, value in zip(component_ids, np.asarray(values, dtype=float))
+    }
+
+
+def _phase_compressibility_factor(
+    *,
+    eos,
+    pressure_pa: float,
+    temperature_k: float,
+    composition: np.ndarray,
+    binary_interaction,
+    phase: str,
+) -> float:
+    z_raw = eos.compressibility(
+        float(pressure_pa),
+        float(temperature_k),
+        np.asarray(composition, dtype=float),
+        phase=phase,
+        binary_interaction=binary_interaction,
+    )
+    if isinstance(z_raw, (list, tuple, np.ndarray)):
+        roots = [float(root) for root in z_raw]
+        return max(roots) if phase == "vapor" else min(roots)
+    return float(z_raw)
+
+
+def _gas_bg_bbl_per_scf(
+    *,
+    gas_z_factor: float,
+    pressure_pa: float,
+    temperature_k: float,
+) -> float:
+    pressure_psia = float(pressure_pa) / PSI_TO_PA
+    temperature_r = float(temperature_k) * 9.0 / 5.0
+    return 0.005035 * float(gas_z_factor) * temperature_r / pressure_psia
+
+
+def _modified_cragoe_stock_tank_oil(
+    *,
+    liquid_composition: np.ndarray,
+    components: list[object],
+) -> tuple[float, float, float]:
+    mw_values = np.asarray([float(component.MW) for component in components], dtype=float)
+    oil_mw = float(np.dot(np.asarray(liquid_composition, dtype=float), mw_values))
+    if oil_mw <= 0.0:
+        raise ValueError("Stock-tank oil molecular weight must be positive")
+    api = 6084.0 / oil_mw + 5.9
+    sg = 141.5 / (api + 131.5)
+    return oil_mw, api, sg
+
+
+def execute_whitson_torp(
+    config: RunConfig,
+    callback: Optional[ProgressCallback] = None,
+    prepared_fluid: Optional[PreparedFluidContext] = None,
+) -> WhitsonTorpResult:
+    """Execute the PETE-style Whitson-Torp K-value workflow."""
+    from pvtcore.flash.whitson_torp import (
+        flash_whitson_torp,
+        simulate_whitson_torp_differential_liberation,
+        solve_whitson_torp_bubble_point,
+        standing_convergence_pressure_pa,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.1, "Loading Whitson-Torp inputs...")
+
+    wt_config = config.whitson_torp_config
+    if wt_config is None:
+        raise ValueError("whitson_torp_config is required for WHITSON_TORP calculation")
+
+    prepared = prepared_fluid or _prepare_fluid_inputs(config)
+    component_ids = prepared.component_ids
+    components = prepared.components
+    composition = prepared.composition
+    eos = prepared.eos
+    binary_interaction = prepared.binary_interaction
+
+    if wt_config.convergence_pressure_pa is not None:
+        convergence_pressure_pa = float(wt_config.convergence_pressure_pa)
+    else:
+        convergence_pressure_pa = standing_convergence_pressure_pa(
+            float(wt_config.c7plus_mw_g_per_mol)
+        )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.3, "Solving Whitson-Torp bubble point...")
+
+    bubble_pressure_pa, bubble_k, bubble_vapor = solve_whitson_torp_bubble_point(
+        temperature_k=wt_config.temperature_k,
+        composition=composition,
+        components=components,
+        convergence_pressure_pa=convergence_pressure_pa,
+        tolerance=config.solver_settings.tolerance,
+        max_iterations=config.solver_settings.max_iterations,
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.55, "Running Whitson-Torp DL flashes...")
+
+    core_steps = simulate_whitson_torp_differential_liberation(
+        pressure_points_pa=[float(p) for p in wt_config.pressure_points_pa],
+        temperature_k=wt_config.temperature_k,
+        composition=composition,
+        components=components,
+        convergence_pressure_pa=convergence_pressure_pa,
+        tolerance=config.solver_settings.tolerance,
+        max_iterations=config.solver_settings.max_iterations,
+    )
+
+    steps: list[WhitsonTorpStepResult] = []
+    for core_step in core_steps:
+        gas_z = None
+        bg = None
+        if core_step.flash.vapor_fraction > 0.0:
+            gas_z = _phase_compressibility_factor(
+                eos=eos,
+                pressure_pa=core_step.pressure_pa,
+                temperature_k=wt_config.temperature_k,
+                composition=core_step.flash.vapor_composition,
+                binary_interaction=binary_interaction,
+                phase="vapor",
+            )
+            bg = _gas_bg_bbl_per_scf(
+                gas_z_factor=gas_z,
+                pressure_pa=core_step.pressure_pa,
+                temperature_k=wt_config.temperature_k,
+            )
+
+        steps.append(
+            WhitsonTorpStepResult(
+                step_index=core_step.step_index,
+                pressure_pa=core_step.pressure_pa,
+                vapor_fraction=core_step.flash.vapor_fraction,
+                liquid_fraction=core_step.flash.liquid_fraction,
+                feed_moles=core_step.feed_moles,
+                vapor_moles_actual=core_step.vapor_moles_actual,
+                liquid_moles_actual=core_step.liquid_moles_actual,
+                gas_z_factor=_finite_or_none(gas_z),
+                bg_bbl_per_scf=_finite_or_none(bg),
+                liquid_composition=_composition_dict(
+                    component_ids,
+                    core_step.flash.liquid_composition,
+                ),
+                vapor_composition=_composition_dict(
+                    component_ids,
+                    core_step.flash.vapor_composition,
+                ),
+                k_values=_composition_dict(component_ids, core_step.flash.k_values),
+            )
+        )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.8, "Running stock-tank Whitson-Torp flash...")
+
+    separator_flash = flash_whitson_torp(
+        pressure_pa=wt_config.separator_pressure_pa,
+        temperature_k=wt_config.separator_temperature_k,
+        composition=composition,
+        components=components,
+        convergence_pressure_pa=convergence_pressure_pa,
+        tolerance=config.solver_settings.tolerance,
+        max_iterations=config.solver_settings.max_iterations,
+    )
+    oil_mw, oil_api, oil_sg = _modified_cragoe_stock_tank_oil(
+        liquid_composition=separator_flash.liquid_composition,
+        components=components,
+    )
+    gas_scf = separator_flash.vapor_fraction * _SCF_PER_LBMOL_AT_SC
+    oil_ft3 = (
+        separator_flash.liquid_fraction
+        * oil_mw
+        / (oil_sg * _STOCK_TANK_OIL_DENSITY_WATER_LBM_FT3)
+    )
+    oil_stb = oil_ft3 / _FT3_PER_STB
+    gor_scf_stb = gas_scf / oil_stb if oil_stb > 0.0 else float("nan")
+
+    separator = WhitsonTorpSeparatorResult(
+        pressure_pa=float(wt_config.separator_pressure_pa),
+        temperature_k=float(wt_config.separator_temperature_k),
+        vapor_fraction=separator_flash.vapor_fraction,
+        liquid_fraction=separator_flash.liquid_fraction,
+        gas_moles_actual=separator_flash.vapor_fraction,
+        oil_moles_actual=separator_flash.liquid_fraction,
+        gor_scf_stb=float(gor_scf_stb),
+        stock_tank_oil_mw_g_per_mol=oil_mw,
+        stock_tank_oil_api=oil_api,
+        stock_tank_oil_specific_gravity=oil_sg,
+        stock_tank_gas_composition=_composition_dict(
+            component_ids,
+            separator_flash.vapor_composition,
+        ),
+        stock_tank_oil_composition=_composition_dict(
+            component_ids,
+            separator_flash.liquid_composition,
+        ),
+    )
+
+    if callback:
+        callback.on_progress(config.run_id or "", 0.95, "Processing Whitson-Torp results...")
+
+    return WhitsonTorpResult(
+        temperature_k=float(wt_config.temperature_k),
+        convergence_pressure_pa=float(convergence_pressure_pa),
+        bubble_pressure_pa=float(bubble_pressure_pa),
+        bubble_vapor_composition=_composition_dict(component_ids, bubble_vapor),
+        bubble_k_values=_composition_dict(component_ids, bubble_k),
+        steps=steps,
+        separator=separator,
+        converged=True,
+    )
+
+
 def execute_cvd(
     config: RunConfig,
     callback: Optional[ProgressCallback] = None,
@@ -3087,12 +3320,15 @@ def execute_cvd(
     if cvd_config is None:
         raise ValueError("cvd_config is required for CVD calculation")
 
-    pressure_steps = np.linspace(
-        cvd_config.dew_pressure_pa,
-        cvd_config.pressure_end_pa,
-        cvd_config.n_steps,
-        dtype=np.float64,
-    )
+    if cvd_config.pressure_points_pa is not None:
+        pressure_steps = np.asarray(cvd_config.pressure_points_pa, dtype=np.float64)
+    else:
+        pressure_steps = np.linspace(
+            cvd_config.dew_pressure_pa,
+            cvd_config.pressure_end_pa,
+            cvd_config.n_steps,
+            dtype=np.float64,
+        )
 
     if callback:
         callback.on_progress(config.run_id or "", 0.3, "Running CVD calculation...")
@@ -3400,6 +3636,7 @@ def run_calculation(
         tbp_result = None
         cce_result = None
         dl_result = None
+        whitson_torp_result = None
         cvd_result = None
         swelling_test_result = None
         separator_result = None
@@ -3439,6 +3676,13 @@ def run_calculation(
 
         elif config.calculation_type == CalculationType.DL:
             dl_result = execute_dl(config, callback, prepared_fluid=prepared_fluid)
+
+        elif config.calculation_type == CalculationType.WHITSON_TORP:
+            whitson_torp_result = execute_whitson_torp(
+                config,
+                callback,
+                prepared_fluid=prepared_fluid,
+            )
 
         elif config.calculation_type == CalculationType.CVD:
             cvd_result = execute_cvd(config, callback, prepared_fluid=prepared_fluid)
@@ -3483,6 +3727,7 @@ def run_calculation(
             tbp_result=tbp_result,
             cce_result=cce_result,
             dl_result=dl_result,
+            whitson_torp_result=whitson_torp_result,
             cvd_result=cvd_result,
             swelling_test_result=swelling_test_result,
             separator_result=separator_result,

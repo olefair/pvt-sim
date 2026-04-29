@@ -440,9 +440,9 @@ shape.
   Mutelet (2004) with the group interaction table, but no `pvtapp` module
   imports it. Treated as experimental until the numerical output is
   validated against Jaubert literature cases.
-- **CVD pressure schedule is step-based.** `CVDConfig.n_steps` still
-  requires `>= 5`. CCE and DL now accept explicit descending
-  `pressure_points_pa` lists; CVD does not.
+- **CVD accepts explicit pressure schedules.** `CVDConfig` supports
+  descending `pressure_points_pa` below dew pressure, matching the exact
+  schedule workflow used by CCE and DL.
 - **Flash SS fallback is unaccelerated.** When Michelsen-Newton fails,
   `_ss_flash_loop` runs pure successive substitution. On non-pathological
   failures (contractive SS operator), GDEM acceleration would reduce the

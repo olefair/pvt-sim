@@ -180,6 +180,39 @@ def print_result_summary(result: RunResult) -> None:
             print(f"  First Step: r={first.added_gas_moles_per_mole_oil:.3f}, status={first.status}")
             print(f"  Last Step: r={last.added_gas_moles_per_mole_oil:.3f}, status={last.status}")
 
+    elif result.whitson_torp_result:
+        res = result.whitson_torp_result
+        pressure_unit = (
+            result.config.whitson_torp_config.pressure_unit
+            if result.config.whitson_torp_config is not None
+            else None
+        )
+        pressure_label = pressure_unit.value if pressure_unit is not None else "Pa"
+        pressure_scale = 1.0
+        if pressure_unit is not None:
+            from pvtapp.schemas import pressure_from_pa
+
+            def _p(value: float) -> float:
+                return pressure_from_pa(value, pressure_unit)
+        else:
+            def _p(value: float) -> float:
+                return value / pressure_scale
+
+        print(f"\nWhitson-Torp Results:")
+        print(f"  Bubble Pressure: {_p(res.bubble_pressure_pa):.5f} {pressure_label}")
+        print(f"  Convergence Pressure: {_p(res.convergence_pressure_pa):.5f} {pressure_label}")
+        print(f"  DL Steps: {len(res.steps)}")
+        for step in res.steps:
+            bg = "-" if step.bg_bbl_per_scf is None else f"{step.bg_bbl_per_scf:.6f}"
+            print(
+                f"  Step {step.step_index}: "
+                f"P={_p(step.pressure_pa):.3f} {pressure_label}, "
+                f"nL={step.liquid_fraction:.6f}, "
+                f"nL_actual={step.liquid_moles_actual:.6f}, "
+                f"Bg={bg} bbl/scf"
+            )
+        print(f"  Separator GOR: {res.separator.gor_scf_stb:.5f} scf/STB")
+
     if result.runtime_characterization is not None and result.config.calculation_type.value != "tbp":
         runtime = result.runtime_characterization
         print(f"\nRuntime Characterization:")

@@ -48,6 +48,7 @@ from pvtapp.schemas import (
     CCEConfig,
     SaturationPointConfig,
     DLConfig,
+    WhitsonTorpConfig,
     CVDConfig,
     SwellingTestConfig,
     SeparatorConfig,
@@ -175,6 +176,14 @@ class ConditionsInputWidget(QWidget):
             self.dl_pressure_unit.currentData(),
             PressureUnit,
         )
+        self._wt_temperature_unit_value = self._coerce_combo_enum(
+            self.wt_temperature_unit.currentData(),
+            TemperatureUnit,
+        )
+        self._wt_pressure_unit_value = self._coerce_combo_enum(
+            self.wt_pressure_unit.currentData(),
+            PressureUnit,
+        )
         # Cache the phase-envelope temperature unit so we can rescale the
         # min / max spinboxes in place when the unit selector changes —
         # same pattern the CCE / DL widgets use for their own temp combos.
@@ -184,6 +193,8 @@ class ConditionsInputWidget(QWidget):
         )
         self._sync_cce_pressure_affordances()
         self._sync_dl_pressure_affordances()
+        self._sync_cvd_pressure_affordances()
+        self._sync_wt_pressure_affordances()
         self._sync_cce_generated_pressure_points(force=True)
         self._connect_signals()
         self._on_calc_type_changed()
@@ -254,6 +265,10 @@ class ConditionsInputWidget(QWidget):
         # DL config
         self.dl_widget = self._create_dl_widget()
         self.config_stack.addWidget(self.dl_widget)
+
+        # Whitson-Torp config
+        self.whitson_torp_widget = self._create_whitson_torp_widget()
+        self.config_stack.addWidget(self.whitson_torp_widget)
 
         # CVD config
         self.cvd_widget = self._create_cvd_widget()
@@ -730,11 +745,10 @@ class ConditionsInputWidget(QWidget):
         self.dl_bubble_pressure.setValue(0.0)
         self.dl_bubble_pressure.setDecimals(2)
         self.dl_bubble_pressure.setSpecialValueText("Auto")
-        self.dl_bubble_pressure.setReadOnly(True)
         self.dl_bubble_pressure.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self._register_focus_tooltip(
             self.dl_bubble_pressure,
-            "Auto-calculated from the active fluid composition and temperature when the configuration is built.",
+            "Auto-calculated from the active fluid composition and temperature; paste a value to override.",
         )
         self.dl_pressure_unit = NoWheelComboBox()
         self._populate_pressure_units(self.dl_pressure_unit, PressureUnit.PSIA)
@@ -761,6 +775,71 @@ class ConditionsInputWidget(QWidget):
 
         return widget
 
+    def _create_whitson_torp_widget(self) -> QWidget:
+        """Create Whitson-Torp K-value configuration widget."""
+        widget = QGroupBox("Whitson-Torp Settings")
+        layout = QFormLayout(widget)
+        self._configure_form_layout(layout)
+
+        t_layout = QHBoxLayout()
+        self.wt_temperature = NoWheelDoubleSpinBox()
+        self.wt_temperature.setRange(-200, 500)
+        self.wt_temperature.setValue(236)
+        self.wt_temperature.setDecimals(2)
+        self.wt_temperature_unit = NoWheelComboBox()
+        self._populate_temperature_units(self.wt_temperature_unit, TemperatureUnit.F)
+        self._configure_unit_row(t_layout, self.wt_temperature, self.wt_temperature_unit)
+        layout.addRow("Reservoir Temperature:", t_layout)
+
+        self.wt_c7plus_mw = NoWheelDoubleSpinBox()
+        self.wt_c7plus_mw.setRange(1.0, 1000.0)
+        self.wt_c7plus_mw.setValue(181.96897)
+        self.wt_c7plus_mw.setDecimals(5)
+        layout.addRow("C7+ MW:", self.wt_c7plus_mw)
+
+        pk_layout = QHBoxLayout()
+        self.wt_convergence_pressure = NoWheelDoubleSpinBox()
+        self.wt_convergence_pressure.setRange(0.0, 20000.0)
+        self.wt_convergence_pressure.setValue(0.0)
+        self.wt_convergence_pressure.setDecimals(3)
+        self.wt_convergence_pressure.setSpecialValueText("Standing")
+        self.wt_pressure_unit = NoWheelComboBox()
+        self._populate_pressure_units(self.wt_pressure_unit, PressureUnit.PSIA)
+        self._configure_unit_row(pk_layout, self.wt_convergence_pressure, self.wt_pressure_unit)
+        layout.addRow("Pk:", pk_layout)
+
+        self.wt_pressure_points = QLineEdit("4000, 3000, 2000")
+        self._register_focus_tooltip(self.wt_pressure_points, "")
+        layout.addRow("DL Pressures:", self.wt_pressure_points)
+
+        sep_p_layout = QHBoxLayout()
+        self.wt_separator_pressure = NoWheelDoubleSpinBox()
+        self.wt_separator_pressure.setRange(0.01, 20000.0)
+        self.wt_separator_pressure.setValue(14.7)
+        self.wt_separator_pressure.setDecimals(3)
+        self.wt_separator_pressure_unit = QLabel(PressureUnit.PSIA.value)
+        self._configure_unit_row(
+            sep_p_layout,
+            self.wt_separator_pressure,
+            self.wt_separator_pressure_unit,
+        )
+        layout.addRow("Separator Pressure:", sep_p_layout)
+
+        sep_t_layout = QHBoxLayout()
+        self.wt_separator_temperature = NoWheelDoubleSpinBox()
+        self.wt_separator_temperature.setRange(-200, 500)
+        self.wt_separator_temperature.setValue(60)
+        self.wt_separator_temperature.setDecimals(2)
+        self.wt_separator_temperature_unit = QLabel(TemperatureUnit.F.value)
+        self._configure_unit_row(
+            sep_t_layout,
+            self.wt_separator_temperature,
+            self.wt_separator_temperature_unit,
+        )
+        layout.addRow("Separator Temperature:", sep_t_layout)
+
+        return widget
+
     def _create_cvd_widget(self) -> QWidget:
         """Create CVD configuration widget."""
         widget = QGroupBox("CVD Settings")
@@ -780,9 +859,15 @@ class ConditionsInputWidget(QWidget):
         # Dew pressure (default units: psia).
         p_dew_layout = QHBoxLayout()
         self.cvd_p_dew = NoWheelDoubleSpinBox()
-        self.cvd_p_dew.setRange(0.01, 150000)
-        self.cvd_p_dew.setValue(4500)
+        self.cvd_p_dew.setRange(0.0, 150000)
+        self.cvd_p_dew.setValue(0.0)
         self.cvd_p_dew.setDecimals(2)
+        self.cvd_p_dew.setSpecialValueText("Auto")
+        self.cvd_p_dew.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self._register_focus_tooltip(
+            self.cvd_p_dew,
+            "Auto-calculated from the active fluid composition and CVD temperature; paste a value to override.",
+        )
         p_dew_layout.addWidget(self.cvd_p_dew)
         p_dew_layout.addWidget(QLabel("psia"))
         layout.addRow("Dew Pressure:", p_dew_layout)
@@ -802,6 +887,10 @@ class ConditionsInputWidget(QWidget):
         self.cvd_n_steps.setRange(5, 200)
         self.cvd_n_steps.setValue(20)
         layout.addRow("Number of Steps:", self.cvd_n_steps)
+
+        self.cvd_pressure_points = QLineEdit()
+        self._register_focus_tooltip(self.cvd_pressure_points, "")
+        layout.addRow("Exact Pressures:", self.cvd_pressure_points)
 
         return widget
 
@@ -1104,11 +1193,23 @@ class ConditionsInputWidget(QWidget):
         self.cce_p_end.valueChanged.connect(self._on_cce_schedule_inputs_changed)
         self.cce_n_steps.valueChanged.connect(self._on_cce_schedule_inputs_changed)
         self.dl_temperature.valueChanged.connect(self._on_dl_temperature_changed)
+        self.dl_bubble_pressure.valueChanged.connect(self._emit_conditions_changed)
         self.dl_p_end.valueChanged.connect(self._emit_conditions_changed)
         self.dl_n_steps.valueChanged.connect(self._emit_conditions_changed)
+        self.cvd_temperature.valueChanged.connect(self._on_cvd_temperature_changed)
+        self.cvd_p_dew.valueChanged.connect(self._emit_conditions_changed)
+        self.cvd_p_end.valueChanged.connect(self._emit_conditions_changed)
+        self.cvd_n_steps.valueChanged.connect(self._emit_conditions_changed)
+        self.wt_temperature.valueChanged.connect(self._emit_conditions_changed)
+        self.wt_c7plus_mw.valueChanged.connect(self._emit_conditions_changed)
+        self.wt_convergence_pressure.valueChanged.connect(self._emit_conditions_changed)
+        self.wt_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.wt_separator_pressure.valueChanged.connect(self._emit_conditions_changed)
+        self.wt_separator_temperature.valueChanged.connect(self._emit_conditions_changed)
         self.swelling_temperature.valueChanged.connect(self._emit_conditions_changed)
         self.cce_pressure_points.textChanged.connect(self._on_cce_pressure_points_changed)
         self.dl_pressure_points.textChanged.connect(self._emit_conditions_changed)
+        self.cvd_pressure_points.textChanged.connect(self._emit_conditions_changed)
         self.swelling_enrichment_steps.textChanged.connect(self._emit_conditions_changed)
         self.swelling_gas_table.itemChanged.connect(self._emit_conditions_changed)
         self.bubble_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
@@ -1129,6 +1230,8 @@ class ConditionsInputWidget(QWidget):
         self.env_temperature_unit.currentIndexChanged.connect(self._on_env_temperature_unit_changed)
         self.dl_temperature_unit.currentIndexChanged.connect(self._on_dl_temperature_unit_changed)
         self.dl_pressure_unit.currentIndexChanged.connect(self._on_dl_pressure_unit_changed)
+        self.wt_temperature_unit.currentIndexChanged.connect(self._on_wt_temperature_unit_changed)
+        self.wt_pressure_unit.currentIndexChanged.connect(self._on_wt_pressure_unit_changed)
         self.swelling_temperature_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.swelling_pressure_unit.currentIndexChanged.connect(self._emit_conditions_changed)
         self.bubble_pressure_guess_enabled.toggled.connect(self._emit_conditions_changed)
@@ -1180,6 +1283,7 @@ class ConditionsInputWidget(QWidget):
         ),
         CalculationType.CCE: ("cce_temperature", "cce_temperature_unit", "spinbox"),
         CalculationType.DL: ("dl_temperature", "dl_temperature_unit", "spinbox"),
+        CalculationType.WHITSON_TORP: ("wt_temperature", "wt_temperature_unit", "spinbox"),
         CalculationType.CVD: ("cvd_temperature", None, "spinbox"),  # hard-coded F
         CalculationType.SWELLING_TEST: (
             "swelling_temperature",
@@ -1297,6 +1401,8 @@ class ConditionsInputWidget(QWidget):
             self.config_stack.setCurrentWidget(self.cce_widget)
         elif calc_type == CalculationType.DL:
             self.config_stack.setCurrentWidget(self.dl_widget)
+        elif calc_type == CalculationType.WHITSON_TORP:
+            self.config_stack.setCurrentWidget(self.whitson_torp_widget)
         elif calc_type == CalculationType.CVD:
             self.config_stack.setCurrentWidget(self.cvd_widget)
         elif calc_type == CalculationType.SWELLING_TEST:
@@ -1557,6 +1663,24 @@ class ConditionsInputWidget(QWidget):
             ),
         )
 
+    def _sync_cvd_pressure_affordances(self) -> None:
+        """Keep CVD exact-pressure helper copy aligned to the fixed psia unit."""
+        self.cvd_pressure_points.setPlaceholderText("Optional exact pressures below dew (psia)")
+        self._set_focus_tooltip_text(
+            self.cvd_pressure_points,
+            "Optional exact pressures below dew in psia. You can enter them in any order.",
+        )
+
+    def _sync_wt_pressure_affordances(self) -> None:
+        """Keep Whitson-Torp pressure labels aligned to the chosen unit."""
+        unit = self._coerce_combo_enum(self.wt_pressure_unit.currentData(), PressureUnit)
+        self.wt_separator_pressure_unit.setText(unit.value)
+        self.wt_pressure_points.setPlaceholderText(f"DL pressures ({unit.value})")
+        self._set_focus_tooltip_text(
+            self.wt_pressure_points,
+            f"Whitson-Torp DL flash pressures in {unit.value}, entered high to low.",
+        )
+
     def _on_cce_temperature_unit_changed(self, *_args) -> None:
         """Convert the visible CCE temperature when the unit selector changes."""
         new_unit = self._coerce_combo_enum(self.cce_temperature_unit.currentData(), TemperatureUnit)
@@ -1631,13 +1755,19 @@ class ConditionsInputWidget(QWidget):
         self.clear_dl_bubble_pressure()
         self.conditions_changed.emit()
 
-    def _on_eos_changed(self, *_args) -> None:
-        """Invalidate the cached DL bubble-pressure preview when the EOS changes.
+    def _on_cvd_temperature_changed(self, *_args) -> None:
+        """Invalidate the cached CVD dew-pressure preview when temperature changes."""
+        self.clear_cvd_dew_pressure()
+        self.conditions_changed.emit()
 
-        The preview is computed with the currently selected EOS; without this
-        reset, switching EOS leaves a stale Pb in the DL panel.
+    def _on_eos_changed(self, *_args) -> None:
+        """Invalidate cached saturation-pressure previews when the EOS changes.
+
+        The previews are computed with the currently selected EOS; without this
+        reset, switching EOS leaves stale saturation pressures in lab panels.
         """
         self.clear_dl_bubble_pressure()
+        self.clear_cvd_dew_pressure()
         self.conditions_changed.emit()
 
     def _on_dl_pressure_unit_changed(self, *_args) -> None:
@@ -1650,6 +1780,29 @@ class ConditionsInputWidget(QWidget):
             self._convert_pressure_points_text(self.dl_pressure_points, old_unit, new_unit)
             self._dl_pressure_unit_value = new_unit
         self._sync_dl_pressure_affordances()
+        self.conditions_changed.emit()
+
+    def _on_wt_temperature_unit_changed(self, *_args) -> None:
+        """Convert visible Whitson-Torp temperatures when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.wt_temperature_unit.currentData(), TemperatureUnit)
+        old_unit = self._wt_temperature_unit_value
+        if new_unit != old_unit:
+            self._convert_temperature_spinbox_unit(self.wt_temperature, old_unit, new_unit)
+            self._convert_temperature_spinbox_unit(self.wt_separator_temperature, old_unit, new_unit)
+            self.wt_separator_temperature_unit.setText(new_unit.value)
+            self._wt_temperature_unit_value = new_unit
+        self.conditions_changed.emit()
+
+    def _on_wt_pressure_unit_changed(self, *_args) -> None:
+        """Convert visible Whitson-Torp pressures when the unit selector changes."""
+        new_unit = self._coerce_combo_enum(self.wt_pressure_unit.currentData(), PressureUnit)
+        old_unit = self._wt_pressure_unit_value
+        if new_unit != old_unit:
+            self._convert_pressure_spinbox_unit(self.wt_convergence_pressure, old_unit, new_unit)
+            self._convert_pressure_spinbox_unit(self.wt_separator_pressure, old_unit, new_unit)
+            self._convert_pressure_points_text(self.wt_pressure_points, old_unit, new_unit)
+            self._wt_pressure_unit_value = new_unit
+        self._sync_wt_pressure_affordances()
         self.conditions_changed.emit()
 
     def get_dl_temperature_k(self) -> float:
@@ -1687,6 +1840,34 @@ class ConditionsInputWidget(QWidget):
     def clear_dl_bubble_pressure(self) -> None:
         """Reset the display-only DL bubble-pressure preview to auto mode."""
         self.set_dl_bubble_pressure_pa(None)
+
+    def get_cvd_temperature_k(self) -> float:
+        """Return the current CVD temperature in Kelvin."""
+        return temperature_to_k(self.cvd_temperature.value(), TemperatureUnit.F)
+
+    def get_cvd_dew_pressure_pa(self) -> Optional[float]:
+        """Return the cached CVD dew pressure in Pa when available."""
+        dew_value = float(self.cvd_p_dew.value())
+        if dew_value <= 0.0:
+            return None
+        return pressure_to_pa(dew_value, PressureUnit.PSIA)
+
+    def set_cvd_dew_pressure_pa(self, pressure_pa: Optional[float]) -> None:
+        """Update the CVD dew-pressure field without marking auto-fill as user input."""
+        display_value = (
+            0.0
+            if pressure_pa is None
+            else pressure_from_pa(pressure_pa, PressureUnit.PSIA)
+        )
+        self.cvd_p_dew.blockSignals(True)
+        try:
+            self.cvd_p_dew.setValue(display_value)
+        finally:
+            self.cvd_p_dew.blockSignals(False)
+
+    def clear_cvd_dew_pressure(self) -> None:
+        """Reset the CVD dew-pressure field to auto mode."""
+        self.set_cvd_dew_pressure_pa(None)
 
     def get_calculation_type(self) -> CalculationType:
         """Get selected calculation type."""
@@ -1909,6 +2090,37 @@ class ConditionsInputWidget(QWidget):
         )
         self._sync_dl_pressure_affordances()
 
+    def set_whitson_torp_config(self, config: WhitsonTorpConfig) -> None:
+        """Load Whitson-Torp config into widget controls."""
+        temperature_unit = config.temperature_unit
+        pressure_unit = config.pressure_unit
+
+        t_index = self.wt_temperature_unit.findData(temperature_unit)
+        if t_index >= 0:
+            self.wt_temperature_unit.setCurrentIndex(t_index)
+        p_index = self.wt_pressure_unit.findData(pressure_unit)
+        if p_index >= 0:
+            self.wt_pressure_unit.setCurrentIndex(p_index)
+
+        self.wt_temperature.setValue(temperature_from_k(config.temperature_k, temperature_unit))
+        self.wt_c7plus_mw.setValue(config.c7plus_mw_g_per_mol or 181.96897)
+        self.wt_convergence_pressure.setValue(
+            0.0
+            if config.convergence_pressure_pa is None
+            else pressure_from_pa(config.convergence_pressure_pa, pressure_unit)
+        )
+        self.wt_pressure_points.setText(
+            self._format_pressure_points(config.pressure_points_pa, pressure_unit)
+        )
+        self.wt_separator_pressure.setValue(
+            pressure_from_pa(config.separator_pressure_pa, pressure_unit)
+        )
+        self.wt_separator_temperature.setValue(
+            temperature_from_k(config.separator_temperature_k, temperature_unit)
+        )
+        self.wt_separator_temperature_unit.setText(temperature_unit.value)
+        self._sync_wt_pressure_affordances()
+
     def _get_dl_schedule_inputs(
         self,
     ) -> tuple[float, PressureUnit, TemperatureUnit, Optional[list[float]], Optional[float], int]:
@@ -1946,9 +2158,12 @@ class ConditionsInputWidget(QWidget):
         the widget's actual display units instead.
         """
         self.cvd_temperature.setValue(temperature_from_k(config.temperature_k, TemperatureUnit.F))
-        self.cvd_p_dew.setValue(pressure_from_pa(config.dew_pressure_pa, PressureUnit.PSIA))
+        self.set_cvd_dew_pressure_pa(config.dew_pressure_pa)
         self.cvd_p_end.setValue(pressure_from_pa(config.pressure_end_pa, PressureUnit.PSIA))
         self.cvd_n_steps.setValue(config.n_steps)
+        self.cvd_pressure_points.setText(
+            self._format_pressure_points(config.pressure_points_pa, PressureUnit.PSIA)
+        )
 
     def set_swelling_test_config(self, config: SwellingTestConfig) -> None:
         """Load swelling-test config into widget controls."""
@@ -2043,6 +2258,10 @@ class ConditionsInputWidget(QWidget):
             if config.dl_config is None:
                 raise ValueError("RunConfig missing dl_config")
             self.set_dl_config(config.dl_config)
+        elif config.calculation_type == CalculationType.WHITSON_TORP:
+            if config.whitson_torp_config is None:
+                raise ValueError("RunConfig missing whitson_torp_config")
+            self.set_whitson_torp_config(config.whitson_torp_config)
         elif config.calculation_type == CalculationType.CVD:
             if config.cvd_config is None:
                 raise ValueError("RunConfig missing cvd_config")
@@ -2394,12 +2613,88 @@ class ConditionsInputWidget(QWidget):
             self.validation_error.emit(str(e))
             return None
 
+    def get_whitson_torp_config(self) -> Optional[WhitsonTorpConfig]:
+        """Get Whitson-Torp K-value configuration if valid."""
+        try:
+            temperature_unit = self._coerce_combo_enum(
+                self.wt_temperature_unit.currentData(),
+                TemperatureUnit,
+            )
+            pressure_unit = self._coerce_combo_enum(
+                self.wt_pressure_unit.currentData(),
+                PressureUnit,
+            )
+            pressure_points_pa = self._parse_pressure_points(
+                self.wt_pressure_points.text(),
+                pressure_unit,
+            )
+            if pressure_points_pa is None:
+                self.validation_error.emit("At least one Whitson-Torp DL pressure is required")
+                return None
+            pressure_points_pa = self._normalize_descending_pressure_points(pressure_points_pa)
+            normalized_text = self._format_pressure_points(pressure_points_pa, pressure_unit)
+            if self.wt_pressure_points.text().strip() != normalized_text:
+                self.wt_pressure_points.setText(normalized_text)
+
+            convergence_pressure_pa = None
+            if self.wt_convergence_pressure.value() > 0.0:
+                convergence_pressure_pa = pressure_to_pa(
+                    self.wt_convergence_pressure.value(),
+                    pressure_unit,
+                )
+
+            return WhitsonTorpConfig(
+                temperature_k=temperature_to_k(self.wt_temperature.value(), temperature_unit),
+                convergence_pressure_pa=convergence_pressure_pa,
+                c7plus_mw_g_per_mol=self.wt_c7plus_mw.value(),
+                pressure_points_pa=pressure_points_pa,
+                separator_pressure_pa=pressure_to_pa(
+                    self.wt_separator_pressure.value(),
+                    pressure_unit,
+                ),
+                separator_temperature_k=temperature_to_k(
+                    self.wt_separator_temperature.value(),
+                    temperature_unit,
+                ),
+                pressure_unit=pressure_unit,
+                temperature_unit=temperature_unit,
+            )
+        except Exception as e:
+            self.validation_error.emit(str(e))
+            return None
+
     def get_cvd_config(self) -> Optional[CVDConfig]:
         """Get CVD configuration if valid."""
         try:
-            t_k = temperature_to_k(self.cvd_temperature.value(), TemperatureUnit.F)
-            p_dew_pa = pressure_to_pa(self.cvd_p_dew.value(), PressureUnit.PSIA)
+            t_k = self.get_cvd_temperature_k()
+            p_dew_pa = self.get_cvd_dew_pressure_pa()
             p_end_pa = pressure_to_pa(self.cvd_p_end.value(), PressureUnit.PSIA)
+            pressure_points_pa = self._parse_pressure_points(
+                self.cvd_pressure_points.text(),
+                PressureUnit.PSIA,
+            )
+
+            if p_dew_pa is None:
+                self.validation_error.emit(
+                    "Dew pressure is auto-calculated from the active fluid composition and CVD temperature."
+                )
+                return None
+
+            if pressure_points_pa is not None:
+                pressure_points_pa = self._normalize_descending_pressure_points(pressure_points_pa)
+                normalized_text = self._format_pressure_points(pressure_points_pa, PressureUnit.PSIA)
+                if self.cvd_pressure_points.text().strip() != normalized_text:
+                    self.cvd_pressure_points.setText(normalized_text)
+                if any(pressure >= p_dew_pa for pressure in pressure_points_pa):
+                    self.validation_error.emit(
+                        "CVD exact pressures must stay below dew pressure"
+                    )
+                    return None
+                return CVDConfig(
+                    temperature_k=t_k,
+                    dew_pressure_pa=p_dew_pa,
+                    pressure_points_pa=pressure_points_pa,
+                )
 
             if p_dew_pa <= p_end_pa:
                 self.validation_error.emit(
@@ -2576,10 +2871,15 @@ class ConditionsInputWidget(QWidget):
                 config = self.get_dl_config()
                 if config is None:
                     return False, "Invalid DL conditions"
-        elif calc_type == CalculationType.CVD:
-            config = self.get_cvd_config()
+        elif calc_type == CalculationType.WHITSON_TORP:
+            config = self.get_whitson_torp_config()
             if config is None:
-                return False, "Invalid CVD conditions"
+                return False, "Invalid Whitson-Torp conditions"
+        elif calc_type == CalculationType.CVD:
+            if self.get_cvd_dew_pressure_pa() is not None:
+                config = self.get_cvd_config()
+                if config is None:
+                    return False, "Invalid CVD conditions"
         elif calc_type == CalculationType.SWELLING_TEST:
             config = self.get_swelling_test_config()
             if config is None:

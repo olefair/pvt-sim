@@ -21,6 +21,7 @@ import os
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -114,6 +115,7 @@ from pvtcore.models import resolve_component_id
 from pvtcore.validation.pete665_assignment import psia_to_pa
 
 try:
+    import pvtapp.main as pvtapp_main
     from pvtapp.assignment_case import build_assignment_desktop_preset
     from pvtapp.component_catalog import STANDARD_COMPONENTS
     from pvtapp.job_runner import run_calculation
@@ -139,6 +141,7 @@ try:
     from pvtapp.widgets.text_output_view import TextOutputWidget
     from pvtapp.widgets.two_pane_workspace import TwoPaneWorkspace, ViewSpec
 except ModuleNotFoundError:  # pragma: no cover
+    pvtapp_main = None  # type: ignore[assignment]
     build_assignment_desktop_preset = None  # type: ignore[assignment]
     STANDARD_COMPONENTS = None  # type: ignore[assignment]
     run_calculation = None  # type: ignore[assignment]
@@ -972,6 +975,12 @@ def _assert_configs_equivalent(actual: RunConfig, expected: RunConfig) -> None:
         assert actual.cvd_config.dew_pressure_pa == pytest.approx(expected.cvd_config.dew_pressure_pa, abs=_PRESSURE_ROUNDTRIP_ABS_PA)
         assert actual.cvd_config.pressure_end_pa == pytest.approx(expected.cvd_config.pressure_end_pa, abs=_PRESSURE_ROUNDTRIP_ABS_PA)
         assert actual.cvd_config.n_steps == expected.cvd_config.n_steps
+        if expected.cvd_config.pressure_points_pa is None:
+            assert actual.cvd_config.pressure_points_pa is None
+        else:
+            assert actual.cvd_config.pressure_points_pa == pytest.approx(
+                expected.cvd_config.pressure_points_pa
+            )
     elif expected.separator_config is not None:
         assert actual.separator_config is not None
         assert actual.separator_config.reservoir_pressure_pa == pytest.approx(expected.separator_config.reservoir_pressure_pa, abs=_PRESSURE_ROUNDTRIP_ABS_PA)
@@ -1106,6 +1115,24 @@ def test_config_roundtrip_exact_schedules(window: PVTSimulatorWindow) -> None:
     assert rebuilt is not None
     assert rebuilt.dl_config.pressure_points_pa == pytest.approx([5.0e6, 3.0e6, 1.0e6])
 
+    cvd = _run_config({
+        "composition": {"components": [
+            {"component_id": "C1", "mole_fraction": 0.60},
+            {"component_id": "C3", "mole_fraction": 0.25},
+            {"component_id": "C10", "mole_fraction": 0.15},
+        ]},
+        "calculation_type": "cvd", "eos_type": "peng_robinson",
+        "cvd_config": {
+            "temperature_k": 380.0, "dew_pressure_pa": 2.0e7,
+            "pressure_points_pa": [1.5e7, 1.0e7, 5.0e6],
+        },
+    })
+    window.composition_widget.set_composition(cvd.composition)
+    window.conditions_widget.load_from_run_config(cvd)
+    rebuilt = window._build_config()
+    assert rebuilt is not None
+    assert rebuilt.cvd_config.pressure_points_pa == pytest.approx([1.5e7, 1.0e7, 5.0e6])
+
 
 def test_conditions_widget_builds_all_config_types(app: QApplication) -> None:
     # All pressure / temperature widgets now default to US-petroleum
@@ -1128,6 +1155,14 @@ def test_conditions_widget_builds_all_config_types(app: QApplication) -> None:
     cvd = w.get_cvd_config()
     assert cvd is not None
     assert cvd.temperature_k == pytest.approx(380.0, abs=_TEMPERATURE_ROUNDTRIP_ABS_K)
+    w.cvd_pressure_points.setText("300, 700, 500")
+    cvd = w.get_cvd_config()
+    assert cvd is not None
+    assert cvd.pressure_points_pa == pytest.approx([
+        psia_to_pa(700),
+        psia_to_pa(500),
+        psia_to_pa(300),
+    ])
 
     w.set_calculation_type(CalculationType.BUBBLE_POINT)
     w.bubble_temperature.setText("170.33")                 # 350 K in °F
@@ -1181,6 +1216,50 @@ def test_conditions_widget_builds_all_config_types(app: QApplication) -> None:
     assert combo_types == list(GUI_SUPPORTED_CALCULATION_TYPES)
     eos_types = [EOSType(w.eos_combo.itemData(i)) for i in range(w.eos_combo.count())]
     assert eos_types == list(GUI_SUPPORTED_EOS_TYPES)
+
+
+def test_cvd_build_config_auto_calculates_dew_pressure(
+    window: PVTSimulatorWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_execute_dew_point(config: RunConfig):
+        calls.append(config)
+        return SimpleNamespace(pressure_pa=1.8e7)
+
+    monkeypatch.setattr(pvtapp_main, "execute_dew_point", fake_execute_dew_point)
+
+    window.conditions_widget.set_calculation_type(CalculationType.CVD)
+    window.composition_widget.set_composition(
+        FluidComposition(
+            components=[
+                {"component_id": "C1", "mole_fraction": 0.60},
+                {"component_id": "C3", "mole_fraction": 0.25},
+                {"component_id": "C10", "mole_fraction": 0.15},
+            ]
+        )
+    )
+    window.conditions_widget.cvd_temperature.setValue(224.33)
+    window.conditions_widget.cvd_p_end.setValue(725.19)
+    window.conditions_widget.clear_cvd_dew_pressure()
+
+    rebuilt = window._build_config()
+
+    assert rebuilt is not None
+    assert rebuilt.cvd_config is not None
+    assert rebuilt.cvd_config.dew_pressure_pa == pytest.approx(1.8e7)
+    assert window.conditions_widget.get_cvd_dew_pressure_pa() == pytest.approx(
+        1.8e7,
+        abs=_PRESSURE_ROUNDTRIP_ABS_PA,
+    )
+    assert calls
+    assert calls[0].calculation_type == CalculationType.DEW_POINT
+    assert calls[0].dew_point_config is not None
+    assert calls[0].dew_point_config.temperature_k == pytest.approx(
+        rebuilt.cvd_config.temperature_k,
+        abs=_TEMPERATURE_ROUNDTRIP_ABS_K,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1247,6 +1326,17 @@ def test_cvd_results_display_sections(app: QApplication) -> None:
         "Liquid Dropout", "Gas Produced", "Cumulative Gas", "Z-factor",
         "Liquid Viscosity", "Vapor Viscosity",
     }
+    checked = {a.text(): a.isChecked() for a in plot.series_menu.actions()}
+    assert checked["Gas Produced"] is True
+    assert checked["Cumulative Gas"] is True
+    assert checked["Z-factor"] is False
+    assert plot.figure.axes[0].get_xlabel() == "Pressure (psia)"
+    line_labels = {
+        line.get_label()
+        for axis in plot.figure.axes
+        for line in axis.get_lines()
+    }
+    assert {"Gas Produced", "Cumulative Gas"} <= line_labels
 
 
 def test_cce_results_surface_density_columns_and_plot(app: QApplication) -> None:
@@ -2191,8 +2281,10 @@ def test_conditions_widget_misc_behaviors(app: QApplication) -> None:
 
     w.set_calculation_type(CalculationType.CVD)
     w.cvd_temperature.setValue(106.85)
-    w.cvd_p_dew.setValue(40.0)
     w.cvd_p_end.setValue(50.0)
+    is_valid, _ = w.validate()
+    assert is_valid is True
+    assert w.cvd_p_dew.isReadOnly() is False
     assert w.get_cvd_config() is None
 
     w.set_calculation_type(CalculationType.DL)
@@ -2201,7 +2293,7 @@ def test_conditions_widget_misc_behaviors(app: QApplication) -> None:
     w.dl_n_steps.setValue(8)
     is_valid, _ = w.validate()
     assert is_valid is True
-    assert w.dl_bubble_pressure.isReadOnly() is True
+    assert w.dl_bubble_pressure.isReadOnly() is False
 
     combo = w.pressure_unit
     initial_index = combo.currentIndex()
